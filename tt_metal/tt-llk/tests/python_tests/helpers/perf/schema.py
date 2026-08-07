@@ -12,6 +12,11 @@ class PerfSchemaError(AssertionError):
 
 MARKER = "marker"
 
+# Values the kernels record in the `marker` column, one report row per zone. A mismatch silently empties
+# the TILE_LOOP mask in perf/core.py::postprocess_tile_loop rather than raising.
+INIT_MARKER = "INIT"
+TILE_LOOP_MARKER = "TILE_LOOP"
+
 FORMAT_HEADERS = (
     "formats.input_A",
     "formats.input_B",
