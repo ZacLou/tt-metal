@@ -343,19 +343,14 @@ def get_unique_base_names(input_dir: Path):
 
 
 def _collapse_duplicate_keys(frame: pd.DataFrame, label: str) -> pd.DataFrame:
-    """Collapse rows sharing the same (sweep-params, marker) key into a single row.
+    """Reject rows sharing the same (sweep-params, marker) key.
 
     Two distinct sweep variants can resolve to an identical recorded key when the
     harness normalizes a parameter before recording it (e.g. dest_acc forced from
-    No to Yes for an outlier format combo in TestConfig). Such rows are repeated
-    measurements of the same effective kernel, so their metric columns are averaged
-    into one row.
-
-    A warning is always emitted when duplicates are found, and it flags how many
-    collapsed keys disagreed on a metric value: a differing same-key pair is usually
-    benign run-to-run noise, but it is also the signature of a test that failed to
-    record a parameter that actually changes the kernel, so it should not pass
-    silently.
+    No to Yes for an outlier format combo in TestConfig). A differing same-key
+    pair is usually run-to-run noise, but it is also the signature of a test that
+    failed to record a parameter that actually changes the kernel, so it must not
+    pass silently.
     """
     if frame.empty or MARKER not in frame.columns:
         return frame
@@ -382,23 +377,14 @@ def _collapse_duplicate_keys(frame: pd.DataFrame, label: str) -> pd.DataFrame:
             ].nunique()
             differing = int((nunique > 1).any(axis=1).sum())
 
-        logger.warning(
-            "{}: collapsing {} duplicate (sweep-params, marker) key(s) spanning "
-            "{} rows into one row each (mean of metric columns); {} key(s) had "
+        raise PerfSchemaError(
+            f"{label}: found {int(len(dup_groups))} duplicate (sweep-params, marker) "
+            f"key(s) spanning {int(dup_groups.sum())} rows; {differing} key(s) had "
             "differing metric values (run-to-run noise, or a distinguishing "
-            "parameter not recorded as a column).",
-            label,
-            int(len(dup_groups)),
-            int(dup_groups.sum()),
-            differing,
+            "parameter not recorded as a column)."
         )
-
-        agg = {c: ("mean" if c in numeric_cols else "first") for c in value_cols}
-        collapsed = (
-            frame.groupby(key_cols, dropna=False, sort=False).agg(agg).reset_index()
-        )
-        # Restore the original column order (groupby/agg reorders columns).
-        return collapsed[list(frame.columns)]
+    except PerfSchemaError:
+        raise
     except Exception as e:
         logger.warning("{}: duplicate-key collapse skipped due to error: {}", label, e)
         return frame

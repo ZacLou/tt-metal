@@ -103,24 +103,174 @@ def class_field_specs() -> dict:
     return specs
 
 
-def emitted_fields(elt: ast.Call, specs: dict) -> list:
+def _call_func_name(elt: ast.Call):
+    if isinstance(elt.func, ast.Name):
+        return elt.func.id
+    if isinstance(elt.func, ast.Attribute):
+        return elt.func.attr
+    return None
+
+
+def _self_attr(node):
+    if (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "self"
+    ):
+        return node.attr
+    return None
+
+
+def _post_init_none_copies(class_node: ast.ClassDef) -> dict:
+    """Map dest -> src for ``if self.dest is None: self.dest = self.src``.
+
+    NUM_BLOCKS / NUM_TILES_IN_BLOCK copy the shared constructor arg into the
+    input_* / output_* fields this way; the runtime then emits those fields.
+    """
+    copies = {}
+    for stmt in class_node.body:
+        if not isinstance(stmt, ast.FunctionDef) or stmt.name != "__post_init__":
+            continue
+        for if_node in ast.walk(stmt):
+            if not isinstance(if_node, ast.If):
+                continue
+            test = if_node.test
+            if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+                continue
+            if not isinstance(test.ops[0], ast.Is):
+                continue
+            dest = _self_attr(test.left)
+            if dest is None or len(test.comparators) != 1:
+                continue
+            cmp = test.comparators[0]
+            if not (isinstance(cmp, ast.Constant) and cmp.value is None):
+                continue
+            for assign in if_node.body:
+                if not isinstance(assign, ast.Assign) or len(assign.targets) != 1:
+                    continue
+                assign_dest = _self_attr(assign.targets[0])
+                src = _self_attr(assign.value)
+                if assign_dest == dest and src:
+                    copies[dest] = src
+    return copies
+
+
+def class_post_init_copies() -> dict:
+    """Map parameter class name -> {dest_field: src_field} from ``__post_init__``."""
+    copies: dict[str, dict] = {}
+    for path in iter_source_files():
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            if not any(
+                isinstance(b, ast.Name) and b.id in PARAM_BASES for b in node.bases
+            ):
+                continue
+            found = _post_init_none_copies(node)
+            if found:
+                copies.setdefault(node.name, found)
+    return copies
+
+
+def _direct_return_calls(fn: ast.FunctionDef) -> list:
+    """Return Call nodes from this function's body, not from nested functions."""
+    returns = []
+
+    def visit_stmts(stmts):
+        for stmt in stmts:
+            if isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Call):
+                returns.append(stmt.value)
+            elif isinstance(stmt, ast.If):
+                visit_stmts(stmt.body)
+                visit_stmts(stmt.orelse)
+            elif isinstance(stmt, (ast.For, ast.While, ast.AsyncFor)):
+                visit_stmts(stmt.body)
+                visit_stmts(stmt.orelse)
+            elif isinstance(stmt, ast.Try):
+                visit_stmts(stmt.body)
+                for handler in stmt.handlers:
+                    visit_stmts(handler.body)
+                visit_stmts(stmt.orelse)
+                visit_stmts(stmt.finalbody)
+            elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+                visit_stmts(stmt.body)
+
+    visit_stmts(fn.body)
+    return returns
+
+
+def helper_returned_param_calls(specs: dict) -> dict:
+    """Map helper function name -> param-class constructor Calls it returns.
+
+    ``generate_input_dim(...)`` is not itself a parameter class, but it returns
+    ``INPUT_DIMENSIONS(...)``. Tests put the helper call in templates=, so the
+    gate has to follow the return to see the four dimension columns.
+    """
+    helpers: dict[str, list] = {}
+    for path in iter_source_files():
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            returned = [
+                call
+                for call in _direct_return_calls(node)
+                if _call_func_name(call) in specs
+            ]
+            if returned:
+                helpers.setdefault(node.name, returned)
+    return helpers
+
+
+def emitted_fields(
+    elt: ast.Call, specs: dict, helpers: dict = None, post_init: dict = None
+) -> list:
     """Fields a param instantiation actually emits as CSV columns.
 
     Mirrors the runtime rule: a None-default field left unset is dropped, so we
     emit a field unless (its default is None AND the call does not set it). This
     stops us over-listing optional slots like MATH_OP.pool_type/unary_extra.
+
+    Helpers that return a parameter object (``generate_input_dim`` ->
+    ``INPUT_DIMENSIONS``) are followed to that constructor. Fields that
+    ``__post_init__`` copies from an already-emitted field (``NUM_BLOCKS``
+    filling ``input_num_blocks``) are emitted too, matching
+    ``PerfConfig._build_sweep_frame``.
     """
-    name = None
-    if isinstance(elt.func, ast.Name):
-        name = elt.func.id
-    elif isinstance(elt.func, ast.Attribute):
-        name = elt.func.attr
+    helpers = helpers or {}
+    post_init = post_init or {}
+    name = _call_func_name(elt)
+    if name is None:
+        return []
+    if name not in specs and name in helpers:
+        fields = []
+        for returned in helpers[name]:
+            fields.extend(emitted_fields(returned, specs, helpers, post_init))
+        return fields
     fields = specs.get(name)
     if fields is None:
         return []
     provided = {fields[i][0] for i in range(min(len(elt.args), len(fields)))}
     provided |= {kw.arg for kw in elt.keywords if kw.arg}
-    return [f for f, dflt_none in fields if not (dflt_none and f not in provided)]
+    emitted = [f for f, dflt_none in fields if not (dflt_none and f not in provided)]
+    emitted_set = set(emitted)
+    copies = post_init.get(name, {})
+    changed = True
+    while changed:
+        changed = False
+        for dest, src in copies.items():
+            if dest not in emitted_set and src in emitted_set:
+                emitted.append(dest)
+                emitted_set.add(dest)
+                changed = True
+    return emitted
 
 
 def _has_perfconfig(tree) -> bool:
@@ -139,7 +289,7 @@ def _is_fuser_perf_test(tree) -> bool:
     )
 
 
-def _param_fields_in_tree(tree, specs) -> set:
+def _param_fields_in_tree(tree, specs, helpers=None, post_init=None) -> set:
     """Emitted param fields from every templates=/runtimes= list in a file.
 
     Covers the three shapes the tests use to pass those lists:
@@ -152,7 +302,7 @@ def _param_fields_in_tree(tree, specs) -> set:
     def add_list(list_node):
         for elt in list_node.elts:
             if isinstance(elt, ast.Call):
-                fields.update(emitted_fields(elt, specs))
+                fields.update(emitted_fields(elt, specs, helpers, post_init))
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
@@ -230,13 +380,17 @@ def derive_perf_test_schemas(quasar: bool = False) -> dict:
     global drift gates, not here.
 
     Static approximation: it reads params passed as literal templates=/runtimes=
-    lists (inline, via a variable, or as a dict entry). Params built purely at
-    runtime (comprehensions/helpers) are not visible; only the runtime report (or
-    the hardware-free report test, #51244) is exact.
+    lists (inline, via a variable, or as a dict entry). Helper calls that return
+    a parameter object (``generate_input_dim``) and ``__post_init__`` copies of
+    None-default fields (``NUM_BLOCKS.input_num_blocks``) are included. Params
+    built purely at runtime (comprehensions) are not visible; only the runtime
+    report (or the hardware-free report test, #51244) is exact.
     """
     ps = load_pure_module("schema.py")
     fixed = list(ps.FORMAT_HEADERS) + list(ps.FLAG_HEADERS)
     specs = class_field_specs()
+    helpers = helper_returned_param_calls(specs)
+    post_init = class_post_init_copies()
     schemas: dict[str, list] = {}
     for key, path in _perf_test_sources(quasar):
         try:
@@ -248,7 +402,7 @@ def derive_perf_test_schemas(quasar: bool = False) -> dict:
             continue
         if not _has_perfconfig(tree):
             continue
-        fields = _param_fields_in_tree(tree, specs)
+        fields = _param_fields_in_tree(tree, specs, helpers, post_init)
         schemas[key] = sorted(set(fixed) | fields | {MARKER_COLUMN})
     return schemas
 
