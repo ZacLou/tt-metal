@@ -8,7 +8,11 @@ from helpers.param_config import generate_perf_input_dimensions, parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_variant_parameters import SFPU_UNARY_SCALAR, TILE_COUNT
+from helpers.test_variant_parameters import (
+    SFPU_UNARY_SCALAR,
+    TILE_COUNT,
+    generate_input_dim,
+)
 from test_sfpu_logit_softcap import FORMATS, _fp32_bits, _valid_dest_acc
 
 
@@ -33,7 +37,10 @@ def test_perf_sfpu_logit_softcap(perf_report, formats, dest_acc, input_dimension
         "sources/sfpu_logit_softcap_test.cpp",
         formats,
         run_types=[PerfRunType.L1_TO_L1],
-        templates=[SFPU_UNARY_SCALAR(value_bits=_fp32_bits(cap))],
+        templates=[
+            SFPU_UNARY_SCALAR(value_bits=_fp32_bits(cap)),
+            generate_input_dim(input_dimensions, input_dimensions),
+        ],
         runtimes=[TILE_COUNT(tile_cnt_A)],
         variant_stimuli=StimuliConfig(
             src_A,

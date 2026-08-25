@@ -8,7 +8,11 @@ from helpers.param_config import generate_perf_input_dimensions, parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_variant_parameters import CLAMPED_SILU_PARAMS, TILE_COUNT
+from helpers.test_variant_parameters import (
+    CLAMPED_SILU_PARAMS,
+    TILE_COUNT,
+    generate_input_dim,
+)
 from test_sfpu_clamped_silu import FORMATS, GATE, _valid_dest_acc
 
 
@@ -35,6 +39,7 @@ def test_perf_sfpu_clamped_silu(perf_report, formats, dest_acc, input_dimensions
         run_types=[PerfRunType.L1_TO_L1],
         templates=[
             CLAMPED_SILU_PARAMS(clamped_silu_op=op, scalar0=7.0, scalar1=1.702),
+            generate_input_dim(input_dimensions, input_dimensions),
         ],
         runtimes=[TILE_COUNT(tile_cnt_A)],
         variant_stimuli=StimuliConfig(

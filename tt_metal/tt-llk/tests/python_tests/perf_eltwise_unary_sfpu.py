@@ -4,6 +4,7 @@
 
 import pytest
 from conftest import skip_for_blackhole
+from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -35,6 +36,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
+    generate_input_dim,
 )
 
 _OPS_WITHOUT_DEST_ACC = {
@@ -73,10 +75,17 @@ _OPS_WITH_STABLE_SORT = {
 }
 
 
-def _get_dest_acc_modes(mathop):
+def _get_dest_acc_modes(mathop, formats):
     if mathop in _OPS_WITHOUT_DEST_ACC:
-        return [DestAccumulation.No]
-    return [DestAccumulation.Yes, DestAccumulation.No]
+        op_modes = [DestAccumulation.No]
+    else:
+        op_modes = [DestAccumulation.Yes, DestAccumulation.No]
+    # Drop dest_acc=No for expB→Float16: TestConfig forces dest_acc=Yes, so a
+    # dest_acc=No parametrize case would collide with dest_acc=Yes in the CSV.
+    # Ops that only list dest_acc=No still measure the forced dest_acc=Yes kernel.
+    fmt_modes = get_valid_dest_accumulation_modes(formats)
+    overlap = [mode for mode in op_modes if mode in fmt_modes]
+    return overlap if overlap else fmt_modes
 
 
 def _get_fast_modes(mathop):
@@ -158,7 +167,7 @@ def _get_formats(mathop):
         ApproximationMode.No,
     ],
     mathop=PERF_SWEEP_OPS,
-    dest_acc=lambda mathop: _get_dest_acc_modes(mathop),
+    dest_acc=lambda mathop, formats: _get_dest_acc_modes(mathop, formats),
     loop_factor=[
         16,
     ],  # Number of iterations to run the test in order to minimize profiler overhead in measurement
@@ -206,6 +215,7 @@ def test_perf_eltwise_unary_sfpu(
             FAST_MODE(fast_mode),
             STABLE_SORT(stable_sort),
             CLAMP_NEGATIVE(False),
+            generate_input_dim(input_dimensions, input_dimensions),
         ],
         runtimes=[
             TILE_COUNT(tile_count_A),
@@ -295,6 +305,7 @@ def _math_isolate_config(formats, mathop, dest_acc, unpack_to_dest, input_dimens
             FAST_MODE(FastMode.No),
             STABLE_SORT(StableSort.No),
             CLAMP_NEGATIVE(False),
+            generate_input_dim(input_dimensions, input_dimensions),
         ],
         runtimes=[
             TILE_COUNT(tile_count_A),

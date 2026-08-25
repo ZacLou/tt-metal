@@ -9,7 +9,11 @@ from helpers.llk_params import PerfRunType, format_dict
 from helpers.param_config import generate_perf_input_dimensions, parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_variant_parameters import TILE_COUNT, ZERO_PAD_ROWS
+from helpers.test_variant_parameters import (
+    TILE_COUNT,
+    ZERO_PAD_ROWS,
+    generate_input_dim,
+)
 from test_sfpu_zero_pad import FORMATS, _build_input_tile, _valid_dest_acc
 
 
@@ -35,7 +39,10 @@ def test_perf_sfpu_zero_pad(
         "sources/sfpu_zero_pad_test.cpp",
         formats,
         run_types=[PerfRunType.L1_TO_L1],
-        templates=[ZERO_PAD_ROWS(valid_rows=valid_rows, total_rows=total_rows)],
+        templates=[
+            ZERO_PAD_ROWS(valid_rows=valid_rows, total_rows=total_rows),
+            generate_input_dim(input_dimensions, input_dimensions),
+        ],
         runtimes=[TILE_COUNT(tile_cnt)],
         variant_stimuli=StimuliConfig(
             src_A,

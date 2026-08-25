@@ -4,6 +4,7 @@
 
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -29,6 +30,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
+    generate_input_dim,
 )
 
 
@@ -36,7 +38,9 @@ def get_dest_accum_modes(formats):
     # Int32 binary SFPU kernels use a 32-bit dest (functional pins dest_acc=Yes).
     if formats.input_format.is_32_bit() and formats.input_format.is_integer():
         return [DestAccumulation.Yes]
-    return [DestAccumulation.Yes, DestAccumulation.No]
+    # Drop dest_acc=No for expB→Float16: TestConfig forces dest_acc=Yes, so the
+    # dest_acc=No parametrize case would collide with dest_acc=Yes in the CSV.
+    return get_valid_dest_accumulation_modes(formats)
 
 
 def _unpack_to_dest(formats, dest_acc):
@@ -74,10 +78,7 @@ def _unpack_to_dest(formats, dest_acc):
         MathOperation.SfpuMask,
         MathOperation.SfpuAtan2,
     ],
-    dest_acc=[
-        DestAccumulation.Yes,
-        DestAccumulation.No,
-    ],
+    dest_acc=lambda formats: get_dest_accum_modes(formats),
     loop_factor=[
         16,
     ],  # Number of iterations to run the test in order to minimize profiler overhead in measurement
@@ -112,6 +113,7 @@ def test_perf_eltwise_binary_sfpu_float(
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
+            generate_input_dim(input_dimensions, input_dimensions),
         ],
         runtimes=[
             TILE_COUNT(tile_count),
@@ -193,6 +195,7 @@ def test_perf_eltwise_binary_sfpu_int(
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
+            generate_input_dim(input_dimensions, input_dimensions),
         ],
         runtimes=[
             TILE_COUNT(tile_count),
@@ -282,6 +285,7 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
+            generate_input_dim(input_dimensions, input_dimensions),
         ],
         runtimes=[
             TILE_COUNT(tile_count),
@@ -328,6 +332,7 @@ def _div_math_isolate_config(formats, dest_acc, input_dimensions):
             MATH_OP(mathop=MathOperation.SfpuElwdiv),
             APPROX_MODE(ApproximationMode.No),
             ITERATIONS(32),
+            generate_input_dim(input_dimensions, input_dimensions),
         ],
         runtimes=[
             TILE_COUNT(tile_count),

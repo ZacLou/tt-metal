@@ -23,6 +23,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     REDUCE_POOL_TYPE,
     TILE_COUNT,
+    generate_input_dim,
 )
 
 REDUCE_MATHOP = {
@@ -71,6 +72,7 @@ def test_perf_reduce(
         templates=[
             MATH_OP(mathop=REDUCE_MATHOP[reduce_dim]),
             REDUCE_POOL_TYPE(pool_type),
+            generate_input_dim(input_dimensions, input_dimensions),
         ],
         runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(64)],
         variant_stimuli=StimuliConfig(

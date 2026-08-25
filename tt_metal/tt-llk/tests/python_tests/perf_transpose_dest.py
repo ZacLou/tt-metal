@@ -20,6 +20,7 @@ from helpers.test_variant_parameters import (
     MATH_TRANSPOSE_FACES,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
+    generate_input_dim,
 )
 
 
@@ -53,6 +54,7 @@ def _run_transpose_dest_perf(
         run_types=[PerfRunType.L1_TO_L1],
         templates=[
             MATH_TRANSPOSE_FACES(math_transpose_faces),
+            generate_input_dim(input_dimensions, input_dimensions),
         ],
         runtimes=[
             TILE_COUNT(tile_count),

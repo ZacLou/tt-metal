@@ -13,6 +13,7 @@ from helpers.test_variant_parameters import (
     SFPU_SCALE_EN,
     SFPU_UNARY_SCALAR,
     TILE_COUNT,
+    generate_input_dim,
 )
 from test_sfpu_sdpa_exp_unclamped import BF16_ONE, FORMATS
 
@@ -43,6 +44,7 @@ def test_perf_sfpu_sdpa_exp_unclamped(
         templates=[
             SFPU_SCALE_EN(scale_en=scale_en),
             SFPU_UNARY_SCALAR(value_bits=BF16_ONE),
+            generate_input_dim(input_dimensions, input_dimensions),
         ],
         runtimes=[TILE_COUNT(tile_cnt)],
         variant_stimuli=StimuliConfig(

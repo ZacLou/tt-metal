@@ -4,6 +4,7 @@
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, L1Accumulation, PerfRunType, Tilize
 from helpers.param_config import (
@@ -69,7 +70,7 @@ def get_valid_num_faces_datacopy(tilize):
             DataFormat.Float16,
         ]
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
     l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
     num_faces=4,
     tilize=[Tilize.No],

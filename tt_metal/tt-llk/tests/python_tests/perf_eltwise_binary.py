@@ -32,6 +32,7 @@ from helpers.test_variant_parameters import (
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
+    generate_input_dim,
 )
 from helpers.tile_shape import construct_tile_shape
 from test_eltwise_binary import ALL_TILE_DIMENSIONS, _get_valid_tile_dimensions
@@ -101,6 +102,14 @@ def test_perf_eltwise_binary(
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
             BROADCAST_TYPE(broadcast_type),
+            generate_input_dim(
+                input_dimensions,
+                input_dimensions,
+                tile_dimensions=(
+                    tile_shape.total_row_dim(),
+                    tile_shape.total_col_dim(),
+                ),
+            ),
         ],
         runtimes=[
             TILE_COUNT(tile_count),

@@ -9,7 +9,11 @@ from helpers.llk_params import DestAccumulation, PerfRunType, format_dict
 from helpers.param_config import generate_perf_input_dimensions, parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_variant_parameters import SPARSE_K_CONFIG, TILE_COUNT
+from helpers.test_variant_parameters import (
+    SPARSE_K_CONFIG,
+    TILE_COUNT,
+    generate_input_dim,
+)
 from test_sfpu_sparse_k_filter import FORMATS, _build_indices
 
 
@@ -41,6 +45,7 @@ def test_perf_sfpu_sparse_k_filter(perf_report, dest_acc, layout, input_dimensio
                 within_bank_mask=within_mask,
                 out_shift=0,
             ),
+            generate_input_dim(input_dimensions, input_dimensions),
         ],
         runtimes=[TILE_COUNT(tile_cnt)],
         variant_stimuli=StimuliConfig(

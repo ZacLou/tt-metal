@@ -43,6 +43,7 @@ from helpers.test_variant_parameters import (
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
+    generate_input_dim,
 )
 from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
@@ -232,6 +233,9 @@ def test_eltwise_unary_datacopy_quasar(
         "test_name": "sources/quasar/eltwise_unary_datacopy_quasar_test.cpp",
         "formats": formats,
         "templates": [
+            generate_input_dim(
+                input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
+            ),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(data_copy_type),
             UNPACKER_ENGINE_SEL(

@@ -3,8 +3,9 @@
 
 import pytest
 from conftest import skip_for_wormhole
+from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation, PerfRunType
+from helpers.llk_params import PerfRunType
 from helpers.param_config import (
     input_output_formats,
     parametrize,
@@ -28,7 +29,7 @@ _FUNCTIONAL_TILE_DIMS = [
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Float16, DataFormat.Float16_b]),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
     tile_dims=select_perf_tile_sizes(_FUNCTIONAL_TILE_DIMS),
     num_tiles=[8],
 )
