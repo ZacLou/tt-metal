@@ -169,7 +169,7 @@ inline void _llk_math_reduce_col_mop_config_(const TensorShape& tensor_shape)
     const std::uint32_t MOP_INNER_LOOP = (tensor_shape.total_num_faces() >= 2) ? (tensor_shape.total_num_faces() >> 1) : tensor_shape.total_num_faces();
     constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
     constexpr bool RUN_FID_LOOPS           = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
-    constexpr std::uint32_t replay_buf_len      = 2 + (RUN_FID_LOOPS ? 2 * NUM_FIDELITY_PHASES : 0);
+    constexpr std::uint32_t replay_buf_len = 2 + (RUN_FID_LOOPS ? 2 * NUM_FIDELITY_PHASES : 0);
 
     load_replay_buf(
         0,
@@ -333,8 +333,8 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
             TTI_SETRWC(p_setrwc::CLR_A, p_setrwc::CR_D, 0, p_setrwc::SET_B);
         });
 
-    const std::uint32_t replay           = TT_OP_REPLAY(0, main_len, 0, 0, 0, 0);
-    const std::uint32_t dest_inc_32      = TT_OP_REPLAY(main_len, tail_len, 0, 0, 0, 0);
+    const std::uint32_t replay      = TT_OP_REPLAY(0, main_len, 0, 0, 0, 0);
+    const std::uint32_t dest_inc_32 = TT_OP_REPLAY(main_len, tail_len, 0, 0, 0, 0);
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, replay, dest_inc_32);
     temp.set_last_inner_loop_instr(TT_OP_SETRWC(p_setrwc::CLR_A, 0, 0, p_setrwc::SET_BD));
@@ -494,10 +494,22 @@ inline void _llk_math_reduce_addrmod_(const TensorShape& tensor_shape)
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @note On the unpack thread, pair with @ref _llk_unpack_reduce_init_ (T0); on the pack thread, pair with @ref _llk_pack_reduce_mask_config_ (T2).
  * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
+ * @note PoolType::MIN is rejected here. Nothing reduces without this init, so that closes the whole
+ *       FPU path to it.
  */
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
 {
+    // There is no min-pool instruction: the FPU has GMPOOL (max) and GAPOOL (average/sum), and
+    // anything that is not MAX falls through to GAPOOL. The unpacker's partial-face fill splits the
+    // same way - NEGINF for MAX, zero otherwise, which a min reduce would lose to. So MIN here would
+    // not fail, it would quietly average and pad with a value that wins. PoolType::MIN exists for the
+    // SFPU reduce, which implements it properly.
+    static_assert(
+        POOL_TYPE != PoolType::MIN,
+        "The FPU reduce has no MIN: the hardware provides GMPOOL (max) and GAPOOL (average) only. "
+        "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce).");
+
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     _llk_math_reduce_addrmod_<REDUCE_DIMENSION, MATH_FIDELITY_TYPE>(tensor_shape);
 
