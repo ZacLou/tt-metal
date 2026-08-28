@@ -1194,3 +1194,90 @@ path abort at `USER_RESET` before it reaches device 21. The kernel says `Device 
 unresponsive, cannot reset` and `FW not running`. Five recovery attempts are
 logged in `logs4/recovery*.log`. It needs an operator: an IPMI power cycle or a
 host reboot.
+
+## 2026-08-28 — `mb-signoff` attempt 2 (job 4): the exit gate is NOT PASSED, and the reason has inverted
+
+Host-only, no device taken; the mesh has been unusable since 18:37:08Z and this job needed none.
+Commit read: `e912a8267bb`. Evidence: `tttv2_milestone_b_evidence/signoff/`, eighteen checks in
+`logs2/s2_*.log`.
+
+- **Verdict: Milestone B does not pass its exit gate.** 8 of 9 lines PASS; line 9 — existing 1D
+  contract/demo-contract host tests — **FAILS**, 5 of 301. **And the gate table is not the whole test:
+  three of the plan's eleven Milestone B test items are red or unreachable** (concat-32, device
+  sampling, repeat-and-cleanup on Llama) and a fourth is partial (paged KV). Written up in
+  `models/common/models/MILESTONE_B_STATUS.md`, verdict in the first screen.
+- **The reason has inverted since the 2026-08-27 signoff pass, and that is the headline.** That pass
+  recorded NOT PASSED because *no numerical result of any kind had ever been produced on silicon for
+  either model*, with 4 of 9 lines NOT REACHED. Every one of those claims is now false: both models
+  run on real `(8, 4)` hardware, both accuracy gates pass with margin (Llama 98.04% / 100.00%, Qwen
+  97.46% / 100.00%), and the milestone is held by **named defects** rather than by an absence of
+  measurement. The two documents carrying the old verdict were deleted at `6983cc52e33`; both are
+  written fresh here.
+- **Nothing was quoted.** Every gate number was read out of its raw log by this job
+  (`s2_06_gate_log_trace.log`); every mechanical line was re-run here.
+- **The brief's regression command was run literally as well as filtered.** Unfiltered: **18 failed, 2146 passed,
+  2058 skipped, 3276 deselected, 379 errors in 1058.34s** — decomposing to 13 `F-C2` (`test_plans.py` needs a cluster)
+  plus the 5 line-9 ids, with every one of the 379 errors a cluster open on the dead mesh. Filtered to host-only:
+  **5 failed, 2140 passed, 2058 skipped, 251 errors** (the 251 are the untouched `tests/modules/moe/` device suites,
+  which are not named `*_wh_galaxy*`). `s2_05_host_regression_literal.log`, `s2_04_host_regression_filtered.log`.
+- **New measurement this job added: per-row provenance.** For each gate log, `git diff <its commit>..HEAD`
+  decides whether the run counts as "at this tree" — no implementation file and no owning test file
+  changed since. That turns the coverage report's "one run defended by a byte-identity argument" into
+  a measured count: **Qwen teacher-forced 3 fresh, Llama 2; both block gates 3 fresh; Qwen batch-32
+  demo 4, Llama 2; long-context and prefix-cache 1 each.** Stronger than recorded for four rows,
+  weaker for none. `s2_09_qualification.log`, `s2_16_block_gates.log`.
+- **Line 9's five failures are proved unattributable, mechanically**: no non-galaxy test file under
+  `models/common/tests/models/` changed since the Milestone A tip; all five owning test packages, all
+  five owning model packages and `models/demos/utils` are 0 changed paths; and Milestone B changed
+  **nothing** outside `models/common/{models,modules,tests}` and the evidence directories. **Milestone
+  A's own 1263-test gate never collected them** — verified out of Milestone A's own log, which
+  collected `llm_runtime`, `modules/*` and `models/galaxy` only. Milestone B is the first milestone to
+  measure that line and it was red the first time anyone looked.
+- **New finding, D-S1**: a device test that **passes** and then will not release the mesh. All six
+  recorded runs of the Qwen `HEAD_LOCAL` Q/K-norm decode test — five distinct commits, **four of them
+  passing** — write their verdict and are then `SIGTERM`ed in teardown at the deadline, exit 124. No
+  REPORT.md in this tree mentions it; the harness comment explains hung teardowns after a *failure*,
+  so a hang after a pass read as the same known thing. The differential is decisive: at the same
+  commit, on the same night, the block test exits 0 three times. `s2_17_teardown_hang.log`.
+- **Correction to D-C1's framing.** The coverage report declined to fix it because doing so "requires
+  changing an existing expectation". Both `_validate_decode_page_table` **and** the test pinning
+  32-row acceptance are **Milestone B's own additions** — the Milestone A tip has neither, only a
+  single `_validate_page_table` that required at least 32 rows for decode too. So it is a Milestone B
+  contract decision, not a Milestone A expectation to negotiate. Also: the validator's own docstring
+  (`attention_2d.py:678-679`) already claims the rejection it does not perform.
+- **Two surgical corrections to the signed-off Milestone A record, both because silicon disproved the
+  2026-08-27 edits rather than the record itself.** **L3 is CLOSED**, not "STILL OPEN": both attention
+  decode matmuls are confined with `allowed_worker_cores` and `in0_block_w = gcd(k_tiles, 4)`, D-B9 is
+  closed, and the path is numerically qualified on both models — at two named costs (three worker
+  columns of seven, and the attention weights read from DRAM). **L1 is worse, not better**: D-C7 makes
+  it a lifetime problem rather than an ordering one. Also corrected: the Qwen decoupled-geometry
+  paragraph (now qualified on silicon), the D2 decode half (closed by D-B26), the Attention2D
+  verification row, and the "host-tested only" claim on the post-record contract amendments. **The
+  Milestone A record proper — the 37-case sweep, D1–D5, the scorecard, P4 — was not touched.** Stale
+  paragraphs were **replaced**, not layered over.
+- **`modules/README.md`**: the L1 and L3 paragraphs corrected, the D-C1 gap note extended with the
+  provenance correction, and the Milestone B section rewritten — it had said "none of it is qualified
+  on hardware" and "never built a model large enough", both false.
+- **Six committed source files still say "This file has never been executed" and were deliberately not
+  corrected.** Every one has since run on silicon. Editing them would break the byte-identity that
+  qualifies five gate rows, on a mesh that cannot re-measure them. Recorded as doc debt in both the
+  status page and the Milestone C brief, with the reasoning, rather than fixed.
+- **`tttv2_milestone_c_brief.md` written**, and explicitly not an authorisation to start. It records
+  the **vLLM deferral** as a decision (once), notes that the plan still describes the full scope and
+  was deliberately not edited, and carries: what C inherits working with the command behind each; the
+  five defects the deleted brief never knew about (**D-C5**, **D-C8**, **D-C7**, **D-C6 escalated**,
+  and **D-C9**); the items routed by name (**L1**, **D-A**, the CCL/`tt_ccl.py` merge evaluation); a
+  provenance warning naming every page in this tree that carries dead-mesh evidence; and the paired
+  TTTv1/TTTv2 performance methodology with three known debts and two measurement traps. Per the scope
+  decision: **concat-32/D-C6 is a fix to attempt with a sequential-prefill fallback; device sampling
+  has no fallback and is on the critical path.**
+- **Modularity scorecard, measured at `bc6ad03bfc2..HEAD`:** 17 new implementation files (+8892), 8
+  pre-existing shared files changed (+754/−48, 7.8% of the implementation insertions), 28 new test
+  files (+13093, 306 test functions) — more test code than implementation code. **0** `*_1d.py`, **0**
+  `llm_runtime` (byte-identical, not merely behaviour-preserving), **0** model-named imports in
+  Milestone B's seven directories, and **nothing** changed outside `models/` and the evidence
+  directories. Four topology assumptions found in shared code, all on silicon, all now derived or
+  explicit; a fifth (**D-C8**) is open. **The boundaries held and the model tests did not all pass —
+  two separate results, and the plan asks for both.**
+- No device work attempted. No implementation file changed — four markdown files and one new status
+  page. No test written, deleted, skipped, `xfail`ed or relaxed; no threshold touched.

@@ -83,7 +83,7 @@ since.
 | LMHead2D | Focused suite: 19 passed | Llama and Qwen decode/prefill final-token batches repeated, PCC >= 0.99; Qwen padding mask checked exactly | Qualified. Independently reproduced 2026-08-24 |
 | MLP2D | Focused MLP/Galaxy/prefetch suite: 73 passed | Llama and Qwen decode plus prefill 128/2048, each repeated, PCC validated; complete file `4 passed`, re-confirmed 2026-08-25 after the shared-helper split | Qualified. Independently reproduced 2026-08-24 |
 | RMSNorm2D | Focused contracts: 19 passed (three new: fused stats-placement rejection, head-local staying interleaved, stats on the norm sender core) | Llama/Qwen batch-32 fused residual decode repeated; distributed prefill 128/2048 repeated; head-local Q/K repeated, all PCC >= 0.99. Complete file `8 passed` over four consecutive runs plus both fused decode node IDs alone in fresh processes | Qualified **after fixing D1** (fused-stats L1 aliasing) and **D2** (head-local shard recipe). The 2026-08-24 Llama-8192 "pass" was reading aliased L1 |
-| Attention2D | Host suite: 64 passed; `test_attention_2d.py` + `models/common/tests/models/galaxy` `90 passed` | Llama-70B and Qwen3-32B repeated decode plus prefill 128/2048; output and K/V cache PCC >= 0.99; complete file `2 passed` over four whole-file runs in fresh processes, re-confirmed `2 passed` 2026-08-26. **The Qwen row does not cover the product geometry — see the correction below** | Qualified **after fixing D3** (CCL semaphore/subdevice mismatch). The recorded `2 passed in 53.93s` had been luck; four consecutive full-bound hangs followed it. The decoupled-head-dim path is **unqualified** |
+| Attention2D | Host suite: 64 passed; `test_attention_2d.py` + `models/common/tests/models/galaxy` `90 passed` | Llama-70B and Qwen3-32B repeated decode plus prefill 128/2048; output and K/V cache PCC >= 0.99; complete file `2 passed` over four whole-file runs in fresh processes, re-confirmed `2 passed` 2026-08-26. **The Qwen row does not cover the product geometry — see the correction below** | Qualified **after fixing D3** (CCL semaphore/subdevice mismatch). The recorded `2 passed in 53.93s` had been luck; four consecutive full-bound hangs followed it. ~~The decoupled-head-dim path is **unqualified**~~ — **closed by Milestone B, 2026-08-28**: Qwen3-32B's real 64-head geometry (`attention_dim 8192 != dim 5120`) is qualified on silicon at decode PCC 0.99936, three fresh processes; see the correction below |
 | Sampling2D | Final 1259-test host gate, plus `test_sampling_2d.py` `27 passed` including a regression test pinning the device temperature buffer to `1/T` | Forced argmax with exact tokens and padded-vocabulary exclusion; **stochastic path qualified** — top-k/top-p containment over 5 parametrizations, padded-vocabulary exclusion under stochastic sampling, seeded repeatability with per-slot seed stability, unseeded freshness, per-slot heterogeneous k/p/temperature. `9 passed` in each of three fresh processes, zero boundary violations | Qualified for both the forced-argmax and stochastic cases, **after fixing D4** (reciprocal temperature). Not covered: RNG distributional correctness, `top_k > 32`, trace/capture |
 | Galaxy CCL/resources | Concrete CCL/resource/composition host contracts in the final gate; prefetcher/galaxy/MLP host suites `78 passed` after the shared-helper split | Repeated MLP/RMS paths and fused Attention axis-1 decode pass with clean teardown; the resource owner's own `activate`/`synchronize`/`cleanup` lifecycle now qualified directly across a 12-step prefill↔decode matrix, three fresh processes | Qualified. Non-fused Attention decode is not required or qualified. Attention decode on the *prefetch* subdevice partition is qualified as **incompatible** — see [L3](#l3) |
 | Prefetcher2D | Concrete composition regression: 29 passed | Own hardware suite, 7 cases, `7 passed` in each of three fresh processes with identical output: sealed weight addresses read back off all 12 sender cores on all 32 devices; the full transition matrix (`decode→prefill`, `prefill→decode`, `decode→decode`, `prefill→prefill`) with PCC at all 12 steps; failed-transition rollback; cleanup from either active mode proven by a second owner sealing and computing on the same mesh in the same process | Lifecycle qualified for the MLP2D consumer shape. Two documented limits: [L1](#l1) global-CB ownership, [L2](#l2) undersized `global_cb_size` accepted |
@@ -104,7 +104,7 @@ page previously made and then failed to apply.
 | | Defect | How it hid | Fix |
 | --- | --- | --- | --- |
 | **D1** | `RMSNorm2D` fused decode: `fused_rms_minimal` binds `cb_stats` to the stats tensor's L1 address on the **norm grid's first core**, but the resolved config placed stats on `x=1` while the grid starts at `x=2`. The kernel reduced whatever the allocator had left there | Outcome depended on residual L1: PCC 0.0977 / 0.1394 / 0.1555 / 0.1701 in some processes, ~0.9999 in others. The recorded Llama-8192 pass was aliased L1 | `decode_stats_memcfg` defaults to the norm grid's first core; `_require_fused_stats_placement` turns silent corruption into a `ValueError` |
-| **D2** | `RMSNorm2D` head-local Q/K built a 128-wide width shard over a hardcoded two-core range, declaring `2 × 128 = 256` padded width for a 128-wide tensor | Aborted in op validation before any kernel, so it had never produced a numerical result at all despite being recorded as qualified | Head-local decode defaults to interleaved DRAM like prefill; the distributed norm grid derives from `grid_width` |
+| **D2** | `RMSNorm2D` head-local Q/K built a 128-wide width shard over a hardcoded two-core range, declaring `2 × 128 = 256` padded width for a 128-wide tensor | Aborted in op validation before any kernel, so it had never produced a numerical result at all despite being recorded as qualified | Head-local decode defaults to interleaved DRAM like prefill; the distributed norm grid derives from `grid_width`. **Milestone B update, 2026-08-28 — the *decode* half was not actually closed by that fix, and now is.** Interleaved DRAM is correct for prefill and **unplaceable** for decode on a partitioned mesh: an interleaved `ttnn.rms_norm` resolves `LayerNormDefaultProgramConfig`, which spreads its tile rows over the whole compute grid, including the sender columns the loaded decode sub-device manager does not own. Milestone B's Qwen bring-up measured it (**D-B26**) and closed it with `RMSNorm2DConfig.decode_compute_cores`. Qwen3-32B's per-head Q/K norm is now qualified in **both** modes at PCC >= 0.99998 on all 32 devices, three fresh processes — but see `MILESTONE_B_STATUS.md` defect **D-S1**: all three of those processes hung in teardown after passing |
 | **D3** | `Attention2D` decode: the worker subdevice spanned the whole compute grid while CCL global semaphores were allocated on a narrower core set, so `all_reduce_create_qkv_heads` placed a sender on a core whose semaphore address was never reserved or zeroed | Polled uninitialised L1 forever. Passed in one process, hung indefinitely in another — the recorded `2 passed in 53.93s` versus four consecutive 2700 s timeouts | Decode plan no longer narrows `semaphore_cores`; the invariant is recorded on `galaxy_mode_plan` |
 | **D4** | `Sampling2D`: `ttnn.sampling`'s `temp` argument is the **reciprocal** temperature (the kernel multiplies by it), but the module wrote raw `T`. Every request at `T != 1.0` sampled from a distribution warped the wrong way | `1.0` is its own reciprocal, and the greedy path forces `temp = 1.0`. The only hardware test was greedy, so the defect was **structurally unreachable** by existing coverage | One line at `sampling_2d.py:213`; `sample_host` was already correct. Pinned by a host regression test |
 | **D5** | `Attention2D`: `resolve_attention2d_config` passed `wo_weight_memory_config` to the `wqkv` lazy-weight resolution and `weight_memory_config` to `wo` — each projection was handed the other's placement field | **Unreachable, and that is the finding.** `_require_exact_weight_policy` (`attention_2d.py:488-491`) runs *first* and rejects any weight whose `memory_config` is not already equal to its own config field, and `resolve_lazy_weight` only fills fields that are `None`. So the swapped arguments could never overwrite anything. Confirmed by running the same two-different-configs probe against both orderings and getting identical results | Two arguments swapped back, isolated in `Fix three WH Galaxy 2D module contract defects found during Milestone B`. Dead code, not a live defect — but it becomes live the moment the exact-policy gate is relaxed, so the gate itself is now pinned by `test_a_projection_placed_against_the_other_configs_value_is_rejected` |
@@ -127,8 +127,9 @@ recorded because the code was wrong, not because it produced a wrong result.
 Three `Attention2D` / `LMHead2D` contract amendments landed *after* the evidence above was recorded,
 in the Milestone A/B reconciliation (commit
 `Fix three WH Galaxy 2D module contract defects found during Milestone B`). They are listed here so
-the Milestone A audit sees them rather than finding them inside a Milestone B model diff. All three
-are **host-tested only; none has been re-run on hardware.**
+the Milestone A audit sees them rather than finding them inside a Milestone B model diff. *Updated
+2026-08-28: two of the three have since been exercised on real `(8, 4)` hardware by Milestone B; the
+third (D5) is dead code by construction and cannot be.*
 
 **The recorded Qwen attention qualification used a geometry no product has.**
 `test_attention_2d_wh_galaxy.py:86` builds `_ModelSpec("qwen3-32b", dim=5120, n_heads=40, ...)`.
@@ -138,14 +139,21 @@ contract holds. Real Qwen3-32B has **64** attention heads, giving `attention_dim
 `Attention2D` row of the evidence matrix should be read accordingly. `mb-qwen` (Milestone B, plan
 steps 4-6) is the job that gets it some; until then this is an open gap, not a covered one.
 
-*Milestone B update, 2026-08-27 — half closed, on host only.* `mb-qwen` qualified the real decoupled
-geometry (`dim 5120`, `n_heads 64`, `head_dim 128`, `attention_dim 8192`, `wo [8192, 5120]`) **on the
-host**: attention rebuilt from the converted tensors alone reproduces unmodified HF `Qwen3Attention`
-at PCC >= 0.9999 on a fixture with the product's real shape character, and the `wo` placement
-pairing, the head-concat width and the `dim`-wide post-`wo` residual are each pinned by tests
-(`models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py`, 13 tests, three fresh
-processes). **It remains unqualified on silicon** — `mb-qwen` had no working mesh, and the Qwen3-32B
-checkpoint is not on that host either. One trap worth carrying forward: `local_qkv_size ==
+*Milestone B update, 2026-08-28 — **CLOSED, on silicon**.* `mb-qwen` qualified the real decoupled
+geometry (`dim 5120`, `n_heads 64`, `head_dim 128`, `attention_dim 8192`, `wo [8192, 5120]`) on a real
+`(8, 4)` mesh, not only on the host. One Qwen block: prefill 128 logits **0.999303669584255**, decode
+**0.999360219056066**, KV cache K **0.9998897994661545** / V **0.9998944730661905** on all four
+column-local users, prefill 2048 **0.9990203192392576** — three fresh processes, bit-identical, at a
+tree byte-identical to the current Milestone B commit
+(`tttv2_milestone_b_evidence/qwen/logs2/a2_73,74,75_block.log`). The 64-layer model, the batch-1 and
+batch-32 demos and the teacher-forced accuracy gate (top-1 **97.46%**, top-5 **100.00%**) all run on
+that geometry too. Host side, attention rebuilt from the converted tensors alone reproduces unmodified
+HF `Qwen3Attention` at PCC >= 0.9999
+(`models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py`, 13 tests).
+
+*An earlier version of this paragraph, written 2026-08-27, said the geometry remained unqualified on
+silicon because `mb-qwen` had no working mesh. That was true when written and is now false; the mesh
+came back the same evening.* One trap worth carrying forward regardless: `local_qkv_size ==
 local_dim == 1280` for this model, so a fused-QKV-vs-residual width confusion is **shape-invisible**;
 `local_attention_dim` (1024) is the width that differs, and so the one a shape check can catch.
 
@@ -153,11 +161,15 @@ local_dim == 1280` for this model, so a fused-QKV-vs-residual width confusion is
   only way to express that geometry. The two coincide for every case the recorded evidence covers,
   so no recorded numerical result changes. Pinned host-side by both the decoupled case
   (`8192 x 5120`) and the square case (`8192 x 8192`), plus the rejection message for a wrong shape.
+  **Qualified on hardware** by Milestone B's Qwen3-32B bring-up, as above.
 - **`LMHead2D` activation width** now also accepts a column-local width (`dim / 4`) alongside the
-  full `dim`, because a device activation off the column-sharded residual stream carries its column
-  shard; the recorded qualification only ever passed host `LazyWeight` inputs. A strict superset, so
-  no Milestone A test changes behaviour. Host-tested only.
-- **D5**, above.
+  full `dim` (`lm_head_2d.py:507-511`), because a device activation off the column-sharded residual
+  stream carries its column shard; the recorded qualification only ever passed host `LazyWeight`
+  inputs. A strict superset, so no Milestone A test changes behaviour. **Exercised on hardware**: it
+  is the width both Milestone B models actually present at decode — 2048 for Llama, 1280 for Qwen —
+  so every decode logit produced on the Galaxy goes through the widened branch.
+- **D5**, above. **Host-tested only, and it cannot be otherwise**: `_require_exact_weight_policy`
+  makes the swap unreachable for any caller, so no device run can distinguish the two orderings.
 
 ## Known limitations, documented and accepted
 
@@ -168,15 +180,28 @@ while ~55 MB of L1 stays resident, and the next owner's `seal()` fails with an L
 must be torn down before, or together with, the owner.** Recommended design fix (Milestone B/C): make
 `global_cb` a property on the context rather than a stored handle.
 
-*Milestone B update, 2026-08-27 — the mechanism is now confirmed on the host, and the consequence is
-still not.* `mb-coverage` measured it with the module suite's injectable `create_global_cb`/
-`deallocate`: `cleanup()` clears `self._global_cb` **without ever handing it to `deallocate`**, so
-the owner's truthful `owned_resources == ()` and the CB's continued residency are the same event.
-Two owners in one process allocate two CBs and free neither. **The OOM itself needs real L1 and was
-not reproduced**, and the question that actually matters — whether the teardown-ordering contract is
-workable at model scale — is still unanswered, because the 80-layer model was never built. Read a
-clean `cleanup()` as "nothing this object still owns", not "nothing is left on the device".
-Redesign re-routed to Milestone C; see `models/common/models/MILESTONE_B_STATUS.md`.
+*Milestone B update, 2026-08-28 — **measured at model scale on silicon, and it is worse than this
+paragraph says.** L1 is a **lifetime** problem, not the ordering problem it is written as.* Three
+results, each with a log:
+
+- **the mechanism, on host.** `cleanup()` clears `self._global_cb` without ever handing it to
+  `deallocate`, so the owner's truthful `owned_resources == ()` and the CB's continued residency are
+  the same event. Two owners in one process allocate two CBs and free neither;
+- **dropping the last Python reference does not return the L1.** `mb-llama` implemented the obvious
+  fix — release on `activate("prefill")`, recreate on the next `activate("decode")` — behind
+  `Prefetcher2DConfig.release_global_cb_on_prefill`, default off. The release ran and the clashing L1
+  base address was **identical** with and without it (544832 in both). The flag and its tests are left
+  in the tree, default off, with the refutation recorded against them;
+- **nor does closing the whole model** (Milestone B defect `D-C7`). After `close()` *and* an explicit
+  `gc.collect()`, **923 776 of 1 393 472 bytes per L1 bank — 66% — are still allocated**, largest free
+  block 373 824 B against the 792 064 B the next model needs. **No teardown ordering can fix a buffer
+  the destructor of a closed object did not free.**
+
+So read a clean `cleanup()` as "nothing this object still owns", not "nothing is left on the device",
+and take two operating rules from it: **one Galaxy model per process**, and **prefill everything
+before you decode anything** — a second runner that prefills after the first has decoded fails
+deterministically, 3/3 in three fresh processes, on Llama. Redesign re-routed to Milestone C; full
+account in `models/common/models/MILESTONE_B_STATUS.md`, limitation `L-B1`.
 
 <a id="l2"></a>**L2 — an undersized `global_cb_size` is silently accepted.** The rejection contract
 does not exist. Low severity (the qualified configuration is correct) but it is a missing guard, not
@@ -194,28 +219,39 @@ program-config choice, not a module limit, and Milestone B now makes the partiti
 the decode QKV and `wo` projections resolve to the 24-core ring form built by
 `models/common/models/galaxy/recipes.py::ring_matmul_program_config`.~~
 
-> **Correction, 2026-08-27 — the paragraph above was wrong, and silicon is what disproved it.**
-> `mb-llama` tested this path on real hardware on 2026-08-26 (its defect **D-B5**) and found that the
-> Milestone B recipes moved the **MLP** to the ring/`gather_in0` form and left **both attention
-> matmuls on `dense_matmul_program_config`** — i.e. on the same `(7, 1)` grid this limitation names.
-> Re-verified independently by `mb-signoff` at `models/common/models/galaxy/recipes.py:708,711`.
-> The reconciliation read `ring_matmul_program_config` in the recipes file and inferred that
-> attention used it; only the MLP did, and no host test could see the difference.
+> **CLOSED on silicon, 2026-08-28, at a named cost.** Two things this limitation says are now known
+> to be wrong, and one of them was disproved by hardware.
 >
-> **L3 is therefore STILL OPEN**, now with a precise diagnosis. On the current build it aborts as
-> `TT_FATAL ... Illegal kernel placement for bmm_large_block_zm_fused_bias_activation, Kernels cannot
-> be placed on dispatch cores!` rather than as a sub-device mismatch.
+> **It can be narrowed.** "`allowed_worker_cores` must be a dense rectangle, the worker subdevice is
+> not one, and every origin-anchored rectangle includes sender column `x=0`" is outdated: `ttnn` has
+> since grown `allowed_worker_cores` for exactly this case, deprecating
+> `compute_with_storage_grid_size`, and populating it **does** make the program legal. Milestone B
+> confines both attention decode matmuls to `dense_matmul_worker_rectangle` — the largest rectangle
+> anchored at the *worker envelope's* origin, three columns wide on `(8, 4)` — and with
+> `in0_block_w = gcd(k_tiles, 4)` their circular buffers fit (Milestone B defect **D-B9**, closed).
+> Re-verified for this record at `models/common/models/galaxy/recipes.py:373-425,850,853`.
 >
-> The claim above that it "cannot be narrowed" is also outdated: `ttnn` has since grown
-> `allowed_worker_cores` for exactly this, deprecating `compute_with_storage_grid_size`, and
-> populating it **does** make the program legal. But the largest rectangle inside `worker_cores()` is
-> only **three columns wide** instead of seven, which multiplies `per_core_N` by the same factor the
-> grid narrows — and the matmul's in1 circular buffer then clashes by ~20 kB with the decode
-> activations already resident on `x=1..3` (Milestone B defect **D-B9, still open**). The remaining
-> fix is the ring form, which the recipes already anticipate:
-> `attention_qkv_collective_input_memcfg` is shaped for exactly those 24 ring cores.
+> **And it is numerically qualified**, on both product models, three fresh processes each: Llama
+> decode attention output PCC **0.99975**, decode logits **0.99975**, KV K **0.99993** / V
+> **0.99975**; Qwen decode logits **0.99936**. Logs
+> `tttv2_milestone_b_evidence/qwen/logs2/a2_40,41,42_llama_step2.log` and `a2_73,74,75_block.log`.
 >
-> Full account: `models/common/models/MILESTONE_B_STATUS.md`, defects D-B5 and D-B9.
+> **Two costs, recorded rather than absorbed.** Three worker columns instead of seven; and the
+> attention weights lose their prefetching, because the global circular buffer is received only by the
+> 24 ring cores, so a matmul on the confined rectangle cannot take its weight from it. Registering
+> them with the prefetcher anyway is a **correctness** defect and not a performance one — the
+> unconsumed entries shift every later consumer, which is how the MLP came to score PCC 0.096
+> (**D-B25a**). Moving the two matmuls to the 24-core `gather_in0` ring recovers both at once and is
+> **Milestone C performance work**; the recipes already anticipate it
+> (`attention_qkv_collective_input_memcfg` is shaped for exactly those 24 cores).
+>
+> *Two superseded readings, kept so the record shows how it moved.* The struck paragraph above,
+> written during the A/B reconciliation, claimed Milestone B had put attention on the ring form: it
+> had not — only the MLP had, and no host test could see the difference (`mb-llama` defect **D-B5**).
+> A 2026-08-27 signoff pass then recorded "L3 is therefore STILL OPEN" with **D-B9** open behind it;
+> that was written from `mb-llama` attempt 1 and was superseded by attempts 2 and 3 the same week.
+>
+> Full account: `models/common/models/MILESTONE_B_STATUS.md`, "L3 — CLOSED, with a named cost".
 
 A related operational note: a `TT_FATAL` abort inside a multi-subdevice program leaves the mesh
 un-drainable — teardown blocks in `FDMeshCommandQueue::~FDMeshCommandQueue → wait_for_outstanding_reads`.
@@ -281,17 +317,22 @@ which is done. *Achievable sooner and worth separating:* the delegation itself h
 of any kind, and could be exercised on N150/T3K with an existing 1D model to prove the default is
 byte-for-byte preserved. See `tttv2_milestone_a_gap_briefs/gap3_batched_prefill_physical32_trace.md`.
 
-**D-B — Attention2D on the prefetch subdevice partition → ~~Milestone B~~ Milestone C.** [L3](#l3).
-~~Milestone B has now made it — the ring/`gather_in0` decode recipe — but has not run it on
-hardware.~~ **Corrected 2026-08-27:** Milestone B did **not** make that choice for attention (only
-for the MLP), and first silicon proved it — see the correction under [L3](#l3). Milestone B confined
-the dense grid with `allowed_worker_cores`, which is legal but costs four of seven worker columns and
-opened D-B9. **Still open**, re-routed to Milestone C.
+**D-B — Attention2D on the prefetch subdevice partition → CLOSED by Milestone B; its residual is a
+performance item for Milestone C.** [L3](#l3). Milestone B confined the dense grid with
+`allowed_worker_cores` and closed the circular-buffer clash it opened (**D-B9**); both attention
+decode matmuls now execute and are numerically qualified on both models. What is left is not a
+correctness deferral: four of seven worker columns, and the attention weights read from DRAM instead
+of the prefetcher. Both are recovered by moving those two matmuls to the 24-core `gather_in0` ring.
+**Routed to Milestone C as performance work.**
 
-**D-C — `Prefetcher2D` global-CB ownership redesign → ~~Milestone B/C~~ Milestone C.** [L1](#l1). The
-API change should land with the executor work that will actually exercise repeated owner lifecycles.
-**Milestone B did not reach it**: the 80-layer model was never built, so no one has yet observed a
-second Galaxy model construction in one process, and `test_two_models_in_one_process` has never run.
+**D-C — `Prefetcher2D` global-CB ownership redesign → Milestone C, and bigger than this row assumed.**
+[L1](#l1). Milestone B built both full models, ran a second Galaxy model construction in one process,
+and found that the L1 is not returned by full model teardown either (**D-C7**: 66% of every bank still
+allocated after `close()` and `gc.collect()`). The redesign therefore has to address the buffer's
+**lifetime**, not only the teardown order, and `global_cb` as a property on the context may not be
+sufficient on its own. The API change should still land with the executor work that exercises repeated
+owner lifecycles. Two measurement gaps remain and are named in the Milestone B status page: D-C7 rests
+on **one** observation, and `test_two_models_in_one_process` has **never run on Llama**.
 
 **D-D — `global_cb_size` validation → any time.** [L2](#l2). Small and self-contained; no dependency
 on later milestones.
