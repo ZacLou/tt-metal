@@ -255,11 +255,13 @@ neither test file is imported by `test_full_model_wh_galaxy.py` or by either
 4. **D-C7 rests on one observation.** "A closed model does not return its L1" is
    one of the findings this job hands Milestone C and it has exactly one run
    (`a3_q_two_pools`). `a4_q_two_pools_run2/run3` are queued.
-5. **`a4_q_dc9_explicit` — the test that would measure area 4's arithmetic — has
-   never run.** It is position 1.
+5. **Neither test that would measure area 4's arithmetic has run.**
+   `a4_q_dc9_bisect_retry` (one activate cycle, decisive on the composition
+   question) is position 1; `a4_q_dc9_explicit` (six cycles, the full claim set)
+   is position 8.
 
-`queue4.txt` holds **52** items in value order and is consumed destructively, so
-what is in it is exactly what has never run. **Do not rebuild it from gaps in
+`queue4.txt` holds **54** items and is consumed destructively, so what is in it is
+exactly what has never run. Its header explains the order. **Do not rebuild it from gaps in
 `RESULTS_A4.md`**; reconcile against `logs4/queue4.out` and `VERDICTS_A4.txt`,
 which are machine-written.
 
@@ -273,9 +275,14 @@ which are machine-written.
    change that. Say so, record `BLOCKED (infra)`, and spend the night on the
    write-up rather than on 7-second setup failures.
 2. **If it is healthy**: `rm -f queue4.halt` and `nohup bash cov_queue4.sh &` from
-   the coverage directory. The order in `queue4.txt` was chosen for a short,
-   possibly unreliable night — highest value first — so do not reorder it without
-   a reason.
+   the coverage directory. `queue4.txt` is at **revision 4** and its order is not
+   simply "highest value first": it leads with the **one-cycle** cases and banks
+   the safe never-run claims before any **six-cycle** case, because six
+   sub-device-manager cycles in one process is the mechanism suspected of costing
+   the mesh. `a4_q_dc9_bisect_retry` is first and is decisive on its own — it
+   prints the element count of both compositions, which is the one number that
+   separates D-C9's two hypotheses. The reasoning is in the file's header. Do not
+   reorder it back without reading that.
 3. **Do not re-run** the concat-32 ladder (D-C6 byte-identical at four lengths on
    both models), the `dc5` diagnostics (3/3 both models), or the selector
    qualification (3/3). Those are done.
