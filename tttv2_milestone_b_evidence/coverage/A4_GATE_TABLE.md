@@ -13,8 +13,8 @@ established in §A4 point 2, not assumed). Nothing here is quoted from a handoff
 | Batch-1 4K / 32K / 128K functional smokes | **PASS**, both models, all three geometries | Qwen 117.91s / 136.29s / 245.76s; Llama 357.81s / 641.17s / 721.70s | `logs2/a2_g{3,4,5}`, `a2_g{14,15,16}` |
 | Prefix-cached output matches uncached execution | **PASS**, both models | Llama 424.35s, Qwen 158.58s | `logs2/a2_g2_llama_prefix.log`, `a2_g13_qwen_prefix.log` |
 | No dependency imports from a model-named implementation package | **PASS for Milestone B**; the pre-existing exception is now a class, not a single case | Milestone B's seven directories: `models.demos` = 0, non-galaxy model package = 0, each. Wider sweep over `models/common/tests`: **24** pre-existing `models.demos` imports, 23 of them `models.demos.utils.*`, none in a file changed since the job-0 base | `logs3/a4_h4_boundary_and_import_gates.log` |
-| Zero changes to 1D module implementation files | **PASS** | 0 of **410** changed paths match `_1d\.py` | `git diff --name-only bc6ad03bfc2..HEAD \| grep '_1d\.py'` |
-| Zero changes to `llm_runtime` | **PASS** | 0 of 410 | same log |
+| Zero changes to 1D module implementation files | **PASS** | 0 of **432** changed paths match `_1d\.py` | `git diff --name-only bc6ad03bfc2..HEAD \| grep '_1d\.py'` |
+| Zero changes to `llm_runtime` | **PASS** | 0 of 432 | same log |
 | Existing 1D model contract and demo-contract host tests green, expectations unchanged | **FAIL**, 5 of 301 — and not owned by Milestone B | **5 failed, 296 passed in 89.32s** at `aff4e95dbf6`; the same five node ids at a **fourth** distinct commit. No expectation was edited. §A3 H5 checked all five owning packages against `bc6ad03bfc2..HEAD`: 0 each | `logs3/a4_h1_1d_contract_gate.log` |
 
 Supporting host gates at this tree, neither of which is one of the nine lines:

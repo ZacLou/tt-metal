@@ -8,7 +8,7 @@
 | `0e2c0dc50b4` | `test_qwen_device_sampling_claims_with_an_explicit_token_composition` — area 4's claims again, with the sampled tokens composed by the distribution (`ConcatMesh2dToTensor(dims=(0, user axis))` then mesh row 0) instead of by their topology labels, both compositions printed side by side in one log |
 
 No implementation file was touched. `git diff --name-only bc6ad03bfc2..HEAD` is
-410 paths, **0** matching `_1d\.py` and **0** matching `llm_runtime`, and the only
+432 paths, **0** matching `_1d\.py` and **0** matching `llm_runtime`, and the only
 non-test, non-evidence paths in it are the ones attempts 0-3 already owned.
 
 ## What is short of the finish condition, precisely

@@ -2320,15 +2320,21 @@ established from the tree and the machine-written logs, not from the handoffs:
    is this attempt's own driver. Attempt 3's queue (`cov_queue.sh`) is not
    running and `queue.halt` is in place beside a `queue.txt` with 28 unconsumed
    items.
-2. **Every attempt-3 measurement applies at HEAD.** `git diff --name-only
-   b361770f46b..HEAD` (the commit all 38 post-agent queue runs are stamped with)
-   touches **no implementation file at all** — one status `.md` under `models/`
-   and thirteen evidence/brief files. Widening the window to attempt 2's gate
-   commit, `git diff --name-only 1451b192584..HEAD -- models/` returns exactly
-   three paths: `models/common/models/MILESTONE_B_STATUS.md` and the two
-   `test_step7_coverage_wh_galaxy.py` files. Neither of those two test files is
-   imported by `test_full_model_wh_galaxy.py` or by either `demo.py`, so the nine
-   exit-gate rows are measurements of byte-identical implementation code.
+2. **Every attempt-3 measurement applies at HEAD, and so does every attempt-2
+   one.** `git diff --name-only b361770f46b..110ba1f0658` — from the commit all 38
+   post-agent queue runs are stamped with, to the commit attempt 4 started at —
+   is 14 paths and touches **no implementation file at all**: one status `.md`
+   under `models/` and thirteen evidence/brief files. Widening to attempt 2's
+   gate commit and running it at attempt 4's *final* tree,
+   `git diff --name-only 1451b192584..HEAD -- models/` returns four paths:
+   `models/common/models/MILESTONE_B_STATUS.md`, the two
+   `test_step7_coverage_wh_galaxy.py` files, and the one host test file attempt 4
+   added. Filtering that list for anything that is neither a `.md` nor under
+   `tests/` returns **nothing**. None of those test files is imported by
+   `test_full_model_wh_galaxy.py` or by either `demo.py`, so the nine exit-gate
+   rows are measurements of byte-identical implementation code — a claim that is
+   re-checkable in one command and is re-checked in
+   `logs3/a4_h4_boundary_and_import_gates.log`.
 3. **Two specific holes, and only one of them was worth a Galaxy night.**
 
    * **Never run at all.** `a3_{q,l}_padded_greedy`, `_temperature` and
@@ -2372,8 +2378,8 @@ established in §A4 point 2, not assumed). Nothing here is quoted from a handoff
 | Batch-1 4K / 32K / 128K functional smokes | **PASS**, both models, all three geometries | Qwen 117.91s / 136.29s / 245.76s; Llama 357.81s / 641.17s / 721.70s | `logs2/a2_g{3,4,5}`, `a2_g{14,15,16}` |
 | Prefix-cached output matches uncached execution | **PASS**, both models | Llama 424.35s, Qwen 158.58s | `logs2/a2_g2_llama_prefix.log`, `a2_g13_qwen_prefix.log` |
 | No dependency imports from a model-named implementation package | **PASS for Milestone B**; the pre-existing exception is now a class, not a single case | Milestone B's seven directories: `models.demos` = 0, non-galaxy model package = 0, each. Wider sweep over `models/common/tests`: **24** pre-existing `models.demos` imports, 23 of them `models.demos.utils.*`, none in a file changed since the job-0 base | `logs3/a4_h4_boundary_and_import_gates.log` |
-| Zero changes to 1D module implementation files | **PASS** | 0 of **410** changed paths match `_1d\.py` | `git diff --name-only bc6ad03bfc2..HEAD \| grep '_1d\.py'` |
-| Zero changes to `llm_runtime` | **PASS** | 0 of 410 | same log |
+| Zero changes to 1D module implementation files | **PASS** | 0 of **432** changed paths match `_1d\.py` | `git diff --name-only bc6ad03bfc2..HEAD \| grep '_1d\.py'` |
+| Zero changes to `llm_runtime` | **PASS** | 0 of 432 | same log |
 | Existing 1D model contract and demo-contract host tests green, expectations unchanged | **FAIL**, 5 of 301 — and not owned by Milestone B | **5 failed, 296 passed in 89.32s** at `aff4e95dbf6`; the same five node ids at a **fourth** distinct commit. No expectation was edited. §A3 H5 checked all five owning packages against `bc6ad03bfc2..HEAD`: 0 each | `logs3/a4_h1_1d_contract_gate.log` |
 
 Supporting host gates at this tree, neither of which is one of the nine lines:
@@ -2677,7 +2683,7 @@ job may do to shared hardware without being asked.
 | `0e2c0dc50b4` | `test_qwen_device_sampling_claims_with_an_explicit_token_composition` — area 4's claims again, with the sampled tokens composed by the distribution (`ConcatMesh2dToTensor(dims=(0, user axis))` then mesh row 0) instead of by their topology labels, both compositions printed side by side in one log |
 
 No implementation file was touched. `git diff --name-only bc6ad03bfc2..HEAD` is
-410 paths, **0** matching `_1d\.py` and **0** matching `llm_runtime`, and the only
+432 paths, **0** matching `_1d\.py` and **0** matching `llm_runtime`, and the only
 non-test, non-evidence paths in it are the ones attempts 0-3 already owned.
 
 ## What is short of the finish condition, precisely

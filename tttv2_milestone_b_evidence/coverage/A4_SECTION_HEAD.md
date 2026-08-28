@@ -18,15 +18,21 @@ established from the tree and the machine-written logs, not from the handoffs:
    is this attempt's own driver. Attempt 3's queue (`cov_queue.sh`) is not
    running and `queue.halt` is in place beside a `queue.txt` with 28 unconsumed
    items.
-2. **Every attempt-3 measurement applies at HEAD.** `git diff --name-only
-   b361770f46b..HEAD` (the commit all 38 post-agent queue runs are stamped with)
-   touches **no implementation file at all** — one status `.md` under `models/`
-   and thirteen evidence/brief files. Widening the window to attempt 2's gate
-   commit, `git diff --name-only 1451b192584..HEAD -- models/` returns exactly
-   three paths: `models/common/models/MILESTONE_B_STATUS.md` and the two
-   `test_step7_coverage_wh_galaxy.py` files. Neither of those two test files is
-   imported by `test_full_model_wh_galaxy.py` or by either `demo.py`, so the nine
-   exit-gate rows are measurements of byte-identical implementation code.
+2. **Every attempt-3 measurement applies at HEAD, and so does every attempt-2
+   one.** `git diff --name-only b361770f46b..110ba1f0658` — from the commit all 38
+   post-agent queue runs are stamped with, to the commit attempt 4 started at —
+   is 14 paths and touches **no implementation file at all**: one status `.md`
+   under `models/` and thirteen evidence/brief files. Widening to attempt 2's
+   gate commit and running it at attempt 4's *final* tree,
+   `git diff --name-only 1451b192584..HEAD -- models/` returns four paths:
+   `models/common/models/MILESTONE_B_STATUS.md`, the two
+   `test_step7_coverage_wh_galaxy.py` files, and the one host test file attempt 4
+   added. Filtering that list for anything that is neither a `.md` nor under
+   `tests/` returns **nothing**. None of those test files is imported by
+   `test_full_model_wh_galaxy.py` or by either `demo.py`, so the nine exit-gate
+   rows are measurements of byte-identical implementation code — a claim that is
+   re-checkable in one command and is re-checked in
+   `logs3/a4_h4_boundary_and_import_gates.log`.
 3. **Two specific holes, and only one of them was worth a Galaxy night.**
 
    * **Never run at all.** `a3_{q,l}_padded_greedy`, `_temperature` and

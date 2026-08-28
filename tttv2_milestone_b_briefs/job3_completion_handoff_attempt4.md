@@ -173,7 +173,7 @@ dequeued. Running it is the single highest-value item on the queue.
 | 1D model contract / demo-contract host tests | **5 failed, 296 passed in 89.32s** — the same five node ids attempts 1-3 saw, now at a **fourth** commit. No expectation edited | `logs3/a4_h1_1d_contract_gate.log` |
 | host regression gate (2D modules + galaxy + Llama host suite) | **553 passed, 0 failed**, 0 device opens | `logs3/a4_h2_host_gate.log` |
 | `models/common/tests/llm_runtime` | **1032 passed, 1 skipped, 0 failed**, 0 device opens | `logs3/a4_h3_llm_runtime_host_gate.log` |
-| boundaries + model-named imports | **0** of 410 changed paths match `_1d\.py`; **0** match `llm_runtime`; **0** `models.demos` and **0** non-galaxy model-package imports in any of Milestone B's seven directories | `logs3/a4_h4_boundary_and_import_gates.log` |
+| boundaries + model-named imports | **0** of 432 changed paths match `_1d\.py`; **0** match `llm_runtime`; **0** `models.demos` and **0** non-galaxy model-package imports in any of Milestone B's seven directories | `logs3/a4_h4_boundary_and_import_gates.log` |
 
 **F-C3 is wider than §A3 recorded.** The wide sweep over `models/common/tests`
 finds **24** pre-existing `models.demos` imports, not one: 23 are
@@ -199,8 +199,8 @@ every row is `REPORT.md` §A4 "The Milestone B exit gate at this tree".
 | Batch-1 4K / 32K / 128K functional smokes | **PASS**, both models, all three |
 | Prefix-cached output matches uncached execution | **PASS**, both models |
 | No dependency imports from a model-named implementation package | **PASS** for Milestone B; pre-existing exceptions, F-C3, now a class of 24 |
-| Zero changes to 1D module implementation files | **PASS** — 0 of 410 |
-| Zero changes to `llm_runtime` | **PASS** — 0 of 410 |
+| Zero changes to 1D module implementation files | **PASS** — 0 of 432 |
+| Zero changes to `llm_runtime` | **PASS** — 0 of 432 |
 | Existing 1D contract/demo-contract host tests green, expectations unchanged | **FAIL**, 5 of 301, and not owned by Milestone B |
 
 **On the two accuracy rows.** The brief asks for them to be re-measured at this
