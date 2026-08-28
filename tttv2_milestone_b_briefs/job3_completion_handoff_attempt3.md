@@ -6,7 +6,12 @@ archaeology; this file is rewritten in place at every checkpoint and the
 "Last updated" line below is authoritative. Anything marked `IN FLIGHT` was still
 running when that line was stamped.
 
-Last updated: **2026-08-28 08:58Z**. Status: **IN PROGRESS**.
+Last updated: **2026-08-28 14:05Z**, and **not by the attempt-3 agent** — that
+session died at `09:21:44Z`. Everything from "Read these paragraphs" down to the
+areas table was written by the agent at 08:58Z; the sections marked *[operator
+update]* were added afterwards by a later session, from the machine-written logs.
+Status: **STOPPED, not finished** — no `state/mb-coverage.finished` marker exists,
+and none should be written on this evidence.
 
 Branch `apbernal/tttv2_wh_glx_2d_modules_milestone_b`. Full account:
 `tttv2_milestone_b_evidence/coverage/REPORT.md` §A3. Run-by-run index, one row
@@ -89,16 +94,35 @@ byte-identical thing, and §A3 states the commit for every row.
 
 ## Status of the five areas
 
-Filled in as runs land; `IN FLIGHT` means exactly that.
+*[operator update, 14:05Z]* — the queue ran on for four and a half hours after
+the agent died and completed **38 more runs**. No `IN FLIGHT` cells remain. Every
+cell below is transcribed from `logs2/<name>.log`; `RESULTS_A3.md` names the log
+behind each one.
 
 | Area | Llama | Qwen |
 | --- | --- | --- |
-| 1 paged KV | IN FLIGHT | **PASS** for the two-pool PCC claim (cross-process), rest IN FLIGHT |
-| 2 concat-32 | IN FLIGHT | IN FLIGHT |
-| 3 prefix / chunked | **PASS** for prefix-vs-uncached; rest IN FLIGHT | **PASS** for prefix-vs-uncached; rest IN FLIGHT |
-| 4 device sampling | **BLOCKED** by D-C5 then D-C8, measured | **BLOCKED** by D-C5 then D-C8, measured |
+| 1 paged KV | **PASS** two-pool PCC (cross-process, 1 run per arm) and late capacity; **BLOCKED** on block-level cross-slot and one-process two-pool — the L1 address clash, not D-C7 | **PASS** two-pool PCC (2 runs per arm), late capacity, block-level cross-slot (2 runs); **FAIL** two pools in one process — **D-C7** |
+| 2 concat-32 | **FAIL, every case — D-C6**, not the clash | **FAIL, every case — D-C6** |
+| 3 prefix / chunked | **PASS** prefix-vs-uncached, prefix-then-plain, mixed batch; **BLOCKED** on chunked (address clash) | **PASS** all four claims, 2 fresh processes each |
+| 4 device sampling | **BLOCKED** by D-C5 then D-C8. D-C8 now **3/3** | **BLOCKED** by D-C5 then D-C8. D-C8 **3/3** |
 | 5 long context | **PASS** 4K/32K/128K | **PASS** 4K/32K/128K |
 | repeat & cleanup | **FAIL 3/3**, L1 address clash, deterministic | **PASS 3/3** on one live model; **FAIL** on two models in one process (D-C7) |
+
+**The two verdicts that changed after the agent died**, and both change what
+Milestone C inherits:
+
+- **D-C6 is not Qwen-only.** Llama's step-7 concat-32 sweep fails with the same
+  *capacity* overflow, at **byte-identical** figures at every shared length
+  (1 669 312 B at 128, doubling per doubling, against 1 499 136 B of L1). It is a
+  property of the shared concat-32 recipe, not of either model's geometry, and
+  the smallest supported length is already 11% over. Area 2 has **no reachable
+  case at this tree, for either model, at any length or active batch** — so the
+  brief's active-16/31/32 isolation question was never asked, in either direction.
+- **Area 1's headline claim now passes for both models.** The Llama cross-process
+  pool comparison was run host-only from the two recordings already on disk:
+  `[pool] all 32 slots agree at PCC >= 0.99 for prefill and decode`,
+  `logs3/a3_h14_llama_pool_compare.log`. That row is a **new measurement made by
+  the operator session**, not by the agent, and `RESULTS_A3.md` H14 says so.
 
 ## If you are attempt 4 rather than `mb-signoff`
 
@@ -106,3 +130,46 @@ Read `RESULTS_A3.md` first, not the report: one row per run, the log name, and h
 many fresh processes each claim got. `queue.txt` is the resume point and is
 consumed line by line by `cov_queue.sh`; anything still in it has not run.
 Re-running what `RESULTS_A3.md` records is the only way to waste a Galaxy night.
+
+### *[operator update, 14:05Z]* — the state you are actually inheriting
+
+**Nothing is running.** Read this before you plan a night.
+
+1. **The agent died at `09:21:44Z`, the queue did not.** The `stream-json` for
+   session `d7d4b4ab-…` ends mid-wait with its background monitors killed and no
+   `result` event. `cov_queue.sh` (PID 13308, reparented to init) kept running
+   unattended and completed 38 further runs. So `RESULTS_A3.md` above row **L3**
+   was written by the agent; everything below the `---` in that file was
+   transcribed afterwards from the logs. **Both halves are equally real
+   measurements** — the difference is only who wrote them down.
+2. **The driver is deadlocked and the `ttmb` screen session is wedged.** The
+   detached pty stopped draining at `08:16:44Z`; `run_milestone_b_jobs.sh` (PID
+   10669) has been blocked ever since inside a `log()` call, in `tee`, writing to
+   it. It will never log the job exit, never run its post-job device cleanup and
+   never start another pass. **`run_milestone_b_jobs.sh` refuses to launch while a
+   screen session named `ttmb` exists**, so that session and PID 10669 must be
+   cleared before attempt 4 can start. Neither holds anything: the mesh is free
+   and the evidence is on disk.
+3. **The queue was halted at `13:48:41Z`** by an operator, at the user's request.
+   `queue.halt` exists; delete it and run `nohup bash cov_queue.sh &` from the
+   coverage directory to resume. **28 items remain and none of them has run** —
+   the file is consumed destructively, so what is in it is exactly what is left.
+   Its header records what was dropped and why. Do **not** rebuild the queue from
+   gaps in `RESULTS_A3.md`; reconcile against `logs2/queue.out` and
+   `VERDICTS_A3.txt`, which are machine-written and complete.
+4. **The mesh is clean.** The killed run's wrapper ran its `glx_reset`; 32/32
+   boards on the bus, no device-holding pytest.
+5. **Perishable input.** The four cross-process pool recordings live in
+   `/tmp/tttv2_step7_artifacts/` (~140 MB). `a3_h14` has already consumed the
+   Llama pair and `a3_h12` the Qwen pair, so both comparisons are recorded — but
+   if you want to re-run either, copy them somewhere durable first.
+
+**What is worth device time, and what is not.** Of the 28 remaining items, six
+(`a3_{q,l}_padded_greedy`, `_temperature`, `_seeded`) sit behind D-C5, which is
+now qualified at three fresh processes on **both** models; they will spend ~40
+minutes re-printing one `TT_FATAL` each. The concat-32 items are behind D-C6, now
+established as model-independent at four lengths. What is genuinely unmeasured is
+the **run-2/run-3 repeat tail** — most Llama claims have exactly one run, so they
+are *observed, not qualified*, and the brief's three-fresh-processes rule is not
+satisfied for them. If you get one night, spend it there and on the two defects,
+not on re-confirming D-C5 and D-C6.

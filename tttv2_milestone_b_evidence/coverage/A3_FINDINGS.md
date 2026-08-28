@@ -269,6 +269,16 @@ reaches. `GalaxyColumnUserSelector.__init__` already accepts a
 `compute_kernel_config` and a `memory_config` and passes both to the matmul; it
 accepts no `program_config`, and nothing in it knows which sub-device is loaded.
 
+**Both models, and that distinguishes D-C8 from the L1 clash.** `a3_l_dc5`
+(`logs2/a3_l_dc5.log`, commit `75f47d1228e`, `1 failed in 897.12s`) relocated
+Llama's decode logits — `WIDTH_SHARDED, width 16128`, which is Llama's per-device
+share of its 129024 padded vocabulary — and raised the same `TT_FATAL @
+program.cpp:2205` from the same line of `collectives.py`. Four device runs, two
+geometries: the *only* thing that differs is the shard width. The L1 address
+clash is a function of the resolved decode placement and reproduces for one model
+and not the other; D-C5 and D-C8 are functions of the code and reproduce for
+both.
+
 **And this is the third fault in one stack of three.** The L1 address clash hid
 D-C5 for Llama; D-C5 hid D-C8 for both models. The class's own docstring predicted
 it in as many words —
@@ -290,3 +300,78 @@ stacked defects in shared Galaxy code. Not "unmeasured": measured, twice, with t
 first blocker removed at the call site to reach the second. Milestone B's device
 sampling does not work end to end on this hardware at this tree, and the report
 should say so in those words.
+
+---
+
+### D-C6 — **escalated**: the concat-32 L1 overflow is not Qwen's, it is the shared recipe's
+
+*Recorded after the agent session ended, by the operator session that halted the
+queue at `13:48:41Z`. Transcribed from `logs2/a3_{q,l}_concat_*.log`, all stamped
+`commit: b361770f46b`; every byte count below is `grep`-ed from the log named.*
+
+§A2 recorded D-C6 as a **Qwen-only** capacity overflow: Qwen's concat-32 demo
+(`a2_g22`) could not fit its static circular buffers, while Llama's (`a2_g10`)
+failed earlier with the L1 *address clash* and so never reached the question.
+That reading was reasonable on the evidence available and it is **wrong**.
+
+The step-7 sweep — a model built once and prefilled once, with no decode before
+it, which is exactly the shape that cannot raise the address clash — gives:
+
+| length | Qwen | Llama | L1 available |
+| --- | --- | --- | --- |
+| 128 | 1 669 312 B | **1 669 312 B** | 1 499 136 B |
+| 256 | 3 111 104 B | **3 111 104 B** | 1 499 136 B |
+| 512 | 5 994 688 B | **5 994 688 B** | 1 499 136 B |
+| 1024 | *not run* | 11 761 856 B | 1 499 136 B |
+| active 16 / 31 / 32, length 128 | 1 669 312 B | 1 669 312 B | 1 499 136 B |
+
+all on core range `[0-0 - 2-3]`, all raised by `validate_circular_buffer_region`.
+
+Three things follow, and each changes what Milestone C inherits:
+
+1. **The requirement is identical between the two models, to the byte, at every
+   shared length.** Llama's 8-KV-head 128256-vocab geometry and Qwen's 64-head
+   151936-vocab geometry cannot both coincidentally need 1 669 312 B. The
+   allocation is a property of the **shared concat-32 recipe**, not of either
+   model's dimensions, so this is one defect to fix once — not a per-model tuning
+   exercise.
+2. **The smallest supported length is already 11% over.** The brief says "qualify
+   sequence length 128 first, then expand through 2048". There is no first step:
+   128 does not fit. And the requirement roughly **doubles per length doubling**
+   (1.67 → 3.11 → 5.99 → 11.76 MB), so nothing above 128 is a near miss either —
+   1024 asks for **7.8×** the L1 that exists.
+3. **The active-batch dimension is unreachable, not passing.** The brief's whole
+   area 2 turns on active batches 16, 31 and 32 behaving differently. All three
+   produce the identical 1 669 312 B and die before a single row's logits can be
+   compared. Nothing about padding-row isolation was measured — in either
+   direction. Do not read these seven failures as evidence that padded rows leak;
+   read them as evidence that the question cannot be asked at this tree.
+
+Length 2048 was dequeued at `13:44:49Z` and terminated at `13:48:41Z` by the
+operator, un-measured and deliberately not re-queued: the scaling and the
+model-independence were both already established, and the run had no answer left
+to give.
+
+### The Llama address clash blocks three more claims than §A2 knew
+
+Same provenance as D-C6 above. The clash (§A2's limitation **L1**, `program 100`,
+core range `[0-0 - 0-3]`) is still **Llama-only at this tree** — `grep -l 'clash
+with L1 buffers' logs2/a3_q_*.log` matches **0 of Qwen's 28 attempt-3 device
+runs**, and 0 of its attempt-2 runs. But the Llama half of the step-7 sweep
+shows it costs more coverage than the repeat/teardown shapes it was found in:
+
+| Claim | Log | Signature |
+| --- | --- | --- |
+| area 1, block-level cross-slot isolation | `a3_l_cross_slot` | `program 100`, L1 buffer at 544832 |
+| area 1, two pools in one process | `a3_l_two_pools` | `program 100`, L1 buffer at 479296 |
+| area 3, chunked prefill | `a3_l_chunked` | `program 1546`, L1 buffer at 543360 |
+
+The second of these matters for **D-C7**: Qwen's two-pool run failed with the
+capacity residue (923776 of 1393472 B per bank still held after `close()` and
+`gc.collect()`), which is the finding. Llama's fails *earlier*, on the clash, so
+**D-C7 is not observable on Llama** and the "one model per process" limitation is
+qualified on Qwen alone. Two different defects produce one symptom in the same
+shape, and a fix for either one will not silence the other.
+
+All three claims are **blocked, not contradicted**: no slot data, no pool
+comparison and no chunk comparison was ever performed in those runs.

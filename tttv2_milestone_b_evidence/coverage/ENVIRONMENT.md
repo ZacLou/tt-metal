@@ -223,3 +223,41 @@ away:
    committed is `black` reformatting (the pre-commit run reports `black … Failed —
    files were modified`, every other hook `Passed`), and the run was repeated from
    the committed tree as `a3_q_pool_default_run2` rather than argued about.
+
+---
+
+## Operator intervention, 2026-08-28 13:47–14:05Z
+
+*Not part of the unattended run. Recorded here because it changes what a later
+attempt finds on disk, and because two of the entries below are the harness
+behaving differently from how the run assumed it would.*
+
+| Time (UTC) | What | Evidence |
+| --- | --- | --- |
+| 08:16:44 | The detached `screen` pty stopped draining. `screen.log` and `driver.log` both end here | `tttv2_milestone_b_runs/20260828T073724Z/` |
+| 09:21:44 | The attempt-3 agent session ended — background monitors killed, **no `result` event** | `mb-coverage.stream.jsonl`, last events are `task_updated … status: killed` |
+| 09:21:44 → | `run_milestone_b_jobs.sh` (PID 10669) blocked inside a `log()` call: its `tee` (PID 61529) in `write()` to `/dev/pts/1`, `syscall` = 1, fd 1 → the wedged pty. The driver has been in `do_wait` ever since | `/proc/61529/syscall`, `/proc/10669/wchan` |
+| 09:21 → 13:48 | `cov_queue.sh` (PID 13308, reparented to init) ran on alone and completed **38 further device runs**. `cov_watch3.sh` (PID 18456) kept appending machine verdicts throughout | `logs2/queue.out`, `VERDICTS_A3.txt` |
+| 13:47:11 | `queue.halt` created — stops `cov_queue.sh` between cycles, never mid-run | `queue.halt` |
+| 13:48:41 | `a3_l_concat_len2048` terminated: **SIGTERM to the pytest child only** (PID 172119, `comm=python`, verified against its `cov_device_run.sh` parent before signalling). The wrapper took its normal exit path — `cov_after_device_run.sh` ran, `tt-smi -glx_reset` completed, `mesh free: no device-holding pytest, 32 devices` | `logs2/queue.out`, `logs2/reset_a3_l_concat_len2048.log` |
+| 13:48:41 | `=== halt file present, stopping` / `=== queue runner done`. **28 items remain in `queue.txt`, none run** | `logs2/queue.out` |
+| ~13:52 | `a3_h14_llama_pool_compare` run **host-only** from the two Llama recordings already on disk: `1 passed in 7.85s`, **0** occurrences of `Opening user mode device driver` | `logs3/a3_h14_llama_pool_compare.log` |
+| 14:05 | `RESULTS_A3.md`, `A3_AREAS.md`, `A3_FINDINGS.md`, `queue.txt` and the attempt-3 handoff brought up to date from the logs | this file |
+
+**Two harness lessons this run paid for, and they are not in the driver's header
+comment yet:**
+
+1. **A detached `screen` pty that stops draining deadlocks the driver.** Every
+   `log()` in `run_milestone_b_jobs.sh` is `printf | tee -a "$DRIVER_LOG"`, and
+   `tee`'s stdout is the pty. When the pty stops being read, the driver blocks on
+   its *next log line* — which is the one reporting the job's exit code. The run
+   then looks alive (a driver process exists, a screen session exists) while doing
+   nothing at all, and `--attempts` never advances. Redirecting the driver's own
+   stdout to a file, or `tee`-ing to the log with stdout to `/dev/null`, removes
+   the coupling.
+2. **An agent session can end without a `result` event, and the driver cannot
+   tell.** The job's device work outlived its agent by four and a half hours here,
+   which was pure profit — but nobody was writing any of it down. The queue's
+   machine-written outputs (`queue.out`, `VERDICTS_A3.txt`) are what made the
+   afternoon's transcription possible; the human-readable index froze at 09:18Z.
+   **Keep a machine-written record beside every human-written one.**

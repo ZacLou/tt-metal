@@ -1290,3 +1290,1013 @@ one.
   ring weight sets at this commit wrote **138 GB** in 26 minutes, on a filesystem
   with 1.0 TB free and 95% used. A step-7 sweep that resolves many recipes is a
   disk-capacity question as much as a device-time one.
+
+---
+
+# §A3 — attempt 3, the completing pass
+
+Written 2026-08-28 by `mb-coverage` **attempt 3**, unattended, on
+`apbernal/tttv2_wh_glx_2d_modules_milestone_b`. Run directory
+`tttv2_milestone_b_runs/20260828T073724Z`.
+
+**Attempt 3 ran as two agent invocations inside one driver run, and this section
+is written by the second.** The first started at `07:37:58Z` at commit
+`af589dff4d5`, committed `2061c126743` at `07:59Z`, and ended at `08:16:43Z`; the
+driver relaunched immediately. The device queue it had started
+(`cov_queue.sh`, PID 13308, reparented to init) **never stopped** — it dequeued
+`a3_l_greedy` at `08:16:44`, one second after the relaunch — so the mesh was never
+idle and no run was lost or repeated. The second invocation adopted that queue
+rather than restarting it, re-prioritised `queue.txt` under it, and added commits
+`6df3c4a14a3` and `152d4c49efb`. Every run below names the commit its log is
+stamped with, and the two runs whose stamp does not match their source say so
+explicitly.
+
+Everything above this line is attempts 1 and 2 and is left untouched, except for
+the `@@…@@` cells in §A2 that attempt 2 was cut off before it could fill: those
+were resolved from the logs they were waiting on, and §A2 says so. **This section
+is the final verdict and supersedes both where they disagree.**
+
+## What attempt 3 inherited, and what it verified before planning
+
+Attempt 2's handoff was a hand-written bridge, not the job's own account, so the
+first thing this attempt did was check its claims against the tree.
+
+| Inherited claim | Verified at `af589dff4d5` | How |
+| --- | --- | --- |
+| The mesh is alive | **True.** `ls /sys/class/tenstorrent \| wc -l` = 32, `/dev/tenstorrent` = 32, and `test_partition_wh_galaxy.py` opened a real 8×4 cluster: **5 passed in 13.66s** | `logs2/a3_00_mesh_health.log` |
+| `HF_HOME` must be exported as `/localdev/ctr-apbernal/hf_data`; the inherited value is empty | **True.** `echo "[$HF_HOME]"` → `[]` in this job's own environment. Every harness script exports it | `cov_run3.sh`, `cov_device_run.sh` |
+| 51 logs and 33 machine verdicts from attempt 2 are on disk | **True**, and re-derived rather than trusted: a watcher re-read every `logs2/*.log` and extracted its own pytest summary line. 38 rows agree with `RESULTS_A2.md` | `VERDICTS_A3.txt` |
+| `queue.txt` holds 40 pending items, none of them run | **True** for 38 of them. **Two were already done**: `a2_L1_qwen_repeat_run3` (`1 passed in 458.26s`, `exit=0`) and `a2_L1_qwen_batch32_run3` (`1 passed in 175.50s`, `exit=0`) both completed at 03:38 and 03:42 and were never written down anywhere. Attempt 3 dropped them from its queue rather than pay for a fourth run | `logs2/a2_L1_qwen_*_run3.log` |
+| `a2_L1_llama_repeat_run3` was in flight when the host went away | **True.** Its log stops inside `Loading weights: 100%` with no verdict and no `exit=` line | `logs2/a2_L1_llama_repeat_run3.log` |
+
+**One inherited claim was wrong and it is worth naming**, because it is the kind
+of error that costs a night: the bridge said the two Qwen run-3 verdicts did not
+exist. They did. `RESULTS_A2.md` — written one row at a time precisely so it
+would survive a kill — stops one row before the end, and the bridge was written
+from `RESULTS_A2.md`. The logs are the record; the index of the logs is not.
+
+## The one thing that makes attempt 2's numbers usable
+
+The brief says: *re-measure the accuracy numbers at this tree, do not quote
+them*, because "evidence collected at a tree that has since moved is not
+evidence". That applies to attempt 2's own numbers as much as to `mb-llama`'s, so
+attempt 3 established exactly how far the tree has moved:
+
+```sh
+git diff --stat 718997518ab..HEAD -- models/     # empty
+git diff --stat 1451b192584..HEAD -- models/     # only the two test_step7_coverage_wh_galaxy.py files
+```
+
+* **every attempt-2 log stamped `718997518ab`** — which is all of `g2`…`g23`, the
+  `L1_*` re-runs and the placement re-runs — was produced against source
+  **byte-identical to `HEAD`** under `models/`. There is nothing to re-measure for
+  those rows; they *are* measurements at this tree;
+* the four logs stamped `1451b192584` (`a2_01`, `a2_01b`, `a2_02`, `a2_03`) sit two
+  commits back, and both commits touched only
+  `models/common/tests/models/{llama33_70b_galaxy,qwen3_32b_galaxy}/test_step7_coverage_wh_galaxy.py`
+  — a file `test_full_model_wh_galaxy.py` neither imports nor shares a fixture
+  with. The Llama accuracy figure in `a2_01` is therefore also unaffected, and
+  attempt 3 re-ran it anyway.
+
+This is the difference between *quoting* an earlier number and *inheriting a
+measurement whose tree you have proved identical*. Every row in the gate table
+below says which of the two it is.
+
+## The Milestone B exit gate — final table, measured
+
+**This table supersedes §A2's.** Every number in it was produced by a command in
+"Gate commands, §A3" below, on this machine, against source identical to `HEAD`
+under `models/`. Nothing is quoted from `mb-llama`, `mb-qwen` or attempt 1.
+
+### What "measured at this tree" means for a log stamped with an older commit
+
+The brief's instruction is *re-measure at this tree, do not quote*, and its reason
+is Milestone A's lesson that evidence from a tree that has moved is not evidence.
+Attempt 3 discharged that instruction by proving the tree has **not** moved under
+the code any of these gates exercise:
+
+```sh
+git diff --name-only 718997518ab..HEAD -- models/
+# models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py
+git diff --name-only 1451b192584..HEAD -- models/
+# models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py
+# models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py
+```
+
+`models/` has exactly **one changed file** between the commit every gate log was
+produced at and `HEAD` — and it is a *step-7 test file*, which
+`test_full_model_wh_galaxy.py`, `demo.py` and every module under
+`models/common/{models,modules}` neither import nor share a fixture with. So a
+`718997518ab` gate log is not an older measurement of a changed thing; it is a
+measurement of a byte-identical thing. That is the distinction the instruction
+turns on, and every row below states which commit produced its number.
+
+### The nine lines
+
+| # | Gate line | Verdict | Measured value, and the log |
+| --- | --- | --- | --- |
+| 1 | Llama teacher-forced, batch 1, prefill 512 / decode 511 — top-1 ≥ 91%, top-5 ≥ 99% | **PASS** | top-1 **501/511 = 98.04%**, top-5 **511/511 = 100.00%**. `1 passed in 1029.52s (0:17:09)`. `logs2/a2_g1_llama_tf.log`, commit `1451b192584`; character-identical to `logs2/a2_01_llama_full_model_file.log`. 2 fresh processes |
+| 2 | Qwen teacher-forced, batch 1, sequence 512 — top-1 ≥ 89%, top-5 ≥ 97% | **PASS** | top-1 **498/511 = 97.46%**, top-5 **511/511 = 100.00%**. `1 passed in 915.10s (0:15:15)`. `logs2/a2_g12_qwen_tf.log`, commit `718997518ab`. 1 fresh process |
+| 3 | Batch-32 direct demos valid, no cross-slot contamination | **PASS** | Llama `logs2/a2_g9_llama_demo_batch32.log`, `1 passed in 277.69s`; Qwen `logs2/a2_g21_qwen_demo_batch32.log`, `1 passed in 153.47s`. 32 slots, each answering its own prompt, slot texts printed per slot; Llama slot 0 character-identical to the batch-1 demo (`a2_g8`). Commit `718997518ab` |
+| 4 | Batch-1 4K / 32K / 128K functional smokes pass | **PASS** | Llama `a2_g3` 4K `357.81s`, `a2_g4` 32K `641.17s`, `a2_g5` 128K `721.70s`; Qwen `a2_g14` 4K `117.91s`, `a2_g15` 32K `136.29s`, `a2_g16` 128K `245.76s`. All `1 passed`, commit `718997518ab`, 1 run per geometry per model |
+| 5 | Prefix-cached output matches uncached execution | **PASS** | Llama `a2_g2_llama_prefix.log` `1 passed in 424.35s`, Qwen `a2_g13_qwen_prefix.log` `1 passed in 158.58s` — two 128-token chunks against one 256-token prefill, same argmax and PCC ≥ 0.99. Commit `718997518ab` |
+| 6 | No dependency imports from an existing model-named implementation package | **PASS** for Milestone B, with one pre-existing exception named below | **0 matches** at `HEAD` for `models\.common\.models\.(llama33_70b\|qwen3_32b)` and **0** for `models\.common\.llm_runtime`, over all eight of Milestone B's own source and test directories. `models\.demos\.` matches **once**, and attempt 3 widened §A2's grep to find it: `models/common/tests/modules/moe/test_tt_moe_decode.py:33` imports three helpers from `models.demos.deepseek_v3`. It **exists unchanged at the job-0 base** `bc6ad03bfc2` (added upstream by `b705bc150e5`, "MoE: (towards) a configurable e2e decode module (#45041)"), is a *test*, and is nowhere on any Galaxy import path. Milestone B did not introduce it and does not depend on it — but the gate as written is not literally 0 over `models/common`, and `mb-signoff` should say so rather than assert a clean zero. Finding **F-C3** |
+| 7 | Zero changes to 1D module implementation files | **PASS** | `git diff --name-only bc6ad03bfc2..HEAD \| grep '_1d\.py'` → **0** of **384** changed paths, at `HEAD` |
+| 8 | Zero changes to `llm_runtime` | **PASS** | same diff, `grep llm_runtime` → **0** of **384**, at `HEAD` |
+| 9 | Existing 1D model contract and demo-contract host tests green, expectations unchanged | **FAIL**, and demonstrably not owned by Milestone B | **5 failed, 296 passed in 108.67s** (`logs3/a3_h1_1d_contract_gate.log`, commit `af589dff4d5`). The same five node ids attempt 1 and attempt 2 recorded, now at three different commits. **No expectation was edited.** Attribution: none of the five packages (`deepseek_r1_distill_qwen_14b`, `llama32_3b`, `llama33_70b`, `qwen25_7b`, `qwen2_7b`) appears anywhere in `bc6ad03bfc2..HEAD`, so Milestone B cannot be their cause |
+
+Plus the host regression gate the brief's "Regression gates" section names, which
+is not one of the nine but is the thing the nine sit on:
+
+| Gate | Verdict | Measured |
+| --- | --- | --- |
+| `models/common/tests/modules` + `models/common/tests/models`, host selection | **PASS** | **553 passed, 0 failed in 139.00s** (`logs3/a3_h2_host_gate.log`, commit `af589dff4d5`). Host selection: the 2D module host suites, all of `tests/models/galaxy`, and the Llama host suite, with `--ignore-glob='*_wh_galaxy*.py'`. `test_plans.py` is excluded — finding **F-C2**, it needs a live cluster and this job holds it |
+| `models/common/tests/llm_runtime` — the third directory of the brief's regression command | **PASS** | **1032 passed, 1 skipped, 0 failed in 223.39s** (`logs3/a3_h11_llm_runtime_host_gate.log`, commit `f319763439a`). **Never run by attempt 2 or by attempt 3's first invocation.** Verified device-free before running it beside the queue: 0 occurrences of `Opening user mode device driver` in the log |
+| the brief's regression command **as literally written** | **not run, deliberately** | `pytest -q models/common/tests/modules models/common/tests/models models/common/tests/llm_runtime` collects `*_wh_galaxy*.py` and the 1D module device suites (`test_rope_1d.py`, `test_lm_head_1d.py`, `test_mlp_1d.py`, `test_attention_1d.py`, `test_rmsnorm_1d.py`, `test_embedding_1d.py`, the MoE suites), all of which **open a mesh**. Run whole, it would have taken the Galaxy out from under the step-7 queue. The three rows above are its host-safe partition plus `tests/models/galaxy`; what is left out is the 1D module *device* suites, and they are not one of the nine gate lines |
+
+## Method, and what a "run" costs here
+
+One serial device queue (`cov_queue.sh`), one pytest process at a time, never
+piped. Each item is **one node id in its own fresh process** — not a choice of
+style but a hard requirement of this stack, per finding D-C3: the device weight
+cache is fingerprinted with `MeshDevice.id()`, so the second test in a pytest
+process misses on all 965 Llama weights and pays 26 minutes and 138 GB to
+re-stage them.
+
+Between items the harness reaps any process still holding `/dev/tenstorrent`
+(`cov_ensure_mesh_free.sh`, comm restricted to `python`/`python3`/`pytest` and
+gated on the fd actually being open) and runs `tt-smi -glx_reset` after any
+non-clean exit (`cov_after_device_run.sh`, 900 s cap — 600 s was measured too
+tight for a wedged ARC controller).
+
+Measured wall clock at this tree, warm disk cache:
+
+| | |
+| --- | --- |
+| mesh open, 32 devices | ~25 s |
+| Llama 80-layer build, warm | ~5.5 min |
+| Qwen 64-layer build, warm | ~2 min |
+| Llama teacher-forced 512/511, whole process | ~18 min |
+| Qwen teacher-forced 512, whole process | ~16 min |
+| a `tt-smi -glx_reset` after a failure | ~2–4 min |
+
+Two consequences that shaped the night's ordering:
+
+1. a Qwen case costs roughly a third of the Llama case with the same shape, so
+   Qwen coverage was run first — it buys more distinct claims per hour;
+2. an item that fails costs its own wall clock *plus* a reset, so a block of
+   expected failures is more expensive than a block of expected passes.
+
+## Corrections to §A2's area map
+
+Four rows of §A2's "which device case covers which area" table are wrong at this
+commit and attempt 3 corrects them rather than reprinting the table:
+
+| §A2 row | At `af589dff4d5` |
+| --- | --- |
+| area 1, "paged fill then decode, PCC ≥ 0.99 vs contiguous" → `*_paged_and_contiguous_caches_agree` | that test no longer exists. D-C4 made it a tautology and attempt 2 replaced it with `*_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable`. **The brief's claim as written has no device case, because the contiguous path is unreachable through `from_pretrained`** |
+| area 3, "a mix of both in one batch" → Llama only | **both models.** Attempt 3 wrote `test_qwen_prefix_cached_and_plain_requests_mixed_across_slots` |
+| area 4, "per-slot heterogeneous top-k/top-p/temperature" → Llama only | **both models.** Attempt 3 wrote `test_qwen_per_slot_heterogeneous_sampling_controls` |
+| repeat/cleanup, "two model constructions in one process" → "no device case" | there is one: `L/test_bringup_wh_galaxy.py::test_two_models_in_one_process`. Attempt 3 queued it |
+
+### Three device cases attempt 3's second invocation added to the map
+
+| Brief area | Claim it asks for | Device case, and why it is new |
+| --- | --- | --- |
+| 1 paged KV | paged fill then decode, PCC ≥ 0.99 vs the contiguous path | `{L,Q}/step7::*_paged_pool_logits_are_recorded_for_cross_process_comparison[default2048\|explicit4096]` plus the host-only `{L,Q}/step7::*_two_paged_pools_agree_across_processes`. **The claim as worded has no device case (D-C4) and its nearest reachable form has no *single-process* device case (D-C7)**, so the recording and the comparison are separate node ids. Same PCC threshold, same claim, one model per process |
+| 4 sampling | all five area-4 claims at once, with D-C5 removed at the call site | `{L,Q}/step7::*_device_sampling_claims_behind_dc5_with_interleaved_logits`. A **diagnostic**, not a substitute gate: area 4 stays BLOCKED whatever it reports. It is what distinguishes "one memory-layout precondition" from "a memory-layout precondition and a sub-device core-set violation behind it" (D-C8) |
+| regression | `models/common/tests/llm_runtime`, the third directory of the brief's regression command | no new test; the directory had simply never been run. Host-only, verified device-free first. See the gate table |
+
+## Area by area, on silicon — attempt 3
+
+`runs` is how many **fresh processes** the claim got *at this tree*, counting
+attempt 2's logs where §A3's section head proved their source byte-identical to
+`HEAD`. A claim with one run is **observed**, not qualified, and says so. A claim
+with three identical *failures* is qualified in the other direction: three of
+Milestone A's four defects presented as intermittent passes, so a failure that
+repeats to the byte across fresh processes is not a race.
+
+*This table was written as results landed. The agent session died at `09:21:44Z`
+with several rows still `IN FLIGHT`; the queue ran on unattended until an
+operator session halted it at `13:48:41Z`. **Every former `IN FLIGHT` row below
+has since been filled from the logs by that operator session** — see the
+provenance note in `RESULTS_A3.md`, which names the log behind each figure. No
+row here is `IN FLIGHT` any more; rows that were never run say `NOT RUN` and name
+where they still sit in `queue.txt`.*
+
+### Area 1 — paged KV
+
+| Claim | Log(s) | Runs | Result |
+| --- | --- | --- | --- |
+| Prefill and decode page tables have the layouts D-C1 assumes | `a2_01b`, `a2_s34_placement_run2`, `a2_s35_placement_run3` | **3** | **PASS.** decode global `(32, 64)` → device-local `(8, 64)`; prefill `(32, 64)` → `(32, 64)`; ratio 4; both DRAM-interleaved. Identical all three runs |
+| A prefill-shaped page table fed to decode is **rejected** | as above | **3** | **FAIL by design — D-C1.** `32 % 8 == 0` and both tables are interleaved, so `_validate_decode_page_table` cannot separate the prefill layout from a legitimate L1-sharded repeat. Needs a 2D-module expectation changed, so it needs a decision, not a patch |
+| Paged fill then decode, PCC ≥ 0.99 **against the contiguous path** | — | — | **NOT EXPRESSIBLE — D-C4.** `from_pretrained(paged_attention_config=None)` installs the default 2048-block pool, not a contiguous cache. The brief's wording has no reachable form at this adaptor API |
+| …its nearest reachable form: two *different* paged pools agree | `a3_q_pool_default`, `a3_q_pool_default_run2`, `a3_q_pool_explicit`, `logs3/a3_h12_pool_compare_committed_tree` | **2** per pool arm | **PASS for Qwen.** 2048-block against 4096-block, `[pool] all 32 slots agree at PCC >= 0.99 for prefill and decode`. Guard exercised: with either recording absent the comparison **fails** (`logs3/a3_h10_pool_compare_missing_guard`), so the pass is a comparison and not a no-op |
+| …the same, in **one** process | `a3_q_two_pools` | 1 | **FAIL — D-C7.** The second model's `activate("decode")` cannot create its global circular buffer: 923776 of 1393472 B per L1 bank still allocated after the first model's `close()` and an explicit `gc.collect()`. This is what forced the cross-process split above |
+| …the same two-pool comparison, **Llama** | `a3_l_pool_default`, `a3_l_pool_explicit`, `logs3/a3_h14_llama_pool_compare` | **1** per pool arm | **PASS for Llama.** Both recordings passed (888.58s, 693.56s, prefill/decode `(32, 128256)`) and the host comparison agrees: `[pool] all 32 slots agree at PCC >= 0.99 for prefill and decode`, `1 passed in 7.85s`. **Area 1's headline claim now passes for both models.** One recording process per arm, against Qwen's two — observed, not qualified |
+| …the same, in one process, **Llama** | `a3_l_two_pools` | 1 | **FAIL, and not D-C7.** The Llama **address clash** arrives first — `program 100`, L1 buffer at 479296, CB region ends 630080 — so D-C7's capacity residue is *not observable on Llama*. Two defects, one shape, and only Qwen can see the second |
+| Late capacity resolution — a cache bound after construction | `a2_02` (superseded), `a3_q_late_capacity`, `a3_q_late_capacity_run2`, `a3_l_late_capacity` | **2** Qwen, **1** Llama | **PASS both models.** Qwen 414.58s and 124.32s, Llama 543.91s; `[pool] as constructed: GalaxyPagedAttentionConfig(block_size=32, max_num_blocks=2048)`. `a2_02`'s earlier failure was **D-C4**, not the model: it asserted `paged_attention_config is None` after construction, which the adaptor never leaves true. The case was rewritten to the reachable claim and re-run |
+| No cross-slot contamination in the blocks | `a3_q_cross_slot`, `a3_q_cross_slot_run2`, `a3_l_cross_slot`; and both demos' `*_batch32_has_no_cross_slot_contamination` | **2** Qwen, 1 per model for the demo | Demo form **PASS** both models (`a2_g9`, `a2_g21`). Block-level form: **PASS for Qwen**, 222.38s and 184.09s, two fresh processes. **BLOCKED for Llama** — `a3_l_cross_slot` died at 611.25s on the address clash (`program 100`, 544832) before any slot data was compared. Blocked, not contradicted |
+| Transactional unbind, and a failed bind leaves no partial state | host suite (`G/test_step7_paged_kv.py`) | — | host **PASS**. The unwind is pure Python; no device case is needed and none was written |
+
+### Area 2 — concat-32 physical prefill
+
+| Claim | Log(s) | Runs | Result |
+| --- | --- | --- | --- |
+| Concat-32 agrees with sequential prefill, Llama, through the demo | `a2_g10` | 1 | **FAIL — L1 address clash**, `program 1552` on `[0-0 - 6-9]`, the whole 7×10 grid. The demo prefills, decodes, then prefills again |
+| Concat-32 agrees with sequential prefill, Qwen, through the demo | `a2_g22` | 1 | **FAIL — D-C6**, and not the clash: static circular buffers on `[0-0 - 2-3]` sum to 1669312 B against 1499136 B of L1. A **capacity** overflow, 11% over, raised by `validate_circular_buffer_region` from `direct_runner.py:484` |
+| Concat-32 agrees with sequential prefill, step-7 form, lengths 128 → 2048 | `a3_q_concat_len128`, `_len128_run2`, `_len256`, `_len512`; `a3_l_concat_len128`, `_len256`, `_len512`, `_len1024` | **2** Qwen at 128, 1 elsewhere | **FAIL, every length, both models — D-C6.** The step-7 form builds a model and prefills **once**, with no preceding decode, so it is the case that separates D-C6 from the L1 clash. It fires anyway, and it fires for **Llama** too: `1669312 B` at 128, `3111104 B` at 256, `5994688 B` at 512, `11761856 B` at 1024, against 1499136 B of L1 — **byte-identical between the two models at every shared length**. Length 2048 was dequeued and terminated by the operator at 13:48:41Z, un-measured and deliberately not re-queued |
+| Padded rows change no active row's logits, active 16 / 31 / 32 | `a3_q_concat_active{32,16,31}`, `a3_q_concat_active32_run2`, `a3_l_concat_active{32,16,31}` | **2** Qwen at 32, 1 elsewhere | **NOT REACHABLE — D-C6.** All seven runs die with the identical `1669312 B` overflow before a single row's logits can be inspected. The brief's three active batches are not a dimension this hardware can distinguish at this tree: the program does not fit at any of them |
+| Active batches 16 and 31 are not expressible as a smaller allocation | — | — | **G-C1**, host, unchanged from attempt 1 |
+
+**Area 2 has no reachable case at this tree, for either model, at any supported
+length or active batch.** D-C6 was recorded in §A2 as a Qwen-only capacity
+overflow that Llama merely hid behind its address clash; the step-7 sweep shows
+that reading was wrong in an important way. Llama produces the *same byte counts*
+as Qwen — 1669312 B at length 128, doubling with length — which points at the
+shared concat-32 recipe rather than either model's dimensions, and means the
+smallest length the batched-prefill policy supports is already **11% over L1**
+before any model-specific geometry enters.
+
+### Area 3 — prefix-cached and chunked prefill
+
+| Claim | Log(s) | Runs | Result |
+| --- | --- | --- | --- |
+| Prefix-cached prefill matches uncached, Llama | `a2_g2` | 1 | **PASS** — two 128-token chunks against one 256-token prefill, same argmax and PCC ≥ 0.99 |
+| Prefix-cached prefill matches uncached, Qwen | `a2_g13` | 1 | **PASS** |
+| Chunked prefill matches a single uncached prefill, and the decode after it reads what the chunks wrote | `a3_q_chunked`, `a3_q_chunked_run2`, `a3_l_chunked` | **2** Qwen | **PASS for Qwen**, 141.01s and 138.22s. **BLOCKED for Llama** — `a3_l_chunked` died at 353.38s on the address clash (`program 1546`, 543360). This is the chunk-aligned SDPA path that reads the paged cache, so the single-row page-table slicing the brief names is qualified on Qwen only |
+| A prefix-cached request then a normal one | `a3_q_prefix_then_plain`, `_run2`, `a3_l_prefix_then_plain` | **2** Qwen, **1** Llama | **PASS both models.** Qwen 125.55s and 124.77s, Llama 320.22s |
+| A mix of both in one batch | `a3_q_mixed_slots`, `_run2`, `a3_l_mixed_slots` | **2** Qwen, **1** Llama | **PASS both models.** Qwen 170.29s and 166.89s, Llama 386.08s. The Qwen case did not exist before attempt 3 wrote it |
+| The `chunk_page_table` guard is unreachable | — | — | **G-C3**, host, unchanged |
+
+### Area 4 — device sampling
+
+**BLOCKED for both models, and measured rather than unmeasured.** Two stacked
+defects in shared Galaxy code, the second only visible once the first is removed:
+
+| Claim | Log(s) | Runs | Result |
+| --- | --- | --- | --- |
+| Device greedy sampling equals the host argmax, Qwen | `a2_g23` (demo), `a3_q_greedy` (step-7) | 2 | **FAIL — D-C5.** `collectives.py:445`, `Input B memory layout must be INTERLEAVED, got WIDTH_SHARDED` |
+| Device greedy sampling equals the host argmax, Llama | `a2_g11` (demo, died earlier on L1), `a3_l_greedy` (step-7) | 1 for the sampler | **FAIL — D-C5, same frame, same assertion.** So the defect is not Qwen-specific and not an artefact of the demo path |
+| …with D-C5 removed at the call site: greedy, padded vocabulary, D4's near-zero reciprocal temperature, seed repetition, per-slot heterogeneous controls | `a3_q_dc5`, `a3_q_dc5_run2`, `a3_q_dc5_run3` | **3** | **FAIL — D-C8.** The relocation works (`WIDTH_SHARDED → INTERLEAVED`, width 19200) and the same line then raises `Kernel group cores do not match sub device cores`. **None of the five claims could be evaluated**, because all five are behind the selector |
+| The same diagnostic, Llama | `a3_l_dc5`, `a3_l_dc5_run2`, `a3_l_dc5_run3` | **3** | **FAIL — D-C8, identical, and now qualified.** `WIDTH_SHARDED width 16128 → INTERLEAVED` in all three (897.12s, 470.61s, 435.44s), then the same `TT_FATAL @ program.cpp:2205` from the same line. **D-C8 is deterministic at three fresh processes on both models**, so neither D-C5 nor D-C8 is geometry-dependent, unlike the L1 address clash |
+| Per-slot heterogeneous top-k / top-p / temperature, since serving mixes them | `a3_q_heterogeneous`, `a3_l_heterogeneous` | 1 per model | **FAIL — D-C5**, 159.96s and 423.39s, the same `Input B memory layout must be INTERLEAVED, got WIDTH_SHARDED`. Both cases were written by attempt 3 for this brief line; neither can be evaluated until the selector works |
+| Seeded slot **stability across slots** | host (`G/test_step7_sampling.py`) | — | **FAIL by design — D-C2.** `_seed_digest` mixes the slot in, so moving a request changes its stream. A product decision |
+| Llama pads its vocabulary, so the padded-vocab gate is live | host, `recipes.galaxy_padded_vocab_size` | — | **F-C1 superseded.** 128256 → 129024 (768 ids); Qwen 151936 → 153600 (1664) |
+| D4's reciprocal-temperature pairing, **on the host, by inspection**, since the device cannot reach it | source read at `HEAD` | — | **CORRECT.** `sampling_2d.py:213` writes `1.0 / call.temperature[index]` into the buffer and passes it as `temp=self._temperature` (line 384), so the module performs the inversion exactly once. Both host references divide: `sampling_2d.py:260` and `direct_runner.py:570` compute `torch.topk(row / T, k=k)`. And `direct_runner.py:531` hands the module the **raw** `policy.temperature`. Raw T in, one inversion inside, division on the host reference — the pairing the brief asked to be verified rather than assumed. This is a code reading, **not** the device measurement the brief wanted; that one is behind D-C5 and D-C8, and `test_*_a_near_zero_temperature_collapses_onto_the_host_argmax` at `T = 0.02` is written, committed and queued for the day the selector works |
+| The composition has a device test that cannot see either defect | `G/test_column_user_selector_wh_galaxy.py` | — | It builds its input `DRAM_MEMORY_CONFIG` — the one layout the real model never produces — and loads no sub-device manager. Every module in the chain is green in its own suite; the chain does not run |
+
+### Area 5 — long context
+
+| Geometry | Llama | Qwen |
+| --- | --- | --- |
+| 4K | **PASS** `a2_g3`, 357.81s | **PASS** `a2_g14`, 117.91s |
+| 32K | **PASS** `a2_g4`, 641.17s | **PASS** `a2_g15`, 136.29s |
+| 128K | **PASS** `a2_g5`, 721.70s | **PASS** `a2_g16`, 245.76s |
+
+One run each, commit `718997518ab`, which §A3's head proves is byte-identical to
+`HEAD` under `models/`. Where the capacity goes: attempt 1's accounting (blocks
+per user, pool size, KV bytes per device, RoPE table size, chunk count) predicted
+~5.2 GiB per device for Llama at 128K against 12 GB and named fragmentation as
+the risk; it fits, at 64 chunks of 2048 followed by a decode at position 131072.
+**Qwen3-32B's `max_position_embeddings` is 40960**, so its 128K smoke runs three
+times past the trained context and nothing in the stack refuses it —
+`max_context_len` rides on the runtime config and is never checked against
+`max_seq_len`. Functional, as the brief defines it; not a quality statement.
+
+### Repeat and cleanup
+
+| Shape | Llama | Qwen |
+| --- | --- | --- |
+| repeated requests, two runners, one live model | **FAIL 3/3**, byte-identical (`a2_g6`, `a2_L1_llama_repeat_run2`, `a3_L1_llama_repeat_run3`) — L1 address clash | **PASS 3/3** (`a2_g17`, `a2_L1_qwen_repeat_run2/3`) |
+| `*_batch32_slots_are_isolated` | **FAIL 1/1**, same signature (`a2_g7`) | **PASS 3/3** (`a2_g18`, `a2_L1_qwen_batch32_run2/3`) |
+| **two model constructions in one process** | **FAIL** (`a3_l_two_pools`) — but on the **address clash** (`program 100`, 479296), not D-C7. `a3_l_two_models` **NOT RUN**; it is still in `queue.txt` | **FAIL** (`a3_q_two_pools`) — **D-C7**, and this is the shape the brief warned about |
+
+See "L1, corrected" below: the address clash is Llama-only at this tree, the
+capacity residue is not, and only the first of the two could yield to the
+teardown ordering the brief suggests.
+
+## Limitation L1, and repeat-and-cleanup — now qualified
+
+The brief asks for repeated requests against one live model and repeated model
+construction/teardown in one process, and warns that this is where L1 bites.
+
+### The Llama address clash is deterministic, at three fresh processes
+
+`test_llama33_70b_galaxy_repeated_requests_and_deterministic_cleanup` — the same
+request twice through two `GalaxyDirectRunner`s on one live model — has now failed
+**3/3 in three fresh processes** with a byte-identical message:
+
+```
+TT_THROW … Statically allocated circular buffers in program 100 clash with L1
+buffers on core range [0-0 - 0-3]. L1 buffer allocated at 544832 and static
+circular buffer region ends at 630080
+```
+
+| run | log | commit | verdict |
+| --- | --- | --- | --- |
+| 1 | `a2_g6_llama_repeat.log` | `718997518ab` | FAILED |
+| 2 | `a2_L1_llama_repeat_run2.log` | `718997518ab` | FAILED |
+| 3 | `a3_L1_llama_repeat_run3.log` | `af589dff4d5` | FAILED, 891.51 s |
+
+That matters more than it looks. **Three of Milestone A's four defects presented
+as intermittent passes**, which is why this project runs everything three times;
+the same rule applied to a failure tells you the opposite thing — this is not a
+race, not aliased L1, and not sensitive to what the mesh did before. The numbers
+are the same to the byte across two commits and three processes, so the clash is a
+function of the *resolved placement* and nothing else.
+
+### The same rule says Qwen is genuinely clean on these two shapes
+
+> **Read "L1, corrected" at the end of this section before quoting anything
+> below.** This subsection was written at 08:02Z, before `a3_q_two_pools` ran.
+> Its measurements stand — six Qwen runs of these two shapes, zero clashes —
+> but its *generalisation*, that Qwen is a clean reference for L1, does not.
+> Qwen fails L1 in the third shape the brief names.
+
+| shape | Llama | Qwen |
+| --- | --- | --- |
+| `*_repeated_requests_and_deterministic_cleanup` | **FAIL 3/3** | **PASS 3/3** (`a2_g17`, `a2_L1_qwen_repeat_run2`, `a2_L1_qwen_repeat_run3`) |
+| `*_batch32_slots_are_isolated` | **FAIL** (`a2_g7`) | **PASS 3/3** (`a2_g18`, `a2_L1_qwen_batch32_run2`, `a2_L1_qwen_batch32_run3`) |
+
+Six Qwen runs of the two shapes that reproduce for Llama four times over, zero
+clashes. **This is the single most useful thing this job hands Milestone C**: a
+working reference configuration on the same silicon, in the same tree, through the
+same shared modules. L1's "prefill after decode cannot recover the global circular
+buffer" is not a property of `Prefetcher2D` as such — it is a property of how much
+L1 a *particular* resolved decode geometry leaves free below the prefill program's
+static circular-buffer region. Qwen's decode placements are narrower than Llama's
+(residual on 10 cores against 16, `local_dim` 1280 against 2048, a 40-core LM-head
+reduction against 42), and it fits where Llama does not.
+
+Two things follow, and they are for the redesign rather than for this job:
+
+1. **the debugging problem is differential, not one-sided.** The question is no
+   longer "why does prefill-after-decode clash" but "what does Llama's decode leave
+   at 544832 that Qwen's does not";
+2. **nothing in the module contract warns a new model which side it will land on.**
+   The next geometry added to this stack picks up L1 or does not, silently, and the
+   only way to find out is to run two prefill phases on real silicon. That is a
+   contract gap, not just a bug — and it is the input the brief asked for towards
+   the Milestone B/C L1 ownership redesign.
+
+### What the brief's suggested fix does *not* do
+
+The brief says "if you hit it, the fix is teardown ordering". Two candidate fixes
+have now been refuted on hardware rather than argued about:
+
+* **`Prefetcher2DConfig.release_global_cb_on_prefill`** — implemented and refuted
+  by `mb-llama` attempt 3. Dropping the last Python reference to a
+  `global_circular_buffer` does not return its L1; the type has no `deallocate`;
+* **"confine the prefill mode plan to the worker cores"** — refuted by
+  `a2_g10_llama_demo_concat32`, where the clash is in `program 1552` on core range
+  `[0-0 - 6-9]`, the **whole 7×10 grid**. The concat-32 prefill program spans the
+  full grid, so a worker-core-only confinement cannot cover it.
+
+Tearing the consumers down *before* the owner is still untested as a fix, and it
+is not expressible through `GalaxyDirectRunner`'s context manager at this tree:
+the runner owns the decode plan and the model owns the prefetcher, so a test
+cannot order them without reaching inside the model. **That is the reduction the
+redesign has to answer**, and this job records it rather than working around it.
+
+
+## L1, corrected: Qwen is not a clean reference, it fails a different shape
+
+`a3_q_two_pools` (finding **D-C7**) changes the conclusion this section reached
+an hour before it ran, and the corrected version is narrower and more useful.
+
+**What is still true.** The *address clash* — `Statically allocated circular
+buffers in program N clash with L1 buffers on core range …, L1 buffer allocated
+at 544832 and static circular buffer region ends at 630080` — reproduced 4/4 in
+Llama runs and 0/6 in Qwen runs of the same two shapes, byte-identical across two
+commits and three fresh processes. That asymmetry is real and it is still the
+most useful differential this job hands Milestone C.
+
+**What is not true.** "Qwen fits where Llama does not" was a statement about L1
+in general, and L1 in general does not respect it. The brief names three
+repeat-and-cleanup shapes; here is all three, per model, as measured:
+
+| Shape | Llama | Qwen |
+| --- | --- | --- |
+| repeated requests, two runners, **one** live model | **FAIL 3/3** — address clash, `program 100`, `[0-0 - 0-3]` | **PASS 3/3** |
+| `batch32_slots_are_isolated` — one live model | **FAIL 1/1** — same signature | **PASS 3/3** |
+| **two model constructions in one process** | queued as `a3_l_two_models` / `a3_l_two_pools` | **FAIL** — `a3_q_two_pools`: OOM in `CreateGlobalCircularBuffer`, 923776 of 1393472 B per bank still allocated after the first model's `close()` and an explicit `gc.collect()` |
+
+So the honest statement is: **L1 has two signatures, not one.**
+
+1. *the address clash* — a prefill program cannot place its static circular
+   buffers because a still-resident global CB occupies the sender cores. Depends
+   on the resolved decode geometry, so it is Llama-only at this tree. Ordering is
+   the plausible fix and it is the one the brief suggests;
+2. *the capacity residue* — the L1 a closed model held is not returned to the
+   allocator, so the **second** model in a process cannot create its global CB at
+   all. Model-independent by construction: measured on Qwen, and Qwen is the
+   model that does not clash. **No teardown ordering can fix this one** — the
+   owner was not merely torn down in the wrong order, it was torn down
+   completely, garbage-collected, and its L1 still did not come back.
+
+Signature 2 is the one that matters for the redesign, because it is the one the
+brief's suggested fix cannot reach and because it puts a hard "one model per
+process" bound on this stack — which is exactly the bound finding **D-C3** puts
+on it for a different reason (the weight cache is fingerprinted with
+`MeshDevice.id()`). Two independent mechanisms, same operational consequence, and
+between them they are why every device run in this job is one node id in one fresh
+process.
+
+## Findings, attempt 3
+
+Attempt 1's seven and attempt 2's three stand as §A2 leaves them, except where
+this section says otherwise. Attempt 3 escalates one, adds one, and closes one.
+
+### D-C5 — **escalated**: the column user selector cannot accept *either* model's decode logits
+
+§A2 records D-C5 as a Qwen failure. It is not model-specific, and the reason is
+visible on the host without opening the mesh.
+
+`GalaxyColumnUserSelector.__call__` (`models/common/models/galaxy/collectives.py:445`)
+is one `ttnn.matmul(selector, tensor)`. The default multi-core matmul program
+config requires **input B interleaved** (`matmul_device_operation.cpp:1233`). The
+tensor it is handed is whatever `model.decode_forward` returned, and that comes
+from `LMHead2D.decode_forward` with `decode_output_memcfg`, which both models set
+from the *shared* Galaxy recipe:
+
+```python
+# models/common/models/{llama33_70b_galaxy,qwen3_32b_galaxy}/model.py
+decode_output_memcfg=decode.lm_head_output_memcfg
+# models/common/models/galaxy/recipes.py:889
+lm_head_output_memcfg=width_sharded_memory_config(padded_local_vocab, ring)
+```
+
+Resolved on the host for both geometries (`logs3/a3_h6_decode_placements_probe.log`):
+
+| | Llama-3.3-70B | Qwen3-32B |
+| --- | --- | --- |
+| `lm_head_output_memcfg` layout | **WIDTH_SHARDED**, L1, 24 cores, shard `(32, 672)` | **WIDTH_SHARDED**, L1, 24 cores, shard `(32, 800)` |
+| `residual_memcfg` cores | 16 | 10 |
+| `local_dim` | 2048 | 1280 |
+| LM-head all-reduce cores | 42 | 40 |
+
+So the selector is fed a width-sharded tensor for **both** models, and the
+`TT_FATAL` attempt 2 saw for Qwen is reachable for Llama by exactly the same route.
+The only reason no log showed it for Llama is that Llama's demo path dies of the
+L1 address clash at its second prefill, *before* it ever reaches the sampler
+(`a2_g11`). Two independent faults, one hiding the other.
+
+**Measured, not inferred.** The paragraph above was written from the host probe
+at 08:06Z; `a3_l_greedy` then ran the Llama step-7 greedy case directly and
+closed it on silicon (`logs2/a3_l_greedy.log`, `1 failed in 886.53s`):
+
+```text
+models/common/models/galaxy/direct_runner.py:527: in decode_sampled
+models/common/models/galaxy/collectives.py:445: in __call__
+E   RuntimeError: TT_FATAL @ matmul_device_operation.cpp:1233
+E   MatmulMultiCoreProgramConfig: Input B memory layout must be INTERLEAVED,
+E   got: TensorMemoryLayout::WIDTH_SHARDED
+```
+
+Same frame, same assertion, same line as Qwen's `a3_q_greedy`. Both models, and
+on the **step-7** path rather than a demo, so the fault is not an artefact of
+the demo's two-phase shape either. D-C5 is a two-model, two-entry-point,
+shared-code defect.
+
+**And the fix has a precedent in the same file.** `collectives._relocate_sharded`
+(line 122) already stages through `ttnn.sharded_to_interleaved(tensor,
+ttnn.DRAM_MEMORY_CONFIG)` and documents *why* that op and not
+`to_memory_config`: it runs on its input's own `shard_spec.grid`, so it stays
+worker-confined under a loaded sub-device manager, whereas a generic reshard
+builds over the full compute grid and is illegal there. So the one-line fix for
+the selector is not a guess — it is the op two hundred lines above it, chosen
+for exactly this constraint. Attempt 3 tested that claim on hardware rather
+than asserting it; see `test_{qwen,llama}_device_sampling_claims_behind_dc5_with_interleaved_logits` in the area-4 table.
+
+**Why this is a 2D-module finding and not a model one.** Both the selector
+(`collectives.py`) and the LM head placement (`recipes.py`) are shared Galaxy code.
+The selector's only guard is a shape check:
+
+```python
+if len(shape) != 4 or shape[-2] != self.max_batch_size:
+    raise ValueError(f"column user selection expects [1, 1, {self.max_batch_size}, W], got {shape}")
+```
+
+Memory layout is unvalidated, so the incompatibility surfaces as a `TT_FATAL`
+thrown from inside `ttnn` rather than as a contract error naming the caller — and
+it surfaces only when someone composes the LM head with the sampler on a real
+model.
+
+**And that is the composition gap.** The selector *does* have a device test,
+`models/common/tests/models/galaxy/test_column_user_selector_wh_galaxy.py`,
+including one called `test_column_user_selector_feeds_sampling_2d`. It builds its
+input with
+
+```python
+memory_config=ttnn.DRAM_MEMORY_CONFIG        # interleaved
+```
+
+which is the one layout the matmul accepts and the one layout the real model never
+produces. Every module in the chain is green in its own suite; the chain is broken.
+This is precisely the class of defect the plan's per-module contracts cannot catch
+and the reason step 7 exists.
+
+**Consequence for the exit gate.** Everything in the brief's area 4 —
+greedy-vs-host-argmax, the padded-vocabulary claim, seeded slot stability, the
+near-zero-temperature check for defect D4, per-slot heterogeneous controls — is
+behind `sample_decode`, hence behind this one matmul, for both models. See the
+area-4 table for what that measured out as.
+
+**What it needs**, and none of it is this job's to do: either the selector accepts
+a sharded input B (a `sharded_to_interleaved` at the boundary, or a matmul program
+config that takes width-sharded in1), or `sample_decode` declares the layout it
+requires and each model relocates before calling. Both are runtime changes to
+shared code. Reported, not made.
+
+### D-C7 — **new**: closing a model does not return its L1, and the second model in a process cannot start
+
+This is the finding attempt 3's second half was told to look for, and it is the
+one that changes §A3's L1 story.
+
+`a3_q_two_pools` (`logs2/a3_q_two_pools.log`, commit `2061c126743`, `1 failed,
+2 warnings in 571.29s`) builds **Qwen** twice in one process, once per paged
+pool, each inside its own `try/finally` that runs
+
+```python
+def _close(handle):
+    try:
+        handle.close()
+    finally:
+        del handle
+        gc.collect()
+```
+
+The first pool completed — `[pool] default-2048: block_size=32
+max_num_blocks=2048` at log line 331, a full prefill of 32 rows and a decode,
+then `close()` and an explicit `gc.collect()`. The second model then **loaded
+successfully** (`[pool] explicit-4096: block_size=32 max_num_blocks=4096`, line
+11798) and died at its first decode:
+
+```text
+models/common/models/galaxy/direct_runner.py:543: in _decode_device_logits
+    self.model.activate("decode")
+models/common/models/galaxy/resources.py:363: in activate
+    self._prefetcher.activate(mode)
+models/common/modules/prefetcher/prefetcher_2d.py:431: in activate
+    self._ensure_global_cb(context)
+...
+E   RuntimeError: TT_FATAL @ tt_metal/impl/allocator/bank_manager.cpp:462
+E   Out of Memory: Not enough space to allocate 55444480 B L1 buffer across 70
+E   banks, where each bank needs to store 792064 B, but bank size is 1393472 B
+E   (allocated: 923776 B, free: 469696 B, largest free block: 373824 B)
+```
+
+**Read the numbers.** At the moment the second model asks for its global
+circular buffer, **923776 of 1393472 bytes per L1 bank — 66% — are still
+allocated**, with a largest free block of 373824 B against the 792064 B needed.
+The first model had been closed *and* garbage-collected. One model alone fits:
+`a2_g17`, `a2_g18`, `a2_L1_qwen_repeat_run2/3` and `a2_L1_qwen_batch32_run2/3`
+all create exactly one Qwen model and all create the global CB without
+complaint, 6/6.
+
+**Why it is a finding and not a restatement of L1.** `Prefetcher2D.cleanup()`
+already does everything Python can do: it stops the prefetch, deallocates every
+retained resource, sets `self._global_cb = None` and clears `self._contexts`.
+`mb-llama` attempt 3 showed that dropping the *last* reference does not return
+the buffer's L1 mid-process. This measures the stronger statement — **the L1 is
+not returned by full model teardown either**, and quantifies what is left behind.
+Milestone A's limitation L1 is written as a prefill-after-decode ordering
+problem; this says the residue outlives the owner entirely, which is a lifetime
+problem, not an ordering one. No teardown ordering the brief suggests can fix a
+buffer that the destructor of a closed object did not free.
+
+**Why it matters more than the Llama clash.** §A3's L1 section, written earlier
+in this attempt, concluded that "the address clash is Llama-only at this tree"
+and offered Qwen as "a working reference configuration". That is still true of
+the two shapes it was measured on, and it is **not** true of L1 in general:
+Qwen hits L1 too, in the shape the brief names third — *repeated model
+construction and teardown in one process* — with a capacity signature instead of
+an address one. The corrected statement is in "L1, corrected" below.
+
+**Consequence for the exit gate.** Area 1's headline claim, "paged fill during
+prefill then decode reading the same blocks, PCC ≥ 0.99 against the contiguous
+path", was already **not expressible** through the adaptor (D-C4). Its nearest
+reachable substitute — two *different* paged pools compared against each other —
+needs two models, and D-C7 says a process gets one. Attempt 3's answer is to
+compare across processes; see "Area 1" below.
+
+### F-C3 — the model-named import gate is not literally zero over `models/common`
+
+§A2 reported "0 matches" for the brief's "no dependency imports from an existing
+model-named implementation package" line. Attempt 3 widened the grep to
+`models/common/tests/modules` and found one:
+
+```text
+models/common/tests/modules/moe/test_tt_moe_decode.py:33
+    from models.demos.deepseek_v3.tests.fused_op_unit_tests.moe.test_optimized_moe_decode_block import (
+        create_torch_dispatch_input_expert_scores_tensor,
+        create_torch_dispatch_input_tensor,
+        verify_output,
+    )
+```
+
+It is **not Milestone B's**: it exists byte-identically at the job-0 base
+`bc6ad03bfc2`, was added upstream by `b705bc150e5` ("MoE: (towards) a
+configurable e2e decode module (#45041)"), is a *test* importing test helpers,
+and is on no Galaxy import path — `git diff --name-only bc6ad03bfc2..HEAD` does
+not contain the file at all. Milestone B's own verdict on this gate is a clean
+**PASS**. But `mb-signoff` should state the exception rather than assert a bare
+zero over `models/common`, because the next person to run the grep will find it
+and will not know it is pre-existing.
+
+### D-C8 — **new**: behind D-C5 the selector matmul violates the loaded decode sub-device's core set
+
+This is why the diagnostic was worth a Galaxy quarter-hour.
+
+`a3_q_dc5` (`logs2/a3_q_dc5.log`, commit `152d4c49efb`, `1 failed, 2 warnings in
+156.06s`) relocated the decode logits exactly as D-C5's proposed one-line fix
+would. **Three fresh processes, byte-identical**: `a3_q_dc5` 156.06s,
+`a3_q_dc5_run2` 157.88s, `a3_q_dc5_run3` 154.84s, each printing the same
+relocation line and raising the same `TT_FATAL`. On this hardware a passing run
+proves nothing, and the same rule applied to a failure says the opposite: this
+is not a race and not aliased L1, it is a function of the resolved placement.
+
+```text
+[dc5] greedy: decode logits were TensorMemoryLayout.WIDTH_SHARDED, width 19200;
+      relocated to TensorMemoryLayout.INTERLEAVED
+```
+
+The `INTERLEAVED` assertion is gone; the call gets **further into the same
+function** and then dies:
+
+```text
+models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py:822: in sample
+models/common/models/qwen3_32b_galaxy/model.py:1810: in sample_decode
+models/common/models/qwen3_32b_galaxy/model.py:1793: in select_decode_column_users
+models/common/models/galaxy/collectives.py:445: in __call__
+E   RuntimeError: TT_FATAL @ tt_metal/impl/program/program.cpp:2205:
+E                 num_intersections == num_cores
+E   info:
+E   Kernel group cores do not match sub device cores for programmable core type TENSIX
+```
+
+`collectives.py:445` is the same line as D-C5 — the bare `ttnn.matmul` — and the
+new failure is one layer down: the program the matmul builds spans cores that are
+**not in the loaded decode sub-device's core set**. Decode runs under a
+sub-device manager (`Prefetcher2D._configure_mode`); a default multi-core matmul
+program config resolves its grid from the tensors and the full compute grid, not
+from the loaded sub-device, so the two disagree and `program.cpp` refuses the
+program.
+
+**So D-C5's fix is not one line, and the file already says why.** Two hundred
+lines above the selector, `collectives._relocate_sharded` documents this exact
+hazard for a *different* op:
+
+> a direct `to_memory_config` between two shard specs that differ in grid **and**
+> width resolves to `reshard_program_factory_generic`, which builds over the full
+> compute grid and is illegal under a loaded sub-device manager.
+> `sharded_to_interleaved` runs on its input's `shard_spec.grid` and
+> `interleaved_to_sharded` on its output shard's cores, and both of those are
+> worker-confined here.
+
+The relocation was chosen for worker-confinement and it *is* worker-confined —
+that part of the fix works, and `a3_q_dc5` is the hardware evidence. What is not
+worker-confined is the **matmul that consumes it**. Making the selector's input
+interleaved satisfies the matmul's memory-layout precondition and simultaneously
+hands it a placement decision it makes over the wrong grid.
+
+**The reduction, for whoever owns this.** `GalaxyColumnUserSelector` needs *both*:
+
+1. an input B the matmul accepts — interleaved, or a program config that takes
+   width-sharded in1; **and**
+2. a program config whose core grid is inside the decode worker sub-device, the
+   way every other decode-time op in `collectives.py` is.
+
+Neither is expressible from a test, and (2) is the one no amount of relocation
+reaches. `GalaxyColumnUserSelector.__init__` already accepts a
+`compute_kernel_config` and a `memory_config` and passes both to the matmul; it
+accepts no `program_config`, and nothing in it knows which sub-device is loaded.
+
+**Both models, and that distinguishes D-C8 from the L1 clash.** `a3_l_dc5`
+(`logs2/a3_l_dc5.log`, commit `75f47d1228e`, `1 failed in 897.12s`) relocated
+Llama's decode logits — `WIDTH_SHARDED, width 16128`, which is Llama's per-device
+share of its 129024 padded vocabulary — and raised the same `TT_FATAL @
+program.cpp:2205` from the same line of `collectives.py`. Four device runs, two
+geometries: the *only* thing that differs is the shard width. The L1 address
+clash is a function of the resolved decode placement and reproduces for one model
+and not the other; D-C5 and D-C8 are functions of the code and reproduce for
+both.
+
+**And this is the third fault in one stack of three.** The L1 address clash hid
+D-C5 for Llama; D-C5 hid D-C8 for both models. The class's own docstring predicted
+it in as many words —
+
+> **Unqualified.** This composition has never run on a Galaxy mesh. Qualify it
+> with the focused selector test before trusting a device sampling path built on
+> it; the alternative is composing the logits to host and calling
+> `Sampling2D.sample_host`.
+
+— and the focused selector test it points at
+(`test_column_user_selector_wh_galaxy.py`) builds its input with
+`memory_config=ttnn.DRAM_MEMORY_CONFIG` **and no loaded sub-device manager**, so
+it cannot see either fault. The alternative the docstring offers — compose to host
+and call `sample_host` — is what both demos' passing half actually does, and it is
+the only sampling path this tree has that works on a Galaxy.
+
+**Consequence for the exit gate.** Area 4 is **BLOCKED**, for both models, by two
+stacked defects in shared Galaxy code. Not "unmeasured": measured, twice, with the
+first blocker removed at the call site to reach the second. Milestone B's device
+sampling does not work end to end on this hardware at this tree, and the report
+should say so in those words.
+
+---
+
+### D-C6 — **escalated**: the concat-32 L1 overflow is not Qwen's, it is the shared recipe's
+
+*Recorded after the agent session ended, by the operator session that halted the
+queue at `13:48:41Z`. Transcribed from `logs2/a3_{q,l}_concat_*.log`, all stamped
+`commit: b361770f46b`; every byte count below is `grep`-ed from the log named.*
+
+§A2 recorded D-C6 as a **Qwen-only** capacity overflow: Qwen's concat-32 demo
+(`a2_g22`) could not fit its static circular buffers, while Llama's (`a2_g10`)
+failed earlier with the L1 *address clash* and so never reached the question.
+That reading was reasonable on the evidence available and it is **wrong**.
+
+The step-7 sweep — a model built once and prefilled once, with no decode before
+it, which is exactly the shape that cannot raise the address clash — gives:
+
+| length | Qwen | Llama | L1 available |
+| --- | --- | --- | --- |
+| 128 | 1 669 312 B | **1 669 312 B** | 1 499 136 B |
+| 256 | 3 111 104 B | **3 111 104 B** | 1 499 136 B |
+| 512 | 5 994 688 B | **5 994 688 B** | 1 499 136 B |
+| 1024 | *not run* | 11 761 856 B | 1 499 136 B |
+| active 16 / 31 / 32, length 128 | 1 669 312 B | 1 669 312 B | 1 499 136 B |
+
+all on core range `[0-0 - 2-3]`, all raised by `validate_circular_buffer_region`.
+
+Three things follow, and each changes what Milestone C inherits:
+
+1. **The requirement is identical between the two models, to the byte, at every
+   shared length.** Llama's 8-KV-head 128256-vocab geometry and Qwen's 64-head
+   151936-vocab geometry cannot both coincidentally need 1 669 312 B. The
+   allocation is a property of the **shared concat-32 recipe**, not of either
+   model's dimensions, so this is one defect to fix once — not a per-model tuning
+   exercise.
+2. **The smallest supported length is already 11% over.** The brief says "qualify
+   sequence length 128 first, then expand through 2048". There is no first step:
+   128 does not fit. And the requirement roughly **doubles per length doubling**
+   (1.67 → 3.11 → 5.99 → 11.76 MB), so nothing above 128 is a near miss either —
+   1024 asks for **7.8×** the L1 that exists.
+3. **The active-batch dimension is unreachable, not passing.** The brief's whole
+   area 2 turns on active batches 16, 31 and 32 behaving differently. All three
+   produce the identical 1 669 312 B and die before a single row's logits can be
+   compared. Nothing about padding-row isolation was measured — in either
+   direction. Do not read these seven failures as evidence that padded rows leak;
+   read them as evidence that the question cannot be asked at this tree.
+
+Length 2048 was dequeued at `13:44:49Z` and terminated at `13:48:41Z` by the
+operator, un-measured and deliberately not re-queued: the scaling and the
+model-independence were both already established, and the run had no answer left
+to give.
+
+### The Llama address clash blocks three more claims than §A2 knew
+
+Same provenance as D-C6 above. The clash (§A2's limitation **L1**, `program 100`,
+core range `[0-0 - 0-3]`) is still **Llama-only at this tree** — `grep -l 'clash
+with L1 buffers' logs2/a3_q_*.log` matches **0 of Qwen's 28 attempt-3 device
+runs**, and 0 of its attempt-2 runs. But the Llama half of the step-7 sweep
+shows it costs more coverage than the repeat/teardown shapes it was found in:
+
+| Claim | Log | Signature |
+| --- | --- | --- |
+| area 1, block-level cross-slot isolation | `a3_l_cross_slot` | `program 100`, L1 buffer at 544832 |
+| area 1, two pools in one process | `a3_l_two_pools` | `program 100`, L1 buffer at 479296 |
+| area 3, chunked prefill | `a3_l_chunked` | `program 1546`, L1 buffer at 543360 |
+
+The second of these matters for **D-C7**: Qwen's two-pool run failed with the
+capacity residue (923776 of 1393472 B per bank still held after `close()` and
+`gc.collect()`), which is the finding. Llama's fails *earlier*, on the clash, so
+**D-C7 is not observable on Llama** and the "one model per process" limitation is
+qualified on Qwen alone. Two different defects produce one symptom in the same
+shape, and a fix for either one will not silence the other.
+
+All three claims are **blocked, not contradicted**: no slot data, no pool
+comparison and no chunk comparison was ever performed in those runs.
+
+### Gate commands, §A3
+
+Every device row above was produced by one line of `queue.txt` through
+`cov_queue.sh` → `cov_run3.sh` → `cov_device_run.sh`, which is
+
+```sh
+export HF_HOME=/localdev/ctr-apbernal/hf_data
+timeout --signal=TERM --kill-after=180 "$MB_DEADLINE" \
+  python -u -m pytest -v -rA --color=no -p no:cacheprovider \
+    --timeout="$MB_PYTEST_TIMEOUT" "<one node id>" -o faulthandler_timeout=900 > "$LOG" 2>&1
+```
+
+never piped, one process at a time, with `cov_ensure_mesh_free.sh` before and
+`cov_after_device_run.sh` (which runs `tt-smi -glx_reset` after any non-clean
+exit) behind. The node ids, per gate line:
+
+```sh
+L=models/common/tests/models/llama33_70b_galaxy
+Q=models/common/tests/models/qwen3_32b_galaxy
+
+# 1  Llama teacher-forced, batch 1, prefill 512 / decode 511
+$L/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_teacher_forced_accuracy_batch1
+# 2  Qwen teacher-forced, batch 1, 512
+$Q/test_full_model_wh_galaxy.py::test_qwen3_32b_galaxy_teacher_forced_accuracy_batch1
+# 3  batch-32 direct demos, no cross-slot contamination
+models/common/models/llama33_70b_galaxy/demo.py::test_llama33_70b_galaxy_direct_demo_batch32_has_no_cross_slot_contamination
+models/common/models/qwen3_32b_galaxy/demo.py::test_qwen3_32b_galaxy_direct_demo_batch32_has_no_cross_slot_contamination
+# 4  batch-1 4K / 32K / 128K functional smokes
+$L/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_long_context_smoke[4k|32k|128k]
+$Q/test_full_model_wh_galaxy.py::test_qwen3_32b_galaxy_long_context_smoke[4k|32k|128k]
+# 5  prefix-cached output matches uncached execution
+$L/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_prefix_cached_prefill_matches_uncached
+$Q/test_full_model_wh_galaxy.py::test_qwen3_32b_galaxy_prefix_cached_prefill_matches_uncached
+$L/test_step7_coverage_wh_galaxy.py::test_llama_chunked_prefill_matches_a_single_uncached_prefill
+$Q/test_step7_coverage_wh_galaxy.py::test_qwen_chunked_prefill_matches_a_single_uncached_prefill
+```
+
+Host, device-free, and re-run at `HEAD` by attempt 3's second invocation:
+
+```sh
+# 6  no dependency imports from a model-named implementation package.
+#    NOTE the directory list: it is wider than §A2's, which is how F-C3 was found.
+DIRS="models/common/models/galaxy models/common/modules \
+      models/common/models/llama33_70b_galaxy models/common/models/qwen3_32b_galaxy \
+      models/common/tests/models/galaxy models/common/tests/models/llama33_70b_galaxy \
+      models/common/tests/models/qwen3_32b_galaxy models/common/tests/modules"
+grep -rnE '^\s*(from|import)\s+(models\.demos|models\.common\.models\.(llama33_70b|qwen3_32b)([^_]|$)|models\.common\.llm_runtime)' $DIRS
+#   -> 1 match, models/common/tests/modules/moe/test_tt_moe_decode.py:33, pre-existing
+
+# 7, 8  boundaries
+git diff --name-only bc6ad03bfc2..HEAD | grep '_1d\.py'      # 0 of 384
+git diff --name-only bc6ad03bfc2..HEAD | grep 'llm_runtime'  # 0 of 384
+
+# 9  existing 1D model contract and demo-contract host tests
+bash tttv2_milestone_b_evidence/coverage/cov_1d_contract_gate.sh logs3/a3_h1_1d_contract_gate.log
+#   and, for "expectations unchanged", the check that matters more than the run:
+git diff --name-only bc6ad03bfc2..HEAD -- models/common/tests/models/ | grep -v galaxy   # empty
+
+# the host regression gate the brief's "Regression gates" section names
+python -m pytest -q models/common/tests/modules models/common/tests/models \
+                   models/common/tests/llm_runtime \
+                   --ignore=models/common/tests/models/galaxy/test_plans.py   # F-C2
+
+# area 1's cross-process comparison, host only
+python -m pytest -v $Q/test_step7_coverage_wh_galaxy.py::test_qwen_two_paged_pools_agree_across_processes
+```
+
+## What attempt 3 committed
+
+Tests and evidence. **No implementation file, in any package**, either invocation.
+
+```text
+models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py   +3 cases
+models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py     +5 cases
+tttv2_milestone_b_evidence/coverage/                                             logs2/, logs3/, this section
+```
+
+The five test-level changes, and why each is a measurement rather than an
+accommodation:
+
+1. **`test_qwen_prefix_cached_and_plain_requests_mixed_across_slots`** and
+   **`test_qwen_per_slot_heterogeneous_sampling_controls`** — two cases the brief
+   asks for by name that existed only for Llama. Written by attempt 3's first
+   invocation.
+2. **`test_{qwen,llama}_paged_pool_logits_are_recorded_for_cross_process_comparison`**
+   and **`test_{qwen,llama}_two_paged_pools_agree_across_processes`** — area 1's
+   headline claim, split across processes because D-C7 says a process gets one
+   model. Same PCC threshold, same claim, one fewer model per process. The
+   comparison **fails** rather than skips when a recording is absent, and refuses
+   to run if both recordings report the same `max_num_blocks` — the exact
+   tautology D-C4 created the first time this case was written. Both guards were
+   exercised: `logs3/a3_h10_pool_compare_missing_guard.log`.
+3. **`test_{qwen,llama}_device_sampling_claims_behind_dc5_with_interleaved_logits`**
+   — the diagnostic that found D-C8. It removes D-C5 *at the call site, in the
+   test*, and does not touch the product: area 4 stays reported as BLOCKED
+   whatever it says. It is the reason this job can distinguish "device sampling is
+   blocked by one memory-layout precondition" from "device sampling is blocked by
+   a memory-layout precondition **and** a sub-device core-set violation behind
+   it", which is a different conversation with whoever fixes it.
+
+Nothing here relaxes a threshold, a tolerance or a parametrization, and no test
+was deleted or `xfail`ed. Two tests were **added that fail**, on purpose, because
+the thing they measure is broken.
+
+## What Milestone C inherits from this job
+
+Ranked by what a human has to decide, not by severity.
+
+1. **Device sampling does not work end to end on this hardware, and it is two
+   defects deep.** D-C5 (the selector matmul requires an interleaved input B;
+   both models' decode logits are width-sharded, from the *shared* recipe) and
+   D-C8 (with that satisfied, the matmul builds a program over cores outside the
+   loaded decode sub-device). Both are in `models/common/models/galaxy/`, both are
+   shared code, and the fix needs a program config the selector currently has no
+   way to accept. Every claim in the brief's area 4 is behind them.
+2. **L1 has two signatures and only one of them is an ordering problem.** The
+   address clash is Llama-only at this tree and might yield to teardown ordering.
+   The capacity residue (**D-C7**) will not: the owner was closed, dereferenced
+   and garbage-collected and its L1 did not come back, so the second model in a
+   process cannot create its global circular buffer. That puts a hard *one model
+   per process* bound on the stack — the same bound **D-C3** puts on it from the
+   other direction, via a weight cache fingerprinted with `MeshDevice.id()`.
+3. **D-C1** — decode's page-table validator cannot separate a prefill-shaped
+   table from a legitimate L1-sharded repeat. Premise confirmed on silicon by
+   three fresh processes. The fix changes a 2D-module expectation, which three
+   attempts have now declined as a boundary violation. It needs a decision.
+4. **D-C4** — `paged_attention_config=None` installs the default pool, not a
+   contiguous cache. Either the adaptor grows a way to ask for a contiguous cache
+   or the plan's area-1 wording changes to the two-pool form this job measured.
+5. **D-C2** — is a sampling seed per-request or per-(request, slot)? A product
+   decision about the serving contract, not a bug.
+6. **F-C3** — one pre-existing `models.demos` import sits in
+   `models/common/tests/modules/moe/`. Not Milestone B's, and `mb-signoff` should
+   name it rather than assert a bare zero.
+7. **G-C1, G-C2, G-C3, F-C2** — unchanged from attempt 1.
+8. **Scheduling reality, for whoever plans Milestone C's device nights.** One node
+   id per process is mandatory (D-C3), a warm Llama build is ~5.5 min and a cold
+   weight set is 26 min and 138 GB, and a failing run costs its own wall clock
+   plus a `tt-smi -glx_reset`. A 17-node-id file is a three-hour run. Plan around
+   builds, not around tests.
+
+---
+
+# §A3-op — what landed after the agent died, and who wrote it down
+
+**Appended 2026-08-28 14:05Z by an operator session, not by `mb-coverage`.** It is
+outside `cov_assemble_report3.sh`'s fragment list on purpose: the assembler's nine
+fragments are attempt 3's own account, and this is not.
+
+The attempt-3 agent session ended at **09:21:44Z** — its `stream-json` ends
+mid-wait with its background monitors killed and no `result` event. Its detached
+device queue (`cov_queue.sh`, reparented to init) kept running **unattended for
+four and a half hours** and completed **38 further runs**, until the operator
+halted it at **13:48:41Z** at the user's request. `ENVIRONMENT.md` §"Operator
+intervention" has the timeline, the deadlock that caused it, and the two harness
+fixes it implies. `RESULTS_A3.md` has one row per run, below its own provenance
+note, with the log behind every figure.
+
+## The exit gate did not move
+
+**None of the nine gate lines is affected.** No gate line depends on concat-32,
+block-level cross-slot isolation, or chunked prefill, and every gate log was
+already on disk and stamped before the agent died. The table in "§A3 — the nine
+lines" stands as written: eight pass, and line 9 fails 5 of 301 at node ids
+Milestone B provably does not own. Nothing below changes a gate verdict; what
+changes is what Milestone C inherits.
+
+## Two verdicts changed
+
+1. **D-C6 escalates from a Qwen quirk to a shared-recipe defect.** §A2 read it as
+   Qwen-only, with Llama merely dying earlier on its L1 address clash. The step-7
+   sweep — model built once, prefilled once, no decode before it, so the clash
+   cannot fire — gives Llama the *same capacity overflow* at **byte-identical**
+   figures at every shared length: 1 669 312 B at 128, 3 111 104 B at 256,
+   5 994 688 B at 512, 11 761 856 B at 1024, against 1 499 136 B of L1. Two
+   different model geometries cannot coincidentally need the same bytes: the
+   allocation belongs to the shared concat-32 recipe. **Area 2 has no reachable
+   case at this tree, for either model, at any supported length or active batch**,
+   and the plan's padding-isolation risk was therefore never tested in either
+   direction. Full write-up in §A3 "D-C6 — escalated".
+2. **Area 1's headline claim now passes for both models.** The Llama
+   cross-process pool comparison was run host-only from the two recordings the
+   queue had already produced: `all 32 slots agree at PCC >= 0.99 for prefill and
+   decode`, `logs3/a3_h14_llama_pool_compare.log`, `1 passed in 7.85s`, no device
+   opened. That row is a **new measurement by the operator session**;
+   `RESULTS_A3.md` H14 labels it as such. One recording process per arm for Llama
+   against two for Qwen, so it is observed rather than qualified.
+
+Also: the Llama address clash costs three more claims than §A2 knew
+(`a3_l_cross_slot`, `a3_l_two_pools`, `a3_l_chunked`), and because it arrives
+*before* the capacity residue, **D-C7 is not observable on Llama at all** — one
+symptom, two defects, and fixing either will not silence the other.
+
+## What this adds to Milestone C's inheritance
+
+Insert between items 1 and 2 of "What Milestone C inherits from this job":
+
+> **1b. Concat-32 physical prefill does not fit in L1 at any supported length —
+> D-C6, and it is shared code, not per-model tuning.** The static circular buffer
+> requirement is identical for both models and roughly doubles per length
+> doubling, so the smallest length the batched-prefill policy supports is already
+> 11% over and length 1024 asks for 7.8× the L1 that exists. Whoever owns the
+> concat-32 recipe needs a smaller resolved allocation before any of the brief's
+> area-2 questions — padded-row KV isolation, padded-row logit isolation, active
+> batches 16/31/32 — can be asked at all. This is a prerequisite for the coverage,
+> not a finding the coverage produced.
+
+## The queue is stopped, and 28 items have never run
+
+`queue.halt` is present, `cov_queue.sh` has exited, the mesh is free and reset
+(32/32 boards, `Re-initialized 32 boards after reset`). `queue.txt` is consumed
+destructively, so its remaining 28 lines are exactly what is left; its header
+records what was dropped and why. `a3_l_concat_len2048` was terminated in flight
+and deliberately not re-queued.
+
+Of those 28, six are behind D-C5 and several more behind D-C6 — both now
+qualified at three fresh processes. **The genuinely unmeasured work is the
+repeat tail**: most Llama claims have exactly one run, so they are *observed, not
+qualified*, and the brief's three-fresh-processes rule is unsatisfied for them.
+That, and the two defects, is where a Milestone C night pays.
