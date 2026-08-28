@@ -1055,3 +1055,106 @@ def test_qwen_device_sampling_claims_behind_dc5_and_dc8(mesh_device: ttnn.MeshDe
             ), f"per-slot controls: slot {slot} was configured greedy and did not take the host argmax"
     finally:
         _close(handle)
+
+
+# ---------------------------------------------------------------------------
+# D-C9: localizing the 7/32 greedy disagreement `a4_q_dc8` measured.
+#
+# `test_column_user_selector_wh_galaxy.py` - never executed before attempt 4,
+# `logs4/a4_selector*.log` - passes both of its cases on silicon: column `c`
+# receives exactly users `8c .. 8c+7`, and selector-plus-`Sampling2D`
+# reproduces a per-user argmax for all 32 users. So the primitive is right for a
+# correctly placed input, and the 32 tokens `a4_q_dc8` sampled - one column's
+# eight, repeated four times - have to come from somewhere else in the model
+# path.
+#
+# This case is the bisection. It stops one step short of `Sampling2D`: it takes
+# the model's own decode logits, relocates them (D-C5), loads the full-grid
+# prefill sub-device manager (D-C8), runs *only* `select_decode_column_users`,
+# composes the result to host and asks whether row `i` of the selected tensor is
+# user `i`'s logits - by comparing its argmax against the host argmax the same
+# decode step produced. It also prints every placement fact about the logits it
+# was given, because "what placement does the selector actually receive in the
+# model path" is the question the passing isolated test raises.
+#
+# PASS here would put D-C9 inside `Sampling2D` or the compose of its output;
+# FAIL here puts it at or before the selector, in the logits placement the
+# Galaxy recipe hands it. Either way the answer is one number.
+# ---------------------------------------------------------------------------
+
+
+@_PARAMS
+@_GALAXY
+@torch.no_grad()
+def test_qwen_the_selected_column_users_are_the_users_they_claim(mesh_device: ttnn.MeshDevice):
+    """Does `select_decode_column_users` return user `i` in row `i`?"""
+
+    from models.common.auto_compose import to_torch_auto_compose
+
+    rows = _distinct_rows(128, GALAXY_PHYSICAL_BATCH)
+    handle = _load(mesh_device, paged_attention_config=_paged_config(context=2048, active_slots=32))
+    try:
+        vocab_size = handle.model.vocab_size
+        with GalaxyDirectRunner(handle.model) as runner:
+            for slot, row in enumerate(rows):
+                runner.prefill_row(row, slot=slot)
+            tokens = [1] * GALAXY_PHYSICAL_BATCH
+            positions = [128] * GALAXY_PHYSICAL_BATCH
+            host_logits = runner.decode_logits(tokens, positions)
+            expected = torch.argmax(host_logits[:, :vocab_size], dim=-1)
+
+            device_logits = runner._decode_device_logits(tokens, positions)
+            memcfg = device_logits.memory_config()
+            print(
+                f"[dc9] decode logits: shape={tuple(device_logits.shape)} layout={memcfg.memory_layout} "
+                f"buffer={memcfg.buffer_type} sharded={memcfg.is_sharded()}",
+                flush=True,
+            )
+            if memcfg.is_sharded():
+                print(f"[dc9] decode logits shard spec: {memcfg.shard_spec}", flush=True)
+            relocated = (
+                ttnn.sharded_to_interleaved(device_logits, ttnn.DRAM_MEMORY_CONFIG)
+                if memcfg.is_sharded()
+                else device_logits
+            )
+            if relocated is not device_logits:
+                ttnn.deallocate(device_logits)
+            handle.model.activate("prefill")
+            selected = handle.model.select_decode_column_users(relocated)
+            try:
+                print(
+                    f"[dc9] selected: shape={tuple(selected.shape)} "
+                    f"layout={selected.memory_config().memory_layout}",
+                    flush=True,
+                )
+                composed = to_torch_auto_compose(selected).float()
+            finally:
+                ttnn.deallocate(selected)
+                ttnn.deallocate(relocated)
+
+        print(f"[dc9] composed selected logits: {tuple(composed.shape)}", flush=True)
+        flat = composed.reshape(-1, composed.shape[-1])
+        usable = min(flat.shape[0], GALAXY_PHYSICAL_BATCH)
+        actual = torch.argmax(flat[:usable, :vocab_size], dim=-1)
+        print(f"[dc9] host argmax per user:     {[int(value) for value in expected]}", flush=True)
+        print(f"[dc9] selected argmax per row:  {[int(value) for value in actual]}", flush=True)
+        agree = [slot for slot in range(usable) if int(actual[slot]) == int(expected[slot])]
+        print(f"[dc9] rows whose argmax is their own user's: {len(agree)}/{usable} -> {agree}", flush=True)
+        # Is row i actually user j for some other j? Report the permutation, if
+        # there is one, because "one column repeated four times" is a specific
+        # claim and this is what would evidence it.
+        lookup = {int(value): slot for slot, value in enumerate(expected)}
+        mapping = [lookup.get(int(value), None) for value in actual]
+        print(f"[dc9] row -> which host user has that argmax: {mapping}", flush=True)
+
+        mismatched = [slot for slot in range(usable) if int(actual[slot]) != int(expected[slot])]
+        assert usable == GALAXY_PHYSICAL_BATCH, (
+            f"the composed selected logits carry {flat.shape[0]} rows, not {GALAXY_PHYSICAL_BATCH}; "
+            f"composed shape {tuple(composed.shape)}"
+        )
+        assert not mismatched, (
+            f"select_decode_column_users did not return user i in row i; rows {mismatched} disagree with the "
+            f"host argmax. row -> host user holding that argmax: {mapping}"
+        )
+    finally:
+        _close(handle)
