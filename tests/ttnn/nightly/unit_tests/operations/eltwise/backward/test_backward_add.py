@@ -157,6 +157,59 @@ def test_bw_add_helper_allocated_grads_honour_memory_config(input_shapes, device
         if not required:
             continue
         assert result[i] is not None
+        # compare the whole config, not just buffer_type: a wrong memory_layout or shard
+        # spec is the same class of bug, and empty_like is handed the full config
         assert (
-            result[i].memory_config().buffer_type == ttnn.BufferType.DRAM
-        ), f"grad {i} was requested in DRAM but landed in {result[i].memory_config().buffer_type}"
+            result[i].memory_config() == ttnn.DRAM_MEMORY_CONFIG
+        ), f"grad {i} was requested in {ttnn.DRAM_MEMORY_CONFIG} but landed in {result[i].memory_config()}"
+
+
+@pytest.mark.parametrize("input_shapes", ((torch.Size([1, 1, 32, 32])),))
+@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
+def test_bw_assign_helper_allocated_grads_honour_memory_config(input_shapes, device, are_required_outputs):
+    """assign_bw previously ignored memory_config entirely, so it has the largest delta here."""
+    _, input_tensor_a = data_gen_with_range(input_shapes, -100, 100, device, True)
+    _, input_tensor_b = data_gen_with_range(input_shapes, -100, 100, device, True)
+    _, grad_tensor = data_gen_with_range(input_shapes, -50, 50, device)
+
+    input_tensor_a = ttnn.to_memory_config(input_tensor_a, ttnn.L1_MEMORY_CONFIG)
+    input_tensor_b = ttnn.to_memory_config(input_tensor_b, ttnn.L1_MEMORY_CONFIG)
+    grad_tensor = ttnn.to_memory_config(grad_tensor, ttnn.L1_MEMORY_CONFIG)
+
+    result = ttnn.assign_bw(
+        grad_tensor,
+        input_tensor_a,
+        input_tensor_b,
+        are_required_outputs=are_required_outputs,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    for i, required in enumerate(are_required_outputs):
+        if required:
+            assert result[i].memory_config() == ttnn.DRAM_MEMORY_CONFIG
+
+
+@pytest.mark.parametrize("input_shapes", ((torch.Size([1, 1, 32, 32])),))
+@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
+def test_bw_concat_helper_allocated_grads_honour_memory_config(input_shapes, device, are_required_outputs):
+    """concat_bw reaches its grads through ttnn.slice, a different write path from assign."""
+    _, input_tensor_a = data_gen_with_range(input_shapes, -100, 100, device, True)
+    _, input_tensor_b = data_gen_with_range(input_shapes, -100, 100, device, True)
+    _, grad_tensor = data_gen_with_range(torch.Size([1, 1, 64, 32]), -50, 50, device)
+
+    input_tensor_a = ttnn.to_memory_config(input_tensor_a, ttnn.L1_MEMORY_CONFIG)
+    input_tensor_b = ttnn.to_memory_config(input_tensor_b, ttnn.L1_MEMORY_CONFIG)
+    grad_tensor = ttnn.to_memory_config(grad_tensor, ttnn.L1_MEMORY_CONFIG)
+
+    result = ttnn.concat_bw(
+        grad_tensor,
+        input_tensor_a,
+        input_tensor_b,
+        0,
+        are_required_outputs=are_required_outputs,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    for i, required in enumerate(are_required_outputs):
+        if required:
+            assert result[i].memory_config() == ttnn.DRAM_MEMORY_CONFIG
