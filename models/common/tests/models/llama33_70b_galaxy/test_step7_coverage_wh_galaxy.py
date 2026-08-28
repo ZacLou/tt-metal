@@ -961,3 +961,169 @@ def test_llama_device_sampling_claims_behind_dc5_with_interleaved_logits(mesh_de
             ), f"per-slot controls: slot {slot} was configured greedy and did not take the host argmax"
     finally:
         _close(handle)
+
+
+# ---------------------------------------------------------------------------
+# D-C8: the second fault at the same call site, worked around at the test
+# boundary so that area 4's claims can be measured at all. Added by
+# `mb-coverage` attempt 4.
+#
+# ``test_llama_device_sampling_claims_behind_dc5_with_interleaved_logits``
+# (above) relocates the decode logits to interleaved DRAM and so gets past
+# D-C5, and then the *same* ``ttnn.matmul`` inside
+# ``GalaxyColumnUserSelector.__call__`` aborts with
+#
+#     TT_FATAL @ program.cpp:2205: num_intersections == num_cores
+#     Kernel group cores do not match sub device cores for programmable core
+#     type TENSIX
+#
+# because with the *decode* sub-device manager loaded every core of every kernel
+# group has to lie inside ``prefetch_sender_cores() | worker_cores()``, while a
+# default ``ttnn.matmul`` takes the whole ``compute_with_storage_grid_size()``.
+# The selector accepts no ``program_config`` and no core grid, so a caller
+# cannot constrain it - finding D-C8. It is the same defect class as the RoPE
+# batch-grid one already documented in ``recipes.rope_core_grids``: a grid named
+# independently of the partition that has to contain it.
+#
+# This case removes the second obstacle the same way attempt 3 removed the
+# first: at the *test* boundary, with public model API only, by loading the
+# **prefill** sub-device manager around the sampling call
+# (``model.activate("prefill")`` - one sub-device covering the full compute
+# grid, ``galaxy_prefill_mode_plan_cores``). Both the selector matmul and
+# ``Sampling2D``'s own grids (``sampling_core_grids()`` is ``worker_cores()``
+# plus ``topk_cores()``) lie inside that envelope, so every program is legal.
+#
+# What this measures, precisely: whether the sampling *numerics* - greedy
+# against the host argmax, the padded-vocabulary guarantee, D4's reciprocal
+# temperature, seed stability within a slot, per-slot heterogeneous controls -
+# are correct once both program-construction faults are out of the way. What it
+# does **not** do is qualify the production decode path: in production the
+# decode logits are WIDTH_SHARDED (D-C5) and the decode sub-device manager is
+# the loaded one (D-C8). Nothing here is a fix and nothing here is relaxed - the
+# assertions are the per-claim assertions, verbatim.
+# ---------------------------------------------------------------------------
+
+
+@_PARAMS
+@_GALAXY
+@torch.no_grad()
+def test_llama_device_sampling_claims_behind_dc5_and_dc8(mesh_device: ttnn.MeshDevice):
+    """Every area-4 claim in one process, with both known program-construction
+    faults removed at the test boundary: the decode logits relocated to
+    interleaved DRAM (D-C5) and the full-grid prefill sub-device manager loaded
+    around the sampling call (D-C8)."""
+
+    from models.common.auto_compose import to_torch_auto_compose
+
+    rows = _distinct_rows(128, GALAXY_PHYSICAL_BATCH)
+    handle = _load(mesh_device, paged_attention_config=_paged_config(context=2048, active_slots=32))
+    try:
+        vocab_size = handle.model.vocab_size
+        padded_width = None
+        results = {}
+        with GalaxyDirectRunner(handle.model) as runner:
+            for slot, row in enumerate(rows):
+                runner.prefill_row(row, slot=slot)
+            tokens = [1] * GALAXY_PHYSICAL_BATCH
+            positions = [128] * GALAXY_PHYSICAL_BATCH
+            expected = torch.argmax(runner.decode_logits(tokens, positions)[:, :vocab_size], dim=-1)
+
+            def sample(label, **kwargs):
+                nonlocal padded_width
+                # Decode logits are produced under the decode sub-device manager,
+                # exactly as production does it; `_decode_device_logits` calls
+                # `model.activate("decode")` for itself.
+                device_logits = runner._decode_device_logits(tokens, positions)
+                memcfg = device_logits.memory_config()
+                layout = memcfg.memory_layout
+                padded_width = int(device_logits.shape[-1])
+                # D-C5. Identity when the logits are already interleaved, so this
+                # case keeps measuring the same claims if D-C5 is ever fixed
+                # inside the selector.
+                relocated = (
+                    ttnn.sharded_to_interleaved(device_logits, ttnn.DRAM_MEMORY_CONFIG)
+                    if memcfg.is_sharded()
+                    else device_logits
+                )
+                if relocated is not device_logits:
+                    ttnn.deallocate(device_logits)
+                # D-C8. Interleaved DRAM logits survive the manager switch; the
+                # WIDTH_SHARDED original would not, which is why it is gone by
+                # now.
+                handle.model.activate("prefill")
+                print(
+                    f"[dc8] {label}: decode logits were {layout}, width {padded_width}; "
+                    f"relocated to {relocated.memory_config().memory_layout}; "
+                    f"sampling under the prefill sub-device manager",
+                    flush=True,
+                )
+                try:
+                    sampled = handle.model.sample_decode(
+                        relocated, slot_ids=list(range(GALAXY_PHYSICAL_BATCH)), **kwargs
+                    )
+                finally:
+                    ttnn.deallocate(relocated)
+                return to_torch_auto_compose(sampled).reshape(-1)[:GALAXY_PHYSICAL_BATCH].to(torch.int64)
+
+            results["greedy"] = sample("greedy", top_k=1, temperature=0.0)
+            results["cold"] = sample("T=0.02", top_k=32, top_p=1.0, temperature=0.02, seed=11)
+            results["hot"] = sample("T=2.0", top_k=32, top_p=1.0, temperature=2.0, seed=11)
+            seeds = [20260828 + slot for slot in range(GALAXY_PHYSICAL_BATCH)]
+            results["seeded_a"] = sample("seeded pass 1", top_k=32, top_p=1.0, temperature=0.8, seed=seeds)
+            results["seeded_b"] = sample("seeded pass 2", top_k=32, top_p=1.0, temperature=0.8, seed=seeds)
+            greedy_slots = list(range(0, GALAXY_PHYSICAL_BATCH, 4))
+            results["heterogeneous"] = sample(
+                "per-slot controls",
+                top_k=[1 if slot in greedy_slots else 4 + (slot % 8) for slot in range(GALAXY_PHYSICAL_BATCH)],
+                top_p=[
+                    1.0 if slot in greedy_slots else 0.5 + 0.1 * (slot % 4) for slot in range(GALAXY_PHYSICAL_BATCH)
+                ],
+                temperature=[
+                    0.0 if slot in greedy_slots else 0.6 + 0.2 * (slot % 4) for slot in range(GALAXY_PHYSICAL_BATCH)
+                ],
+                seed=seeds,
+            )
+
+        def agreement(name):
+            return sum(1 for slot in range(GALAXY_PHYSICAL_BATCH) if int(results[name][slot]) == int(expected[slot]))
+
+        print(f"[dc8] vocab_size={vocab_size} padded logits width={padded_width}", flush=True)
+        print(f"[dc8] greedy agrees with host argmax in {agreement('greedy')}/32 slots", flush=True)
+        print(f"[dc8] T=0.02 agrees in {agreement('cold')}/32, T=2.0 agrees in {agreement('hot')}/32", flush=True)
+        repeats = sum(
+            1
+            for slot in range(GALAXY_PHYSICAL_BATCH)
+            if int(results["seeded_a"][slot]) == int(results["seeded_b"][slot])
+        )
+        print(f"[dc8] the same seed in the same slot repeated in {repeats}/32 slots", flush=True)
+        print(f"[dc8] heterogeneous greedy slots {greedy_slots}", flush=True)
+        for name, chosen in sorted(results.items()):
+            over = [slot for slot in range(GALAXY_PHYSICAL_BATCH) if int(chosen[slot]) >= vocab_size]
+            print(f"[dc8] {name}: padded ids sampled in slots {over}", flush=True)
+        print(f"[dc8] greedy tokens: {[int(value) for value in results['greedy']]}", flush=True)
+        print(f"[dc8] seeded tokens: {[int(value) for value in results['seeded_a']]}", flush=True)
+
+        # The claims, asserted only now that every measurement is in the log.
+        for name, chosen in sorted(results.items()):
+            over = [slot for slot in range(GALAXY_PHYSICAL_BATCH) if int(chosen[slot]) >= vocab_size]
+            assert not over, f"{name} sampled a padded vocabulary id in slots {over}; vocab_size={vocab_size}"
+        greedy_mismatch = [
+            slot for slot in range(GALAXY_PHYSICAL_BATCH) if int(results["greedy"][slot]) != int(expected[slot])
+        ]
+        assert not greedy_mismatch, f"device greedy disagreed with the host argmax in slots {greedy_mismatch}"
+        cold_mismatch = [
+            slot for slot in range(GALAXY_PHYSICAL_BATCH) if int(results["cold"][slot]) != int(expected[slot])
+        ]
+        assert not cold_mismatch, (
+            f"at T=0.02 the device sampled off-argmax in slots {cold_mismatch}; a reciprocal-temperature "
+            "inversion (defect D4) is the first thing to check"
+        )
+        assert (
+            repeats == GALAXY_PHYSICAL_BATCH
+        ), f"the same seed in the same slot did not repeat: only {repeats}/32 slots matched"
+        for slot in greedy_slots:
+            assert int(results["heterogeneous"][slot]) == int(
+                expected[slot]
+            ), f"per-slot controls: slot {slot} was configured greedy and did not take the host argmax"
+    finally:
+        _close(handle)
