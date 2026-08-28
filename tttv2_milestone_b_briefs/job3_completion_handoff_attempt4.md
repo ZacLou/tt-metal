@@ -51,6 +51,29 @@ Do not plan a night around a healthy mesh without checking.
   `tenstorrent 0000:01:00.0: Device is unresponsive, cannot reset`, and a kernel
   stack trace through `tt_hwmon_read+0x45/0xa0 [tenstorrent]`.
 
+**And attempt 4's own test is a suspect for having caused it.** `dmesg`, dated to
+UTC in `logs4/dmesg_dated.log`: **all 7234
+`tenstorrent: pin_user_pages_longterm failed: -14` messages in this 29-day boot
+fall inside one minute — 18:34Z — which is inside `a4_q_dc8_run2`**, a run of a
+test this attempt wrote 40 minutes earlier. A kernel stack trace through
+`tt_hwmon_read` follows 23 seconds later, and only then does the reset fail.
+`-14` is `EFAULT` pinning user pages for DMA, and the `dc8` case does something
+no earlier case did: **six full sub-device-manager cycles in one process**
+(`activate("prefill")` around each sampling call, `activate("decode")` for each
+new logits fetch), each stopping and restarting the `Prefetcher2D`'s DRAM
+prefetch. Against that: the *first* run of the same case survived, and pinned
+pages are freed at process exit. **Not established either way** — the two runs
+that would settle it are in `REPORT.md` §A4 "What actually broke the mesh".
+
+**The queue now guards against it.** `cov_queue4.sh` counts
+`pin_user_pages_longterm failed` and `Device is unresponsive` in `dmesg` before
+and after every run and halts, with a `dmesg` tail dumped to
+`logs4/kernel_guard_<name>.log`, if either grows. **Note that
+`a4_q_dc9_explicit` is position 1 and performs the same six cycles**, so if this
+is real the guard will fire on the most valuable run in the queue. That is the
+intended behaviour. If it fires, do not just delete `queue4.halt`: read the
+`dmesg` first, and consider a one-cycle variant of the case.
+
 **This needs an operator: an IPMI power cycle of the trays, or a host reboot.**
 Neither is something an unattended job should do to shared hardware unasked, so
 attempt 4 did not.
