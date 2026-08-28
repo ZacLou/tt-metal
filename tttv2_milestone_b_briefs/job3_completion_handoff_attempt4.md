@@ -146,6 +146,17 @@ times over.
   the fixed path — so both teacher-forced accuracy numbers, the batch-32
   slot-isolation cases and every PCC in areas 1, 2, 3 and 5 are unaffected.
 
+**One ambiguity, stated rather than hidden.** Two hypotheses fit everything
+measured: (1) the readback composed the wrong axis, so the composed tensor held
+**64** values and `[:32]` took eight users four times; or (2) the sampler really
+produced only one column's users and the composition is innocent, in which case
+the composed tensor held **32**. The separating evidence is that element count,
+and `a4_q_dc8` does not print it — a real gap in the case as written. The queued
+`a4_q_dc9_explicit` prints it, plus the per-device shape, how many mesh rows are
+byte-identical, and the `tensor_topology()` placements of both tensors. Bet on
+(1) — the precedent is exact and in the same file, and the host test reproduces
+the pattern arithmetically — but it is a bet until that log exists.
+
 The fix is one line with precedent in the same file: compose by distribution,
 `ttnn.ConcatMesh2dToTensor(dims=(0, <user axis>))` then mesh row 0 — the mirror
 of `compose_galaxy_logits(dims=(3, 0))`, axes swapped because there it is the rows

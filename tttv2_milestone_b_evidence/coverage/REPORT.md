@@ -2552,6 +2552,37 @@ this (`test_qwen_device_sampling_claims_with_an_explicit_token_composition`,
 commit `0e2c0dc50b4`) so that the arithmetic can be measured; it did **not**
 change `direct_runner.py`, for the reason in §A4's method note.
 
+### D-C9's remaining ambiguity, stated rather than hidden
+
+Two hypotheses are consistent with everything measured, and the logs on disk do
+**not** separate them:
+
+1. **the readback composes the wrong axis** — `ttnn.sampling` produced all 32
+   users' tokens across the four mesh columns, and
+   `to_torch_auto_compose(...).reshape(-1)[:32]` returned the first 32 of 64
+   values, i.e. one column's eight users repeated four times. This is the
+   hypothesis the in-repo precedent supports: `compose_galaxy_logits` documents
+   the identical trap for the logits tensor one op earlier, and
+   `test_step7_token_composition.py` reproduces the exact observed pattern from
+   the mislabelled composition arithmetically (`logs3/a4_h7_*`, 8 passed ×3);
+2. **the sampler produced only one column's users** and the composition is
+   innocent — every column computed users 0-7, and a *correct* composition of
+   that tensor would also show eight tokens repeated four times.
+
+**The evidence that separates them is one number: the composed element count.**
+Under (1) the composed tensor holds **64** values before the `[:32]` slice; under
+(2) it holds 32. `a4_q_dc8` does not print it — a real gap in the case as written.
+`test_qwen_device_sampling_claims_with_an_explicit_token_composition` does print
+it, along with the per-device shape, how many of the eight mesh rows are
+byte-identical, and (since commit `d31925bc280`) the `tensor_topology()`
+placements of both the relocated logits and the sampled tokens. It is position 1
+in `queue4.txt` and has never run, because the mesh went down before it was
+dequeued.
+
+Hypothesis (1) is the one to bet on — the precedent is exact, in the same file,
+and the arithmetic matches — but it is a bet until that log exists, and this
+report will not call it a measurement.
+
 ### Why attempt 4 did not repair D-C5, D-C8 or D-C9
 
 Three defects at one call site, all three with a one-line shape of fix, and the
