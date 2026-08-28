@@ -61,11 +61,32 @@ while true; do
         break
     fi
     IFS='|' read -r deadline pytimeout logname target extra <<< "$line"
-    echo "--- dequeued $logname $(date -u +%H:%M:%S)"
+    # Kernel guard, added 19:16Z after the mesh was lost. All 7234
+    # `pin_user_pages_longterm failed: -14` messages in this boot fell inside one
+    # minute - 18:34Z, during a4_q_dc8_run2 - and the chip that would not come
+    # back from POST_RESET went with them. Whatever the mechanism, a burst like
+    # that is the last cheap warning before a mesh becomes unusable, so the queue
+    # stops on it instead of running 40 more items into a dying fabric.
+    pin_before=$(dmesg 2>/dev/null | grep -c 'pin_user_pages_longterm failed')
+    dead_before=$(dmesg 2>/dev/null | grep -c 'Device is unresponsive')
+    echo "--- dequeued $logname $(date -u +%H:%M:%S) (kernel: pin=$pin_before unresponsive=$dead_before)"
     MB_DEADLINE="$deadline" MB_PYTEST_TIMEOUT="$pytimeout" MB_EXTRA="${extra:-}" \
         TTTV2_GALAXY_CCL_TRACE=${TTTV2_GALAXY_CCL_TRACE:-0} \
         bash "$D/cov_run4.sh" "$logname" "$target" -o faulthandler_timeout=900
-    echo "--- $logname rc=$? $(date -u +%H:%M:%S)"
+    rc=$?
+    pin_after=$(dmesg 2>/dev/null | grep -c 'pin_user_pages_longterm failed')
+    dead_after=$(dmesg 2>/dev/null | grep -c 'Device is unresponsive')
+    echo "--- $logname rc=$rc $(date -u +%H:%M:%S) (kernel: pin=$pin_after unresponsive=$dead_after)"
+    if [ "${pin_after:-0}" -gt "${pin_before:-0}" ] || [ "${dead_after:-0}" -gt "${dead_before:-0}" ]; then
+        echo "!!! KERNEL GUARD: dmesg grew during $logname"
+        echo "!!!   pin_user_pages_longterm failed: $pin_before -> $pin_after"
+        echo "!!!   Device is unresponsive:          $dead_before -> $dead_after"
+        echo "!!! halting the queue. This is the signature that preceded the loss of the"
+        echo "!!! mesh at 18:37Z on 2026-08-28; see REPORT.md section A4. Do not just"
+        echo "!!! delete queue4.halt - read the dmesg first."
+        dmesg 2>/dev/null | tail -60 > "$D/logs4/kernel_guard_${logname}.log"
+        touch "$D/queue4.halt"
+    fi
 done
 echo "=== queue runner done $(date -u +%H:%M:%S)"
 } >> "$LOG" 2>&1

@@ -2679,6 +2679,55 @@ recoverable by any user-space command available to this job: it needs an IPMI
 power cycle of the tray or a host reboot, and both are outside what an unattended
 job may do to shared hardware without being asked.
 
+
+## What actually broke the mesh, dated to the second — and attempt 4's own test is a suspect
+
+`logs4/dmesg_dated.log` converts the kernel's boot-relative timestamps to UTC.
+The result changes the story from "a reset failed" to something more specific,
+and it does not let this attempt off the hook.
+
+| time (UTC) | kernel | what was running |
+| --- | --- | --- |
+| 18:34:42 | **7234 × `tenstorrent: pin_user_pages_longterm failed: -14`** | `a4_q_dc8_run2`, 18:32:26-18:35:07 |
+| 18:35:05 | a kernel stack trace through `tt_hwmon_read+0x45/0xa0 [tenstorrent]` | the same run's teardown |
+| ~18:36:50 | — | its wrapper `glx_reset`: **`Error: POST_RESET failed for device 21`** |
+| 18:37:08 onwards | — | three runs error at setup: `Read 0xffffffff over PCIe ID 21` |
+| 18:41:33-18:41:45 | `Skipping message 00000011 due to FW not running`, `0000:01:00.0: Device is unresponsive, cannot reset` | recovery 3, `glx_reset_auto` |
+| 18:46:34-18:46:58 | the same pair for `0000:c6:00.0`, `0000:c7:00.0`, `0000:c8:00.0` | recovery 5, `tt-smi -r all` |
+
+**All 7234 pin failures fall inside one minute, and there is not one other
+occurrence in this boot** — the host has been up 29 days. So this is not
+background noise, it is an event, and it happened *inside* a run of a test this
+attempt wrote 40 minutes earlier, not inside the reset that followed.
+
+**The honest position on cause.** `-14` is `EFAULT` on pinning user pages for
+DMA. Attempt 4's `dc8` case does something no earlier case did: it calls
+`model.activate("prefill")` and then, via `runner._decode_device_logits`,
+`model.activate("decode")` — **six full sub-device-manager cycles in one
+process**, each of which stops and restarts the `Prefetcher2D`'s DRAM prefetch.
+That is a plausible way to exhaust or corrupt pinned host pages, and it is the
+one genuinely new thing in the window. Against that: the *first* run of the same
+case, `a4_q_dc8`, completed at 18:31 and its `glx_reset` printed
+`Re-initialized 32 boards after reset`, so one process of six cycles was
+survivable; and pinned pages are released at process exit, which makes a
+cross-process accumulation story harder to tell.
+
+**It is not established either way, and it should not be guessed at.** What
+would establish it, in one run each, on a repaired mesh:
+
+1. run `a4_q_dc8` once with `dmesg -w` recording, and see whether the pin-failure
+   burst reappears. If it does, the case is the cause;
+2. if it does, run a variant that does **one** activate cycle instead of six —
+   sample once rather than six times — and see whether the burst goes away.
+
+**Until that is known, the queue guards against it.** `cov_queue4.sh` now counts
+`pin_user_pages_longterm failed` and `Device is unresponsive` in `dmesg` before
+and after every run, and if either grows it dumps the tail of `dmesg` to
+`logs4/kernel_guard_<name>.log`, writes `queue4.halt` and stops. **`a4_q_dc9_explicit`
+is position 1 in the queue and performs the same six activate cycles**, so the
+guard will fire on the very run that matters most if this is real — which is the
+correct outcome: one halted queue is cheaper than another lost night of Galaxy.
+
 ## What attempt 4 committed
 
 | commit | what |
