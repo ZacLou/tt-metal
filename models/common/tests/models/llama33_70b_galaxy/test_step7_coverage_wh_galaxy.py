@@ -1127,3 +1127,320 @@ def test_llama_device_sampling_claims_behind_dc5_and_dc8(mesh_device: ttnn.MeshD
             ), f"per-slot controls: slot {slot} was configured greedy and did not take the host argmax"
     finally:
         _close(handle)
+
+
+# ---------------------------------------------------------------------------
+# The Llama twins of the two D-C9 cases attempt 4 wrote for Qwen. Verbatim,
+# except for the model in the function names: D-C5 and D-C8 are both
+# model-independent (3/3 on each), and the whole point of a twin is that a
+# difference between the two models is a difference in the models rather than
+# in the case. Neither has run - the mesh went down first.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# D-C9: localizing the 7/32 greedy disagreement `a4_q_dc8` (Qwen; this is its Llama twin) measured.
+#
+# `test_column_user_selector_wh_galaxy.py` - never executed before attempt 4,
+# `logs4/a4_selector*.log` - passes both of its cases on silicon: column `c`
+# receives exactly users `8c .. 8c+7`, and selector-plus-`Sampling2D`
+# reproduces a per-user argmax for all 32 users. So the primitive is right for a
+# correctly placed input, and the 32 tokens `a4_q_dc8` (Qwen; this is its Llama twin) sampled - one column's
+# eight, repeated four times - have to come from somewhere else in the model
+# path.
+#
+# This case is the bisection. It stops one step short of `Sampling2D`: it takes
+# the model's own decode logits, relocates them (D-C5), loads the full-grid
+# prefill sub-device manager (D-C8), runs *only* `select_decode_column_users`,
+# composes the result to host and asks whether row `i` of the selected tensor is
+# user `i`'s logits - by comparing its argmax against the host argmax the same
+# decode step produced. It also prints every placement fact about the logits it
+# was given, because "what placement does the selector actually receive in the
+# model path" is the question the passing isolated test raises.
+#
+# PASS here would put D-C9 inside `Sampling2D` or the compose of its output;
+# FAIL here puts it at or before the selector, in the logits placement the
+# Galaxy recipe hands it. Either way the answer is one number.
+# ---------------------------------------------------------------------------
+
+
+@_PARAMS
+@_GALAXY
+@torch.no_grad()
+def test_llama_the_selected_column_users_are_the_users_they_claim(mesh_device: ttnn.MeshDevice):
+    """Does `select_decode_column_users` return user `i` in row `i`?"""
+
+    from models.common.auto_compose import to_torch_auto_compose
+
+    rows = _distinct_rows(128, GALAXY_PHYSICAL_BATCH)
+    handle = _load(mesh_device, paged_attention_config=_paged_config(context=2048, active_slots=32))
+    try:
+        vocab_size = handle.model.vocab_size
+        with GalaxyDirectRunner(handle.model) as runner:
+            for slot, row in enumerate(rows):
+                runner.prefill_row(row, slot=slot)
+            tokens = [1] * GALAXY_PHYSICAL_BATCH
+            positions = [128] * GALAXY_PHYSICAL_BATCH
+            host_logits = runner.decode_logits(tokens, positions)
+            expected = torch.argmax(host_logits[:, :vocab_size], dim=-1)
+
+            device_logits = runner._decode_device_logits(tokens, positions)
+            memcfg = device_logits.memory_config()
+            print(
+                f"[dc9] decode logits: shape={tuple(device_logits.shape)} layout={memcfg.memory_layout} "
+                f"buffer={memcfg.buffer_type} sharded={memcfg.is_sharded()}",
+                flush=True,
+            )
+            if memcfg.is_sharded():
+                print(f"[dc9] decode logits shard spec: {memcfg.shard_spec}", flush=True)
+            relocated = (
+                ttnn.sharded_to_interleaved(device_logits, ttnn.DRAM_MEMORY_CONFIG)
+                if memcfg.is_sharded()
+                else device_logits
+            )
+            if relocated is not device_logits:
+                ttnn.deallocate(device_logits)
+            handle.model.activate("prefill")
+            selected = handle.model.select_decode_column_users(relocated)
+            try:
+                print(
+                    f"[dc9] selected: shape={tuple(selected.shape)} "
+                    f"layout={selected.memory_config().memory_layout}",
+                    flush=True,
+                )
+                composed = to_torch_auto_compose(selected).float()
+            finally:
+                ttnn.deallocate(selected)
+                ttnn.deallocate(relocated)
+
+        print(f"[dc9] composed selected logits: {tuple(composed.shape)}", flush=True)
+        flat = composed.reshape(-1, composed.shape[-1])
+        usable = min(flat.shape[0], GALAXY_PHYSICAL_BATCH)
+        actual = torch.argmax(flat[:usable, :vocab_size], dim=-1)
+        print(f"[dc9] host argmax per user:     {[int(value) for value in expected]}", flush=True)
+        print(f"[dc9] selected argmax per row:  {[int(value) for value in actual]}", flush=True)
+        agree = [slot for slot in range(usable) if int(actual[slot]) == int(expected[slot])]
+        print(f"[dc9] rows whose argmax is their own user's: {len(agree)}/{usable} -> {agree}", flush=True)
+        # Is row i actually user j for some other j? Report the permutation, if
+        # there is one, because "one column repeated four times" is a specific
+        # claim and this is what would evidence it.
+        lookup = {int(value): slot for slot, value in enumerate(expected)}
+        mapping = [lookup.get(int(value), None) for value in actual]
+        print(f"[dc9] row -> which host user has that argmax: {mapping}", flush=True)
+
+        mismatched = [slot for slot in range(usable) if int(actual[slot]) != int(expected[slot])]
+        assert usable == GALAXY_PHYSICAL_BATCH, (
+            f"the composed selected logits carry {flat.shape[0]} rows, not {GALAXY_PHYSICAL_BATCH}; "
+            f"composed shape {tuple(composed.shape)}"
+        )
+        assert not mismatched, (
+            f"select_decode_column_users did not return user i in row i; rows {mismatched} disagree with the "
+            f"host argmax. row -> host user holding that argmax: {mapping}"
+        )
+    finally:
+        _close(handle)
+
+
+# ---------------------------------------------------------------------------
+# D-C9, and the case that finally measures area 4's numerics.
+#
+# `a4_q_dc8` (Qwen; this is its Llama twin) sampled `[265, 2631, 1916, 220, 17, 15, 17, 17]` **four times over**
+# for 32 slots, byte-identically in two fresh processes, while the focused
+# selector qualification passes 3/3. The cause is not the selector and not
+# `Sampling2D`: it is the **readback**.
+#
+# `collectives.compose_galaxy_logits` already carries the whole diagnosis for the
+# LM head's logits, one tensor earlier in the same graph: `to_torch_auto_compose`
+# infers its composer from `tensor.tensor_topology()`, and an op's output
+# inherits its *activation's* topology labels rather than the distribution the
+# weight mapper actually produced - so it concatenates the wrong mesh axis and
+# returns copies of one slice. `_compose_rows` was fixed to use an explicit
+# `ConcatMesh2dToTensor`; **`GalaxyDirectRunner.decode_sampled` was not**, and
+# neither was attempt 3's `dc5` diagnostic nor attempt 4's `dc8` one, both of
+# which copied it.
+#
+# `ttnn.sampling`'s output inherits from `gathered_values`, an `all_gather` over
+# the sampling axis, so the same trap applies: the eight devices of a mesh column
+# hold identical tokens (they all-gathered the whole vocabulary between them) and
+# the four columns hold different users. The composition that follows the
+# distribution rather than the labels is therefore
+# `ConcatMesh2dToTensor(dims=(0, <user axis>))` then mesh row 0 - the mirror of
+# `compose_galaxy_logits`, whose axes are swapped because there it is the rows
+# that carry the vocabulary.
+#
+# This case does both compositions in one process and prints both, so one log
+# carries the whole picture, and asserts the area-4 claims on the explicit one.
+# It is still a diagnostic: D-C5 and D-C8 are still worked around at the test
+# boundary, and D-C9 is worked around here rather than fixed in
+# `direct_runner.py`, because this job measures and does not repair shared code.
+# ---------------------------------------------------------------------------
+
+
+@_PARAMS
+@_GALAXY
+@torch.no_grad()
+def test_llama_device_sampling_claims_with_an_explicit_token_composition(mesh_device: ttnn.MeshDevice):
+    """Area 4's claims, with the sampled tokens composed by distribution."""
+
+    from models.common.auto_compose import to_torch_auto_compose
+
+    rows = _distinct_rows(128, GALAXY_PHYSICAL_BATCH)
+    handle = _load(mesh_device, paged_attention_config=_paged_config(context=2048, active_slots=32))
+    try:
+        vocab_size = handle.model.vocab_size
+        results = {}
+        auto_results = {}
+        shape_note = {}
+        with GalaxyDirectRunner(handle.model) as runner:
+            for slot, row in enumerate(rows):
+                runner.prefill_row(row, slot=slot)
+            tokens = [1] * GALAXY_PHYSICAL_BATCH
+            positions = [128] * GALAXY_PHYSICAL_BATCH
+            expected = torch.argmax(runner.decode_logits(tokens, positions)[:, :vocab_size], dim=-1)
+
+            def topology_note(label, tensor):
+                """Print the labels the auto-composer would infer.
+
+                This is the fact D-C9 turns on and no log carries it yet.
+                `to_torch_auto_compose` reads `tensor_topology()`, and
+                `auto_compose._compose_nd_sharded` maps a `PlacementShard` to a
+                concatenation on its `dim` and a `PlacementReplicate` to
+                `shape_override=1` - i.e. skipped. So a *correctly* labelled
+                tensor composes correctly, and the 8-users-repeated-4x reading
+                means the labels name the wrong axis as the replicated one: the
+                composer concatenates the eight identical copies and drops the
+                four distinct column slices. Printing the placements turns that
+                from inference into measurement.
+                """
+
+                try:
+                    topology = tensor.tensor_topology()
+                    print(
+                        f"[dc9] topology of {label}: placements={topology.placements()} "
+                        f"distribution_shape={list(topology.distribution_shape())} "
+                        f"shape={tuple(tensor.shape)}",
+                        flush=True,
+                    )
+                except Exception as error:  # noqa: BLE001 - diagnostic only
+                    print(f"[dc9] topology of {label} unavailable: {type(error).__name__}: {error}", flush=True)
+
+            def compose_by_distribution(sampled):
+                """Mesh row 0's copy, the four columns concatenated on the user axis."""
+
+                user_axis = len(tuple(sampled.shape)) - 1
+                composed = ttnn.to_torch(
+                    sampled,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device, dims=(0, user_axis), mesh_shape=GALAXY_MESH_SHAPE
+                    ),
+                )
+                shape_note["device"] = tuple(sampled.shape)
+                shape_note["composed"] = tuple(composed.shape)
+                # The eight mesh rows must be identical - they all-gathered the
+                # whole vocabulary between them. Print the count rather than
+                # assert it, so a log shows the fact either way.
+                stacked = composed.reshape(composed.shape[0], -1)
+                identical = int(sum(1 for index in range(stacked.shape[0]) if torch.equal(stacked[0], stacked[index])))
+                shape_note["identical_mesh_rows"] = f"{identical}/{stacked.shape[0]}"
+                return stacked[0].reshape(-1)[:GALAXY_PHYSICAL_BATCH].to(torch.int64)
+
+            def sample(label, **kwargs):
+                device_logits = runner._decode_device_logits(tokens, positions)
+                memcfg = device_logits.memory_config()
+                relocated = (
+                    ttnn.sharded_to_interleaved(device_logits, ttnn.DRAM_MEMORY_CONFIG)
+                    if memcfg.is_sharded()
+                    else device_logits
+                )
+                if relocated is not device_logits:
+                    ttnn.deallocate(device_logits)
+                handle.model.activate("prefill")
+                sampled = None
+                try:
+                    sampled = handle.model.sample_decode(
+                        relocated, slot_ids=list(range(GALAXY_PHYSICAL_BATCH)), **kwargs
+                    )
+                    if label == "greedy":
+                        topology_note("the relocated decode logits", relocated)
+                        topology_note("the sampled tokens", sampled)
+                    auto = to_torch_auto_compose(sampled).reshape(-1)[:GALAXY_PHYSICAL_BATCH].to(torch.int64)
+                    explicit = compose_by_distribution(sampled)
+                finally:
+                    if sampled is not None:
+                        ttnn.deallocate(sampled)
+                    ttnn.deallocate(relocated)
+                print(f"[dc9] {label}: device tokens {shape_note}", flush=True)
+                auto_results[label] = auto
+                return explicit
+
+            results["greedy"] = sample("greedy", top_k=1, temperature=0.0)
+            results["cold"] = sample("T=0.02", top_k=32, top_p=1.0, temperature=0.02, seed=11)
+            results["hot"] = sample("T=2.0", top_k=32, top_p=1.0, temperature=2.0, seed=11)
+            seeds = [20260828 + slot for slot in range(GALAXY_PHYSICAL_BATCH)]
+            results["seeded_a"] = sample("seeded pass 1", top_k=32, top_p=1.0, temperature=0.8, seed=seeds)
+            results["seeded_b"] = sample("seeded pass 2", top_k=32, top_p=1.0, temperature=0.8, seed=seeds)
+            greedy_slots = list(range(0, GALAXY_PHYSICAL_BATCH, 4))
+            results["heterogeneous"] = sample(
+                "per-slot controls",
+                top_k=[1 if slot in greedy_slots else 4 + (slot % 8) for slot in range(GALAXY_PHYSICAL_BATCH)],
+                top_p=[
+                    1.0 if slot in greedy_slots else 0.5 + 0.1 * (slot % 4) for slot in range(GALAXY_PHYSICAL_BATCH)
+                ],
+                temperature=[
+                    0.0 if slot in greedy_slots else 0.6 + 0.2 * (slot % 4) for slot in range(GALAXY_PHYSICAL_BATCH)
+                ],
+                seed=seeds,
+            )
+
+        def agreement(name, table):
+            return sum(1 for slot in range(GALAXY_PHYSICAL_BATCH) if int(table[name][slot]) == int(expected[slot]))
+
+        print(f"[dc9] vocab_size={vocab_size}", flush=True)
+        print(f"[dc9] host argmax:            {[int(value) for value in expected]}", flush=True)
+        print(f"[dc9] greedy, explicit:       {[int(value) for value in results['greedy']]}", flush=True)
+        print(f"[dc9] greedy, auto-composed:  {[int(value) for value in auto_results['greedy']]}", flush=True)
+        print(
+            f"[dc9] greedy agrees with host argmax: explicit {agreement('greedy', results)}/32, "
+            f"auto {agreement('greedy', auto_results)}/32",
+            flush=True,
+        )
+        print(
+            f"[dc9] T=0.02 explicit {agreement('cold', results)}/32, T=2.0 explicit {agreement('hot', results)}/32",
+            flush=True,
+        )
+        repeats = sum(
+            1
+            for slot in range(GALAXY_PHYSICAL_BATCH)
+            if int(results["seeded_a"][slot]) == int(results["seeded_b"][slot])
+        )
+        print(f"[dc9] the same seed in the same slot repeated in {repeats}/32 slots", flush=True)
+        for name, chosen in sorted(results.items()):
+            over = [slot for slot in range(GALAXY_PHYSICAL_BATCH) if int(chosen[slot]) >= vocab_size]
+            print(f"[dc9] {name}: padded ids sampled in slots {over}", flush=True)
+        print(f"[dc9] seeded tokens, explicit: {[int(value) for value in results['seeded_a']]}", flush=True)
+        print(f"[dc9] heterogeneous greedy slots {greedy_slots}", flush=True)
+
+        # The claims, asserted only now that every measurement is in the log, and
+        # asserted on the composition that follows the distribution.
+        for name, chosen in sorted(results.items()):
+            over = [slot for slot in range(GALAXY_PHYSICAL_BATCH) if int(chosen[slot]) >= vocab_size]
+            assert not over, f"{name} sampled a padded vocabulary id in slots {over}; vocab_size={vocab_size}"
+        greedy_mismatch = [
+            slot for slot in range(GALAXY_PHYSICAL_BATCH) if int(results["greedy"][slot]) != int(expected[slot])
+        ]
+        assert not greedy_mismatch, f"device greedy disagreed with the host argmax in slots {greedy_mismatch}"
+        cold_mismatch = [
+            slot for slot in range(GALAXY_PHYSICAL_BATCH) if int(results["cold"][slot]) != int(expected[slot])
+        ]
+        assert not cold_mismatch, (
+            f"at T=0.02 the device sampled off-argmax in slots {cold_mismatch}; a reciprocal-temperature "
+            "inversion (defect D4) is the first thing to check"
+        )
+        assert (
+            repeats == GALAXY_PHYSICAL_BATCH
+        ), f"the same seed in the same slot did not repeat: only {repeats}/32 slots matched"
+        for slot in greedy_slots:
+            assert int(results["heterogeneous"][slot]) == int(
+                expected[slot]
+            ), f"per-slot controls: slot {slot} was configured greedy and did not take the host argmax"
+    finally:
+        _close(handle)
