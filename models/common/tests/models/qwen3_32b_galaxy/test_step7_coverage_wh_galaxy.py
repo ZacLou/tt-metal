@@ -1217,6 +1217,32 @@ def test_qwen_device_sampling_claims_with_an_explicit_token_composition(mesh_dev
             positions = [128] * GALAXY_PHYSICAL_BATCH
             expected = torch.argmax(runner.decode_logits(tokens, positions)[:, :vocab_size], dim=-1)
 
+            def topology_note(label, tensor):
+                """Print the labels the auto-composer would infer.
+
+                This is the fact D-C9 turns on and no log carries it yet.
+                `to_torch_auto_compose` reads `tensor_topology()`, and
+                `auto_compose._compose_nd_sharded` maps a `PlacementShard` to a
+                concatenation on its `dim` and a `PlacementReplicate` to
+                `shape_override=1` - i.e. skipped. So a *correctly* labelled
+                tensor composes correctly, and the 8-users-repeated-4x reading
+                means the labels name the wrong axis as the replicated one: the
+                composer concatenates the eight identical copies and drops the
+                four distinct column slices. Printing the placements turns that
+                from inference into measurement.
+                """
+
+                try:
+                    topology = tensor.tensor_topology()
+                    print(
+                        f"[dc9] topology of {label}: placements={topology.placements()} "
+                        f"distribution_shape={list(topology.distribution_shape())} "
+                        f"shape={tuple(tensor.shape)}",
+                        flush=True,
+                    )
+                except Exception as error:  # noqa: BLE001 - diagnostic only
+                    print(f"[dc9] topology of {label} unavailable: {type(error).__name__}: {error}", flush=True)
+
             def compose_by_distribution(sampled):
                 """Mesh row 0's copy, the four columns concatenated on the user axis."""
 
@@ -1253,6 +1279,9 @@ def test_qwen_device_sampling_claims_with_an_explicit_token_composition(mesh_dev
                     sampled = handle.model.sample_decode(
                         relocated, slot_ids=list(range(GALAXY_PHYSICAL_BATCH)), **kwargs
                     )
+                    if label == "greedy":
+                        topology_note("the relocated decode logits", relocated)
+                        topology_note("the sampled tokens", sampled)
                     auto = to_torch_auto_compose(sampled).reshape(-1)[:GALAXY_PHYSICAL_BATCH].to(torch.int64)
                     explicit = compose_by_distribution(sampled)
                 finally:
