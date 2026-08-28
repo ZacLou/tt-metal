@@ -16,9 +16,13 @@ mistake here.
 
 ## Inputs
 
-- `tttv2_milestone_b_briefs/job3_completion_handoff.md` — start here. If it does not exist, report
-  `BLOCKED (mb-coverage did not complete)` and write the status page from whatever evidence does
-  exist, clearly marked as partial.
+- `tttv2_milestone_b_briefs/job3_completion_handoff*.md` — start here, at the **newest** one. That
+  name is a family, not a file: the un-suffixed document belongs to attempt 1 and each later attempt
+  writes `_attempt<k>.md` beside it without overwriting what came before. Resolve it by scanning, never
+  by fixed name — attempt 1's asserts a dead mesh and an untested D-B9, both false since. Where two
+  disagree the newest wins; it was written last, by an author who had the older ones in hand. If none
+  exists, report `BLOCKED (mb-coverage did not complete)` and write the status page from whatever
+  evidence does exist, clearly marked as partial.
 - `tttv2_milestone_b_evidence/{reconcile,llama,qwen,coverage}/REPORT.md` and their raw logs.
 - `tttv2_2d_modules_milestone_b_work_log.md`, all checkpoints.
 - `tttv2_2d_modules_plan.md` — "Milestone B exit gate" and "Modularity scorecard".
@@ -68,6 +72,24 @@ python -m pytest -q models/common/tests/modules models/common/tests/models \
 
 ## Deliverables
 
+### Before you start: two of your deliverables were deliberately deleted
+
+**`models/common/models/MILESTONE_B_STATUS.md` and `tttv2_milestone_c_brief.md` do not exist, and
+their absence is intentional. Write them fresh. Do not `git checkout` the old ones back.**
+
+A signoff pass already ran once, on 2026-08-27, and committed both at `6a3e78a7227`. It was working
+from a dead mesh — 21 of 32 boards on the bus, `ttnn` unable to open a cluster at all — and its
+verdict reflects that: *no numerical result of any kind has ever been produced on silicon for either
+model*, 4 of 9 gate lines `NOT REACHED`, 33 committed device tests never executed. **Every one of
+those claims is now false.** The mesh came back, `mb-llama` and `mb-qwen` both declared their finish
+conditions met, and `mb-coverage` measured 8 of the 9 lines as passing, including both accuracy
+gates. The two documents were deleted at `6983cc52e33` rather than edited, because a missing file
+fails loudly where a stale one is believed.
+
+The verdict may well still be **NOT PASSED** — line 9 fails, and areas 2 and 4 are blocked by real
+defects. But the *reason* has inverted, from "this milestone was not allowed to be measured" to "this
+milestone was measured and these specific defects hold the gate". Say which one you are recording.
+
 ### 1. `models/common/models/MILESTONE_B_STATUS.md`
 
 Modelled on `models/common/modules/MILESTONE_A_STATUS.md`, and honest in the same way. It needs:
@@ -105,6 +127,15 @@ held, show it. If they did not, say so — that is a finding, not a failure of t
   the L3 verdict from `mb-llama`, and any Milestone A limitation Milestone B resolved or proved
   worse. Surgical edits, not a rewrite — it is the signed-off Milestone A record, and you are
   appending to it rather than restructuring it.
+
+  **But re-check what is already there before you append.** The 2026-08-27 signoff pass
+  (`6a3e78a7227`) already made **+79 lines** of edits to this file and **+24** to
+  `modules/README.md`, from the same dead-mesh evidence that produced the two deleted documents. Its
+  L3 verdict in particular was written before first silicon settled the question. Run
+  `git show 6a3e78a7227 -- models/common/modules/MILESTONE_A_STATUS.md models/common/modules/README.md`
+  and check each claim it added against `tttv2_milestone_b_evidence/llama/REPORT.md` and
+  `.../coverage/REPORT.md` §A3. Correct what silicon has since contradicted; leave the rest. **Do not
+  append a second layer on top of a stale one** — that is how a status page stops being readable.
 - A final checkpoint in `tttv2_2d_modules_milestone_b_work_log.md`.
 
 ### 3. `tttv2_milestone_c_brief.md`
@@ -118,6 +149,19 @@ carry:
   **D-A** (physical-32 real-device trace, which needs a model-owned executor and so genuinely could
   not be done before now), and the **Galaxy CCL / `tt_ccl.py` merge evaluation** the plan defers until
   both models pass;
+- **the four defects the deleted brief never knew about**, each with its evidence: **D-C5** and
+  **D-C8** (device sampling is blocked two defects deep, both in shared Galaxy code, D-C8 qualified at
+  three fresh processes on both models), **D-C7** (a closed model does not return its L1 — one model
+  per process), and **D-C6 escalated** (concat-32 does not fit in L1 at any supported length, for
+  either model, at byte-identical figures — it is the shared recipe, not per-model tuning, and it is
+  a prerequisite for area-2 coverage rather than a finding that coverage produced);
+- **a provenance warning naming the documents in this tree that carry dead-mesh evidence.** Milestone
+  C's agent will read whatever it is pointed at and plan from it. Say plainly which pages were written
+  before first silicon and have not been re-checked — at minimum the `6a3e78a7227` edits to
+  `models/common/modules/{MILESTONE_A_STATUS.md,README.md}`, and any of it you did not correct under
+  deliverable 2 — so the next job knows which of its inputs to verify against a log before trusting.
+  This is the same failure mode that cost `mb-coverage` attempt 3 an hour of archaeology: a brief
+  written before the attempt that superseded it;
 - the performance-methodology requirements Milestone C will be measured against, so it can set up
   paired TTTv1/TTTv2 measurement from the start rather than retrofitting it: same host, same commit
   and firmware, same checkpoint, precision recipe, prompt corpus, batch, sequence, trace, sampling and
