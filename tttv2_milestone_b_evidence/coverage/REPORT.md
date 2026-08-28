@@ -2382,6 +2382,9 @@ Supporting host gates at this tree, neither of which is one of the nine lines:
 | --- | --- | --- |
 | the brief's host regression command, 2D modules + galaxy + Llama host suite | **553 passed, 0 failed**, 0 device opens | `logs3/a4_h2_host_gate.log` |
 | the same command's third directory, `models/common/tests/llm_runtime` | **1032 passed, 1 skipped, 0 failed**, 0 device opens | `logs3/a4_h3_llm_runtime_host_gate.log` |
+| **all three directories in one process**, only real-device files ignored — the widest host sweep any attempt has run | **5 failed, 2096 passed, 2052 skipped, 34 errors in 775.34s.** The 5 failures are the same five files as the 1D contract gate; all 34 errors are `modules/moe/test_tt_moe_decode.py` failing to open the broken mesh | `logs3/a4_h6_full_host_regression.log` |
+| the `top_k > 32` prohibition, re-audited over both step-7 files including attempt 4's new cases | **respected**: max `top_k` literal anywhere is **32**, and neither file references `max_top_k` | `logs3/a4_h5_contract_audit.log` |
+| **the D-C9 mechanism, on host, with no mesh** | **8 passed × 3 fresh processes**, 0 device opens | `logs3/a4_h7_token_composition{,_run2,_run3}.log` |
 
 **The two accuracy rows are the ones to read carefully.** The brief asks for them
 to be re-measured at this tree rather than quoted, and attempt 4 queued exactly
