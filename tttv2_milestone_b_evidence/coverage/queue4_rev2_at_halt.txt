@@ -1,41 +1,57 @@
-# mb-coverage ATTEMPT 4 queue, revision 3, rewritten 18:45Z after the mesh went
-# down. The runner was stopped when this was written, so there is no race.
+# mb-coverage ATTEMPT 4 queue, revision 1, written 2026-08-28 18:2xZ at commit
+# 110ba1f0658. Consumed destructively by cov_queue4.sh: the first non-comment
+# line is popped and the file rewritten, so what remains here has never run.
 #
-# WHAT HAPPENED: the wrapper's glx_reset after a4_q_dc8_run2 printed
-# "Error: POST_RESET failed for device 21", and the next three runs errored at
-# setup with "Read 0xffffffff over PCIe ID 21". The recovery attempts are logged
-# in logs4/recovery*.log. Details in REPORT.md section A4.
-#
-# The three runs that died on that fault are re-queued here under *_retry names,
-# so the failed logs are kept and not overwritten.
-#
-# WHY THIS ORDER: the night is shorter than it was and the mesh may not be
-# reliable, so value per run is now the only criterion.
-#  1. a4_q_dc9_explicit is the first case that can measure area 4's ARITHMETIC:
-#     it composes the sampled tokens by their distribution instead of by their
-#     topology labels, which is what D-C9 is about. 3 minutes on a healthy mesh.
-#     It goes first, ahead of even the gate re-measurements.
-#  2. then the four claims that have zero device runs on either model.
-#  3. then the two gate headline numbers.
-#  4. then revision 2's order, unchanged.
 # format: deadline|pytimeout|logname|nodeid|extra
-1800|1500|a4_q_dc9_explicit|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_device_sampling_claims_with_an_explicit_token_composition[wormhole_b0-8x4-device_params0]|
-1800|1500|a4_q_dc9_bisect_retry|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_the_selected_column_users_are_the_users_they_claim[wormhole_b0-8x4-device_params0]|
+#
+# Priority reasoning (attempt 4). Attempt 3 left two distinct kinds of gap and
+# only one of them is worth a Galaxy night:
+#
+#  (a) NEVER RUN AT ALL. Three brief-named area-4 claims (padded vocabulary,
+#      D4's reciprocal temperature, seeded slot stability) and one brief-named
+#      repeat-and-cleanup claim (two model constructions in one process, Llama)
+#      have zero device runs on either model. "All five areas attempted and
+#      recorded" is not true until they have one each. THESE GO FIRST.
+#  (b) OBSERVED, NOT QUALIFIED. Most Llama step-7 claims have exactly one run
+#      and the house rule is three fresh processes. A pass at one process has
+#      proved nothing on this hardware.
+#
+# Deliberately NOT re-run: the concat-32 ladder (D-C6 is byte-identical at four
+# lengths on both models) and the D-C5/D-C8 diagnostics (3/3 on both models).
+# ---- (a) never-run claims, cheapest model first ----
+# ---- inserted 18:28Z by attempt 4: the D-C8 test-boundary diagnostic (commit
+# aff4e95dbf6). Qwen first because it is the cheap probe: if the prefill
+# sub-device manager really does make the selector matmul legal, this is the
+# first device measurement area 4 has ever had, and the Llama twin plus two
+# more fresh processes follow. If it aborts, it costs 3 minutes. ----
+# ---- inserted 18:29Z. models/common/tests/models/galaxy/test_column_user_selector_wh_galaxy.py
+# says of itself "This file has never been executed", and logs2/ agrees - no
+# attempt has a log for it. It is the focused hardware qualification of the
+# EXACT component both D-C5 and D-C8 live in, it needs no checkpoint and no
+# weights, and it stages its input as interleaved DRAM with no sub-device
+# manager loaded - so it isolates the selector's arithmetic from both
+# defects. Three fresh processes, because it is two minutes a run. ----
+# ---- inserted 18:31Z. a4_q_dc8 got PAST both D-C5 and D-C8 and then failed a
+# CLAIM: greedy agreed with the host argmax in 7/32 slots and the 32 tokens are
+# one column's eight repeated four times (new finding D-C9). Two more fresh
+# processes for it, and the Llama twin, because a 7/32 disagreement is exactly
+# the kind of result this project does not trust at one run. ----
+# ---- inserted 18:37Z: the D-C9 bisection (commit 54b9fadb3ff). One run says
+# whether D-C9 is at/before the selector or inside Sampling2D, in 3 minutes. ----
 1800|1500|a4_q_temperature|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_near_zero_temperature_collapses_onto_the_host_argmax[wormhole_b0-8x4-device_params0]|
 1800|1500|a4_q_seeded|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_seeded_slot_repeats_across_runs[wormhole_b0-8x4-device_params0]|
 2400|2100|a4_l_two_models|models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_two_models_in_one_process[wormhole_b0-8x4-device_params0]|
+# ---- the two gate headline numbers, re-measured at HEAD in a fresh process ----
 2700|2400|a4_l_tf|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_teacher_forced_accuracy_batch1[wormhole_b0-8x4-device_params0]|
 2700|2400|a4_q_tf|models/common/tests/models/qwen3_32b_galaxy/test_full_model_wh_galaxy.py::test_qwen3_32b_galaxy_teacher_forced_accuracy_batch1[wormhole_b0-8x4-device_params0]|
-1800|1500|a4_q_dc9_explicit_run2|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_device_sampling_claims_with_an_explicit_token_composition[wormhole_b0-8x4-device_params0]|
-1800|1500|a4_q_dc9_explicit_run3|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_device_sampling_claims_with_an_explicit_token_composition[wormhole_b0-8x4-device_params0]|
+# ---- (a) continued: the two stochastic padded-vocabulary policies, Qwen ----
 1800|1500|a4_q_padded_t05|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_no_padded_vocabulary_id_is_ever_sampled[wormhole_b0-t0.5-8x4-device_params0]|
 1800|1500|a4_q_padded_t15|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_no_padded_vocabulary_id_is_ever_sampled[wormhole_b0-t1.5-8x4-device_params0]|
+# ---- (a) continued: the Llama half of the never-run area-4 claims ----
 2400|2100|a4_l_padded_greedy|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_no_padded_vocabulary_id_is_ever_sampled[wormhole_b0-greedy-8x4-device_params0]|
 2400|2100|a4_l_temperature|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_near_zero_temperature_collapses_onto_the_host_argmax[wormhole_b0-8x4-device_params0]|
 2400|2100|a4_l_seeded|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs[wormhole_b0-8x4-device_params0]|
-1800|1500|a4_q_dc8_run3_retry|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_device_sampling_claims_behind_dc5_and_dc8[wormhole_b0-8x4-device_params0]|
-2400|2100|a4_l_dc8_retry|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_device_sampling_claims_behind_dc5_and_dc8[wormhole_b0-8x4-device_params0]|
-# ---- revision 2's order resumes here ----
+# ---- (b) third fresh process for the seven Qwen step-7 claims that pass at two ----
 1800|1500|a4_q_late_capacity_run3|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_paged_capacity_resolved_after_construction_serves_a_request[wormhole_b0-8x4-device_params0]|
 1800|1500|a4_q_cross_slot_run3|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_write_for_one_user_never_appears_in_another_users_blocks[wormhole_b0-8x4-device_params0]|
 1800|1500|a4_q_chunked_run3|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_chunked_prefill_matches_a_single_uncached_prefill[wormhole_b0-8x4-device_params0]|
@@ -43,14 +59,26 @@
 1800|1500|a4_q_mixed_slots_run3|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_prefix_cached_and_plain_requests_mixed_across_slots[wormhole_b0-8x4-device_params0]|
 1800|1500|a4_q_concat_len128_run3|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len128-8x4-device_params0]|
 1800|1500|a4_q_concat_active32_run3|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active32-8x4-device_params0]|
+# ---- (b) second fresh process for the three Llama step-7 claims that PASS at one.
+# A pass at one process is the case this project has been burned by; these three
+# matter more than any second run of a deterministic failure. ----
 2400|2100|a4_l_late_capacity_run2|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_paged_capacity_resolved_after_construction_serves_a_request[wormhole_b0-8x4-device_params0]|
 2400|2100|a4_l_prefix_then_plain_run2|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_prefix_cached_request_then_a_normal_one[wormhole_b0-8x4-device_params0]|
 2400|2100|a4_l_mixed_slots_run2|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_prefix_cached_and_plain_requests_mixed_across_slots[wormhole_b0-8x4-device_params0]|
 2400|2100|a4_l_late_capacity_run3|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_paged_capacity_resolved_after_construction_serves_a_request[wormhole_b0-8x4-device_params0]|
 2400|2100|a4_l_prefix_then_plain_run3|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_prefix_cached_request_then_a_normal_one[wormhole_b0-8x4-device_params0]|
 2400|2100|a4_l_mixed_slots_run3|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_prefix_cached_and_plain_requests_mixed_across_slots[wormhole_b0-8x4-device_params0]|
+# ================= revision 2, appended 18:38Z =================
+# Everything above is (a) never-measured or (b) a passing claim at fewer than
+# three processes. What follows is the next tier down, in value order.
+#
+# D-C7 first, and it is not a formality: "a closed model does not return its L1"
+# is one of the three findings this job hands Milestone C, and it rests on ONE
+# observation (a3_q_two_pools, 571s). Two more fresh processes.
 2400|2100|a4_q_two_pools_run2|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable[wormhole_b0-8x4-device_params0]|
 2400|2100|a4_q_two_pools_run3|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable[wormhole_b0-8x4-device_params0]|
+# The exit-gate lines that had exactly one process. These are re-measurements at
+# this tree in the brief's own sense, not quotations.
 2400|2100|a4_l_prefix|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_prefix_cached_prefill_matches_uncached[wormhole_b0-8x4-device_params0]|
 1800|1500|a4_q_prefix|models/common/tests/models/qwen3_32b_galaxy/test_full_model_wh_galaxy.py::test_qwen3_32b_galaxy_prefix_cached_prefill_matches_uncached[wormhole_b0-8x4-device_params0]|
 1800|1500|a4_q_demo32|models/common/models/qwen3_32b_galaxy/demo.py::test_qwen3_32b_galaxy_direct_demo_batch32_has_no_cross_slot_contamination[wormhole_b0-8x4-device_params0]|
@@ -61,14 +89,24 @@
 2400|2100|a4_l_smoke4k|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_long_context_smoke[wormhole_b0-4k-8x4-device_params0]|
 2700|2400|a4_l_smoke32k|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_long_context_smoke[wormhole_b0-32k-8x4-device_params0]|
 3000|2700|a4_l_smoke128k|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_long_context_smoke[wormhole_b0-128k-8x4-device_params0]|
+# Second processes for the one-run Llama failures. All three are the L1 address
+# clash, which is already 3/3 on the repeat shape; these ask whether it is also
+# deterministic on the shapes it newly blocked in §A3.
 2400|2100|a4_l_two_pools_run2|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable[wormhole_b0-8x4-device_params0]|
 2400|2100|a4_l_cross_slot_run2|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_write_for_one_user_never_appears_in_another_users_blocks[wormhole_b0-8x4-device_params0]|
 2400|2100|a4_l_chunked_run2|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_chunked_prefill_matches_a_single_uncached_prefill[wormhole_b0-8x4-device_params0]|
 2400|2100|a4_l_batch32_slots|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_batch32_slots_are_isolated[wormhole_b0-8x4-device_params0]|
+# Second processes for the one-run D-C5 reproductions, so that the defect is
+# qualified on the step-7 entry point and not only on the dc5/dc8 diagnostics.
 1800|1500|a4_q_greedy_run2|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_device_greedy_sampling_equals_host_argmax[wormhole_b0-8x4-device_params0]|
 1800|1500|a4_q_heterogeneous_run2|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_per_slot_heterogeneous_sampling_controls[wormhole_b0-8x4-device_params0]|
 2400|2100|a4_l_padded_t15|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_no_padded_vocabulary_id_is_ever_sampled[wormhole_b0-t1.5-8x4-device_params0]|
 1800|1500|a4_q_concat_len256_run2|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len256-8x4-device_params0]|
 1800|1500|a4_q_concat_active16_run2|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active16-8x4-device_params0]|
 1800|1500|a4_q_concat_active31_run2|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active31-8x4-device_params0]|
+# Informational tail, exactly as attempt 3 scoped it: the part of the brief's
+# regression command that needs the mesh. The 1D module *device* suites are not
+# one of the nine gate lines and a failure here on an (8, 4) mesh is as likely to
+# be an arch mismatch as a regression, so it is reported as informational either
+# way, and it runs only if the night has room.
 1800|1500|a4_1d_module_device_suites|models/common/tests/modules/rope/test_rope_1d.py|models/common/tests/modules/rmsnorm/test_rmsnorm_1d.py models/common/tests/modules/embedding/test_embedding_1d.py

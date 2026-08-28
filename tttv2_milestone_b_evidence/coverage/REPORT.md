@@ -2300,3 +2300,383 @@ qualified at three fresh processes. **The genuinely unmeasured work is the
 repeat tail**: most Llama claims have exactly one run, so they are *observed, not
 qualified*, and the brief's three-fresh-processes rule is unsatisfied for them.
 That, and the two defects, is where a Milestone C night pays.
+
+
+# §A4 — attempt 4, the qualification pass
+
+**Written by the attempt-4 agent, on 2026-08-28 from 18:07Z.** Attempt 3's
+account (§A3) and the operator addendum (§A3-op) are above and are not amended
+here: everything they record was re-verified against the tree and the logs
+before this attempt planned a single run, and every claim in them held.
+
+## What this attempt inherited, and what it did about it
+
+The job was **not** in the state a naive reading of "five areas attempted" would
+suggest, and it was also not in the state attempt 1 described. Three things were
+established from the tree and the machine-written logs, not from the handoffs:
+
+1. **The mesh is alive and free.** `ls /dev/tenstorrent | wc -l` is 32 at
+   18:07Z, no pytest holds a device, and the `ttmb` screen session at 18:06:16Z
+   is this attempt's own driver. Attempt 3's queue (`cov_queue.sh`) is not
+   running and `queue.halt` is in place beside a `queue.txt` with 28 unconsumed
+   items.
+2. **Every attempt-3 measurement applies at HEAD.** `git diff --name-only
+   b361770f46b..HEAD` (the commit all 38 post-agent queue runs are stamped with)
+   touches **no implementation file at all** — one status `.md` under `models/`
+   and thirteen evidence/brief files. Widening the window to attempt 2's gate
+   commit, `git diff --name-only 1451b192584..HEAD -- models/` returns exactly
+   three paths: `models/common/models/MILESTONE_B_STATUS.md` and the two
+   `test_step7_coverage_wh_galaxy.py` files. Neither of those two test files is
+   imported by `test_full_model_wh_galaxy.py` or by either `demo.py`, so the nine
+   exit-gate rows are measurements of byte-identical implementation code.
+3. **Two specific holes, and only one of them was worth a Galaxy night.**
+
+   * **Never run at all.** `a3_{q,l}_padded_greedy`, `_temperature` and
+     `_seeded` had **zero** device runs — the log directory is the proof, not the
+     queue file: `logs2/` contains no file with any of those stems. Those are
+     three of the four claims the brief's area 4 names, plus
+     `test_two_models_in_one_process` on Llama, which is
+     repeat-and-cleanup's second bullet. "All five areas attempted and recorded"
+     was not yet true.
+   * **Observed, not qualified.** Most Llama step-7 claims had exactly one fresh
+     process. The house rule is three, and the reason is not pedantry: three of
+     Milestone A's four defects presented as intermittent *passes*.
+
+   What attempt 4 deliberately did **not** re-run: the concat-32 ladder (D-C6 is
+   byte-identical at four lengths on both models) and the D-C5/D-C8 diagnostics
+   (already 3/3 on both models). Re-confirming a deterministic abort is the one
+   way to waste this hardware.
+
+## Where to read what
+
+| file | what |
+| --- | --- |
+| `RESULTS_A4.md` | one row per run, written as it finished, with the log name |
+| `VERDICTS_A4.txt` | machine-written: exit code, pytest summary, first assertion and the test's own marker lines, `grep`-ed out of each log by `cov_verdict4.sh` |
+| `logs4/` | every attempt-4 device log, its reset log, and the five recovery logs |
+| `logs3/a4_h*.log` | the four host gates re-measured at this tree |
+| `queue4.txt` | the resume point. Consumed destructively, so what is in it has never run |
+| `ENVIRONMENT.md` | the attempt-4 section at the end |
+
+## The Milestone B exit gate at this tree, §A4
+
+Every row below has a log in `logs3/` or `logs4/` (attempt 4) or in `logs2/`
+(attempts 2-3, at a commit whose implementation code is byte-identical to HEAD —
+established in §A4 point 2, not assumed). Nothing here is quoted from a handoff.
+
+| Gate line | Verdict | Measured | Command / log |
+| --- | --- | --- | --- |
+| Llama teacher-forced, batch 1, prefill 512 / decode 511: top-1 ≥ 91%, top-5 ≥ 99% | **PASS** | top-1 501/511 = **98.04%**, top-5 511/511 = **100.00%** | `logs2/a2_g1_llama_tf.log`, 1029.52s. A fresh re-measurement at HEAD was queued as `a4_l_tf` and **did not run** — see §A4's infra section |
+| Qwen teacher-forced, batch 1, sequence 512: top-1 ≥ 89%, top-5 ≥ 97% | **PASS** | top-1 498/511 = **97.46%**, top-5 511/511 = **100.00%** | `logs2/a2_g12_qwen_tf.log`, 915.10s. `a4_q_tf` queued, did not run |
+| Batch-32 direct demos valid, no cross-slot contamination | **PASS**, both models | Qwen `logs2/a2_g21_qwen_demo_batch32.log` 153.47s; Llama `logs2/a2_g9_llama_demo_batch32.log` 277.69s | `models/common/models/*_galaxy/demo.py::..._direct_demo_batch32_has_no_cross_slot_contamination` |
+| Batch-1 4K / 32K / 128K functional smokes | **PASS**, both models, all three geometries | Qwen 117.91s / 136.29s / 245.76s; Llama 357.81s / 641.17s / 721.70s | `logs2/a2_g{3,4,5}`, `a2_g{14,15,16}` |
+| Prefix-cached output matches uncached execution | **PASS**, both models | Llama 424.35s, Qwen 158.58s | `logs2/a2_g2_llama_prefix.log`, `a2_g13_qwen_prefix.log` |
+| No dependency imports from a model-named implementation package | **PASS for Milestone B**; the pre-existing exception is now a class, not a single case | Milestone B's seven directories: `models.demos` = 0, non-galaxy model package = 0, each. Wider sweep over `models/common/tests`: **24** pre-existing `models.demos` imports, 23 of them `models.demos.utils.*`, none in a file changed since the job-0 base | `logs3/a4_h4_boundary_and_import_gates.log` |
+| Zero changes to 1D module implementation files | **PASS** | 0 of **410** changed paths match `_1d\.py` | `git diff --name-only bc6ad03bfc2..HEAD \| grep '_1d\.py'` |
+| Zero changes to `llm_runtime` | **PASS** | 0 of 410 | same log |
+| Existing 1D model contract and demo-contract host tests green, expectations unchanged | **FAIL**, 5 of 301 — and not owned by Milestone B | **5 failed, 296 passed in 89.32s** at `aff4e95dbf6`; the same five node ids at a **fourth** distinct commit. No expectation was edited. §A3 H5 checked all five owning packages against `bc6ad03bfc2..HEAD`: 0 each | `logs3/a4_h1_1d_contract_gate.log` |
+
+Supporting host gates at this tree, neither of which is one of the nine lines:
+
+| Gate | Result | Log |
+| --- | --- | --- |
+| the brief's host regression command, 2D modules + galaxy + Llama host suite | **553 passed, 0 failed**, 0 device opens | `logs3/a4_h2_host_gate.log` |
+| the same command's third directory, `models/common/tests/llm_runtime` | **1032 passed, 1 skipped, 0 failed**, 0 device opens | `logs3/a4_h3_llm_runtime_host_gate.log` |
+
+**The two accuracy rows are the ones to read carefully.** The brief asks for them
+to be re-measured at this tree rather than quoted, and attempt 4 queued exactly
+that (`a4_l_tf`, `a4_q_tf`, positions 6 and 7 of revision 3's queue). They did not
+run, because the mesh stopped answering at 18:37Z. What is on disk instead is the
+argument that they need no re-measurement: `git diff --name-only 1451b192584..HEAD
+-- models/` — from the commit both logs are stamped with, to HEAD — returns three
+paths, one status `.md` and the two `test_step7_coverage_wh_galaxy.py` files, and
+neither test file is imported by `test_full_model_wh_galaxy.py` or by either
+`demo.py`. That is a strong argument and it is **not** a measurement. It is
+recorded here as an argument.
+
+## Method, §A4
+
+Identical harness to §A3, one file deeper. `cov_queue4.sh` is `cov_queue.sh`
+with `queue4.txt` / `logs4/` / `cov_run4.sh` substituted; `cov_run4.sh` is
+`cov_run3.sh` with `logs2` → `logs4`; both were produced by `sed` from the
+attempt-3 originals and the diff was verified to be exactly those substitutions,
+so the run procedure — one pytest at a time, never piped, its own deadline, a
+`tt-smi -glx_reset` after any non-clean exit, a log per run that is never
+overwritten — is the same procedure attempt 3 qualified.
+
+`TTTV2_GALAXY_CCL_TRACE` is **0** for every attempt-4 run, as it was for every
+attempt-3 queue run: the trace synchronizes after each LM-head collective and
+that is a real wall-clock cost on a 511-step decode (D-B19).
+
+Two things attempt 4 did differently, both deliberate:
+
+* **Nothing in the queue is a second run of a deterministic abort.** Ordering is
+  by *what has never been measured*, then by *what has been measured once and
+  passed*. A pass at one process is the dangerous case on this hardware; a
+  byte-identical `TT_FATAL` at two or three is not.
+* **Runs are slower than §A3's numbers predicted, and the reason is host, not
+  device.** `a4_q_padded_greedy` spent 423s where `a3_q_greedy` spent 149s for
+  the same 32 prefills and the same abort. The difference is the page cache: the
+  weight `.tensorbin` set had not been read for five hours. Later runs of the
+  same model in the same night come back down. Nothing was re-planned around
+  this beyond widening the deadlines already in `queue4.txt`.
+
+## The five areas after attempt 4
+
+**This table is §A3's table plus attempt 4's deltas, and only the deltas are
+attempt 4's work.** Where a cell is unchanged from §A3 it says so; the logs
+behind the unchanged cells are in `RESULTS_A3.md`, not repeated here.
+
+| Area | Llama | Qwen | attempt 4's delta |
+| --- | --- | --- | --- |
+| 1 paged KV | as §A3: **PASS** two-pool PCC (cross-process) and late capacity; **BLOCKED** on block-level cross-slot and one-process two-pool by the L1 address clash | as §A3: **PASS** two-pool PCC, late capacity, block-level cross-slot; **FAIL** two pools in one process (D-C7) | none. Queued (`a4_q_two_pools_run2/run3`, `a4_l_*_run2`), did not run |
+| 2 concat-32 | as §A3: **FAIL, every case, D-C6** | as §A3: **FAIL, every case, D-C6** | none. Deliberately not re-run: D-C6 is byte-identical at four lengths on both models |
+| 3 prefix / chunked | as §A3: **PASS** prefix-vs-uncached, prefix-then-plain, mixed batch, each at **one** process; **BLOCKED** on chunked | as §A3: **PASS** all four claims at two processes each | none. The third-process tail was queued and did not run |
+| 4 device sampling | still **BLOCKED** in production shape by D-C5 then D-C8; the Llama half of the new measurements did not run | **the area changed**: three of its four brief-named claims now have device measurements for the first time, all from behind D-C5 and D-C8 | see below |
+| 5 long context | as §A3: **PASS** 4K/32K/128K | as §A3: **PASS** 4K/32K/128K | none |
+| repeat & cleanup | as §A3: repeated requests **FAIL 3/3** (L1 address clash, deterministic); **two model constructions in one process: still never run** | as §A3: repeated requests **PASS 3/3**; two models in one process **FAIL** (D-C7, one observation) | none — `a4_l_two_models`, the one brief-named claim in this row with zero runs, was position 5 in revision 3's queue and did not run |
+
+### Area 4, in detail, because this is where attempt 4 moved
+
+| Brief claim | Before attempt 4 | After |
+| --- | --- | --- |
+| greedy matches the host argmax exactly | never measured on either model; `TT_FATAL` at D-C5 | **measured, and it does not**: 7/32 slots on Qwen, twice, byte-identically — **but the disagreement is D-C9, a readback defect, not the sampler**. Not a verdict on the claim |
+| padded-vocabulary entries can never be sampled | never measured; `a4_q_padded_greedy` re-confirmed the D-C5 abort at 423s | **measured and PASSING on Qwen**: `padded ids sampled in slots []` under **six** policies (greedy, T=0.02, T=2.0, two seeded passes, per-slot heterogeneous), vocab_size 151936, two fresh processes. Llama: not run |
+| deterministic seeded requests stay slot-stable (same seed, same slot, same token) | never measured | **measured and PASSING on Qwen**: `the same seed in the same slot repeated in 32/32 slots`, two fresh processes. The second sense — moving a request to another slot — remains D-C2, a product decision |
+| per-slot heterogeneous top-k / top-p / temperature | `TT_FATAL` at D-C5 | ran to completion; its assertion is subsumed by the greedy one and is therefore also D-C9-confounded |
+| D4's reciprocal temperature, verified on device | never measured | **still not cleanly measured.** `T=0.02` agreed with the host argmax in 7/32 and `T=2.0` in 6/32 — the same 7/32 the greedy case shows, which is the readback signature, not a temperature signature. `a4_q_temperature` and `a4_l_temperature`, the focused cases, have still never run |
+| `top_k > 32` | prohibited by the brief | **respected.** Maximum `top_k` anywhere in either step-7 file, including the three cases attempt 4 added: **32**. Nothing widens `GalaxySamplingPolicy`'s contract |
+
+## Findings, attempt 4
+
+### The selector is qualified, and it is not the defect — `test_column_user_selector_wh_galaxy.py`, 3/3
+
+`models/common/tests/models/galaxy/test_column_user_selector_wh_galaxy.py` opened
+with the sentence **"This file has never been executed."** That was true at
+18:29Z on 2026-08-28 and `logs2/` proves it: no attempt has a log with that stem.
+It is also the file the `GalaxyColumnUserSelector` docstring points at — *"That
+composition is the only unqualified step in the Milestone B device sampling path,
+so it is worth qualifying on its own — a failure here is a placement problem,
+whereas the same failure inside a 70B demo is a needle in a haystack."*
+
+It cost **49 seconds of mesh in total** — no checkpoint, no weights, a 256-wide
+synthetic tensor — and it passes at three fresh processes:
+
+| log | result |
+| --- | --- |
+| `logs4/a4_selector.log` | 2 passed in 31.32s |
+| `logs4/a4_selector_run2.log` | 2 passed in 8.66s |
+| `logs4/a4_selector_run3.log` | 2 passed in 8.89s |
+
+Both cases: column `c` receives exactly users `8c .. 8c + 7` in order, twice per
+run so the cached selector is exercised on re-entry, **and** selector-plus-
+`Sampling2D` reproduces a per-user argmax for all 32 users.
+
+That is the load-bearing negative result of the night. Everything area 4 has
+failed with — D-C5, D-C8, D-C9 — is *around* this composition, not in it.
+
+### D-C9 — **new**: the sampled-token readback composes the wrong mesh axis
+
+**What was measured.** `a4_q_dc8` and `a4_q_dc8_run2`, two fresh processes,
+byte-identical:
+
+```text
+[dc8] greedy tokens: [265, 2631, 1916, 220, 17, 15, 17, 17,
+                      265, 2631, 1916, 220, 17, 15, 17, 17,
+                      265, 2631, 1916, 220, 17, 15, 17, 17,
+                      265, 2631, 1916, 220, 17, 15, 17, 17]
+[dc8] greedy agrees with host argmax in 7/32 slots
+[dc8] the same seed in the same slot repeated in 32/32 slots
+[dc8] <every policy>: padded ids sampled in slots []
+```
+
+Thirty-two slots, eight distinct tokens, repeated four times — one mesh column's
+users standing in for all four. Slots 0-3 and 5-7 agree with the host argmax;
+slots 8-31 are copies of slots 0-7.
+
+**Root cause, and it is already written down in this repository.**
+`models/common/models/galaxy/collectives.py::compose_galaxy_logits` carries the
+full diagnosis for the *logits* tensor one op earlier in the same graph:
+
+> **`to_torch_auto_compose` cannot be used here, and gets it wrong silently.** It
+> infers a composer from the tensor's own `tensor_topology()`, and a matmul output
+> inherits its *activation's* topology, not its weight's. […] Auto-composing
+> therefore concatenates the four *columns* along the vocabulary axis and takes
+> one row […] **A caller that slices `[:, :vocab_size]` gets no error at all**,
+> just a truncated tensor of the wrong tokens.
+
+`models/common/auto_compose.py` says the same thing from the other side: *"For ND
+meshes with replicated dimensions, the composer will concatenate all replicas,
+resulting in duplicated data. Callers may want to slice the result if only one
+copy is desired."*
+
+`GalaxyDirectRunner._compose_rows` was fixed — it calls `compose_galaxy_logits`
+and validates the composed width. **`GalaxyDirectRunner.decode_sampled`, sixty
+lines further down the same file, still calls `to_torch_auto_compose(sampled)`
+and then `.reshape(-1)[:32]`** — the exact "slice and get no error" the
+docstring warns about. `ttnn.sampling`'s output inherits from `gathered_values`,
+an `all_gather` over the sampling axis, so it carries activation labels for a
+distribution it does not have: the eight devices of a mesh column hold identical
+tokens (they all-gathered the whole vocabulary between them) and the four columns
+hold different users. Concatenating the replicas first and taking the leading 32
+values yields exactly eight users repeated four times.
+
+**Where it bites.** `decode_sampled` is the single entry point every area-4 case
+uses, and the two sampling diagnostics (attempt 3's `dc5`, attempt 4's `dc8`)
+copied its composition. So the 7/32 number is a **readback** measurement, not a
+statement about `ttnn.sampling`.
+
+**What is *not* affected.** `decode_logits` — and therefore both teacher-forced
+accuracy numbers, the batch-32 slot-isolation tests and every PCC comparison in
+areas 1, 2, 3 and 5 — goes through `_compose_rows`, which is the fixed path. This
+finding does not touch the exit gate.
+
+**The fix, in one line, and it has precedent in the same file:** compose the
+sampled tokens by their distribution rather than their labels —
+`ttnn.ConcatMesh2dToTensor(dims=(0, <user axis>))` then mesh row 0, the mirror of
+`compose_galaxy_logits(dims=(3, 0))` with the axes swapped because there it is
+the rows that carry the vocabulary. Attempt 4 committed a test that does exactly
+this (`test_qwen_device_sampling_claims_with_an_explicit_token_composition`,
+commit `0e2c0dc50b4`) so that the arithmetic can be measured; it did **not**
+change `direct_runner.py`, for the reason in §A4's method note.
+
+### Why attempt 4 did not repair D-C5, D-C8 or D-C9
+
+Three defects at one call site, all three with a one-line shape of fix, and the
+job still did not apply them. That is a decision, not an omission:
+
+* **the exit gate's evidence would stop being evidence.** Nine gate rows rest on
+  the argument that implementation code is byte-identical to the tree they were
+  measured at (§A4, point 2). `direct_runner.py` is imported by
+  `test_full_model_wh_galaxy.py` and by both `demo.py` files; editing it
+  invalidates every row and costs a full re-measurement — around two and a half
+  hours of mesh — to end up where the job already is;
+* **the brief is explicit that this job measures.** "A `FAIL` with a diagnosis is
+  a complete result for this job. Milestone B's gate is a fact to be measured,
+  not a target to be reached by adjusting the measurement";
+* **D-C8's real fix is a design decision, not a line.** The selector accepts no
+  `program_config` and no core grid; giving it one means deciding whether the
+  Galaxy sampling path runs inside the decode worker sub-device (and if so, on
+  which of `worker_cores()`' cores) or whether decode's sub-device partition
+  should be widened. `recipes.rope_core_grids`' docstring already names this
+  defect class — *"a grid named independently of the partition that has to
+  contain it"* — and names `_subgrid_cores` as the qualified helper. That is
+  Milestone C's L1/ownership work, not a night's patch.
+
+## The mesh went down at 18:37Z, and what was done about it
+
+**This section exists because the night's plan changed here, and because the next
+attempt needs to know the state of the hardware, not just of the evidence.**
+
+### The sequence, from the machine-written logs
+
+| time (UTC) | what | log |
+| --- | --- | --- |
+| 18:35:20 | `a4_q_dc8_run2` exits `rc=1` (an `AssertionError`, no `TT_FATAL`); the wrapper resets as it does after any non-clean exit | `logs4/a4_q_dc8_run2.log` |
+| ~18:36:50 | the reset reaches `Issuing POST_RESET on 32 devices after IPMI reset` and prints **`Error: POST_RESET failed for device 21`**, `reset exit=1`. All 32 chips were found in `/dev/tenstorrent` before that step | `logs4/reset_a4_q_dc8_run2.log` |
+| 18:37:08 | `a4_q_dc9_bisect` errors **at setup** in 7.51s: `RuntimeError: Read 0xffffffff over PCIe ID 21: the board should be reset` (`ttnn/ttnn/distributed/distributed.py:631`) | `logs4/a4_q_dc9_bisect.log` |
+| 18:37:54 | `a4_q_dc8_run3` — same setup error, 7.41s | `logs4/a4_q_dc8_run3.log` |
+| 18:38:24 | **queue halted** (`queue4.halt`) | — |
+| 18:38:40 | `a4_l_dc8` — same setup error, 7.40s; the runner honours the halt and stops cleanly | `logs4/a4_l_dc8.log`, `logs4/queue4.out` |
+
+PCIe ID 21 is the board whose `POST_RESET` failed. This is the failure mode
+`cov_after_device_run.sh` was already commented for — *"which left a chip's ARC
+firmware half-initialised … and cost a full recovery cycle"* — except that this
+time the recovery cycle did not succeed.
+
+### Recovery attempts, all logged
+
+| # | command | result | log |
+| --- | --- | --- | --- |
+| 1 | `tt-smi -glx_reset` (900s cap) | fails **earlier** than the wrapper's did — at `Issuing USER_RESET`, with `[Errno 6] No such device or address: '/dev/tenstorrent/7'` | `logs4/recovery1_glx_reset.log` |
+| 2 | `tt-smi -glx_reset` again | identical failure | `logs4/recovery2_glx_reset.log` |
+| 3 | `tt-smi -glx_reset_auto` (the tool's own 3 internal retries) | `Trying reset (1/3)`, `(2/3)`, `(3/3)`, then `Failed on last reset...exiting with error code 1` — each attempt stops at `USER_RESET` on device 7 | `logs4/recovery3_glx_reset_auto.log` |
+| 4 | `tt-smi -glx_reset_tray 1` | refused: *"Galaxy 6U tray reset is no longer supported. Please use tt-smi -glx_reset to reset all chips or tt-smi -r."* | `logs4/recovery4_tray1.log` |
+| 5 | `tt-smi -r all` | see below | `logs4/recovery5_r_all.log` |
+
+### Two independent faults, not one
+
+* **device 21** reads `0xffffffff` — the symptom the ttnn error names, and the one
+  a reset is supposed to clear;
+* **device 7** cannot be *opened at all*. `os.open('/dev/tenstorrent/7', O_RDWR)`
+  raises `OSError [Errno 6] No such device or address` while 0, 21 and 31 open
+  fine. All 32 nodes are present in `/dev/tenstorrent`; the node existing and the
+  chip answering are different things, which is why `ls /dev/tenstorrent | wc -l`
+  is a necessary and **not** a sufficient mesh-health check.
+
+Device 7 is what makes this unrecoverable from inside the job: every `glx_reset`
+path enumerates all 32 chips at `USER_RESET` and aborts on the first `ENXIO`, so
+it never gets as far as the chip that actually needs the reset.
+
+### The kernel agrees, and says why
+
+`dmesg` (captured in `logs4/recovery_dmesg.log`):
+
+```text
+tenstorrent: Skipping message 00000011 due to FW not running.
+tenstorrent 0000:01:00.0: Device is unresponsive, cannot reset.
+tenstorrent: Skipping message 00000011 due to FW not running.
+```
+
+and, earlier in the same window, a kernel stack trace through
+`tt_hwmon_read+0x45/0xa0 [tenstorrent]`. Driver version 2.4.1. A chip whose
+firmware is not running, that the driver itself declines to reset, is not
+recoverable by any user-space command available to this job: it needs an IPMI
+power cycle of the tray or a host reboot, and both are outside what an unattended
+job may do to shared hardware without being asked.
+
+## What attempt 4 committed
+
+| commit | what |
+| --- | --- |
+| `aff4e95dbf6` | `test_{qwen,llama}_device_sampling_claims_behind_dc5_and_dc8` — area 4's whole claim set with **both** known program-construction faults removed at the test boundary, public model API only: the decode logits relocated to interleaved DRAM (D-C5) and the full-grid prefill sub-device manager loaded around the sampling call (D-C8). Plus `cov_run4.sh`, `cov_queue4.sh` and `queue4.txt` |
+| `54b9fadb3ff` | `test_qwen_the_selected_column_users_are_the_users_they_claim` — the D-C9 bisection: `select_decode_column_users` only, composed to host, each row's argmax against the host argmax of the same decode step, with the logits' placement printed |
+| `0e2c0dc50b4` | `test_qwen_device_sampling_claims_with_an_explicit_token_composition` — area 4's claims again, with the sampled tokens composed by the distribution (`ConcatMesh2dToTensor(dims=(0, user axis))` then mesh row 0) instead of by their topology labels, both compositions printed side by side in one log |
+
+No implementation file was touched. `git diff --name-only bc6ad03bfc2..HEAD` is
+410 paths, **0** matching `_1d\.py` and **0** matching `llm_runtime`, and the only
+non-test, non-evidence paths in it are the ones attempts 0-3 already owned.
+
+## What is short of the finish condition, precisely
+
+The brief's finish condition is: *all five areas attempted and recorded, the
+exit-gate table filled in with measured values rather than quoted ones, repeat
+and cleanup exercised, and the handoff written.* Four of those are met. **One is
+not**, and no `state/mb-coverage.finished` marker was written:
+
+1. **Five areas attempted and recorded — NOT fully met.** Area 4's focused
+   temperature case (D4's reciprocal, the one the brief singles out and warns
+   `T = 1.0` cannot test) and its focused seeded case have **never run on
+   Llama**, and the padded-vocabulary case has never run on Llama either.
+   `a4_l_padded_greedy`, `a4_l_temperature` and `a4_l_seeded` were positions
+   12-14 of revision 3's queue when the mesh stopped answering. Qwen's
+   `a4_q_temperature` and `a4_q_seeded` — positions 3 and 4 — did not run either;
+   what Qwen has instead is the same three claims measured inside the `dc8`
+   diagnostic, which is a real measurement of the claims but not the focused
+   case the brief describes, and its temperature reading is confounded by D-C9.
+2. **Repeat and cleanup — one bullet still never exercised.** The brief's second
+   bullet is *"repeated model construction and teardown in one process"*.
+   `test_two_models_in_one_process` (Llama) has **zero** device runs across all
+   four attempts. It was position 5 in revision 3's queue.
+3. **The exit-gate table is filled in and every row has a log**, but the two
+   accuracy rows are §A2 measurements defended by a byte-identity argument rather
+   than re-measured in a fresh process at HEAD. The brief asks for the
+   re-measurement; `a4_l_tf` and `a4_q_tf` were positions 6 and 7. This is a
+   weaker gap than 1 and 2 — the argument is checkable and is stated in full — but
+   it is a gap, and it is stated as one rather than papered over.
+4. **The three-fresh-processes rule** is still unsatisfied for most Llama step-7
+   claims: `a4_l_late_capacity`, `a4_l_prefix_then_plain` and `a4_l_mixed_slots`
+   remain at **one** passing process each. Their run-2 and run-3 were queued.
+
+`queue4.txt` is the resume point and is consumed destructively, so what is in it
+is exactly what has never run. **Do not rebuild it from gaps in this file**;
+reconcile against `logs4/queue4.out` and `VERDICTS_A4.txt`, both machine-written.
+
+## What Milestone C inherits from attempt 4, on top of §A3's list
+
+| ID | Needs | What |
+| --- | --- | --- |
+| **D-C9** | a fix in `direct_runner.py`, and it is a one-liner with precedent | `GalaxyDirectRunner.decode_sampled` composes the sampled tokens with `to_torch_auto_compose`, which follows topology labels rather than the distribution and therefore returns one mesh column's eight users four times over. `compose_galaxy_logits` in the same repo documents the identical trap for the logits tensor one op earlier, and `_compose_rows` was already fixed for it. **Fix D-C9 before anyone reads another device-sampling number**: every area-4 measurement taken through `decode_sampled` is a readback measurement until it is fixed |
+| **D-C8** | a design decision, not a line | the selector matmul builds its program over the whole compute grid while the loaded decode sub-device manager owns only `prefetch_sender_cores() \| worker_cores()`. `recipes.rope_core_grids`' docstring already names this defect class and names `_subgrid_cores` as the qualified helper; the decision is whether the sampling path runs inside the decode worker sub-device or whether decode's partition widens |
+| **the selector is not the problem** | nothing — it is now qualified | `test_column_user_selector_wh_galaxy.py` passes 3/3 on silicon for 49 seconds of mesh. Its subject is what the `GalaxyColumnUserSelector` docstring calls *"the only unqualified step in the Milestone B device sampling path"*. That docstring's "**Unqualified.** This composition has never run on a Galaxy mesh" is now **out of date and should be corrected** |
+| **the mesh** | an operator | device 7 cannot be opened and device 21 reads `0xffffffff`; the kernel says `Device is unresponsive, cannot reset` and `FW not running`. Every `tt-smi` reset path aborts on device 7 before reaching device 21. This needs an IPMI power cycle or a host reboot — see §A4's infra section |

@@ -1,0 +1,9 @@
+a4_l_dc8 rc=1 | 1 error in 7.40s |  | RuntimeError: Read 0xffffffff over PCIe ID 21: the board should be reset. |
+a4_q_dc8 rc=1 | 1 failed, 2 warnings in 185.57s |  | AssertionError: device greedy disagreed with the host argmax in slots [4, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31 | [dc8] greedy agrees with host argmax in 7/32 slots;[dc8] T=0.02 agrees in 7/32, T=2.0 agrees in 6/32;[dc8] the same seed in the same slot repeated in 32/32 slots;[dc8] cold: padded ids sampled in slots [];[dc8] greedy: padded ids sampled in slots [];[dc8] heterogeneous: padded ids sampled in slots [];
+a4_q_dc8_run2 rc=1 | 1 failed, 2 warnings in 160.59s |  | AssertionError: device greedy disagreed with the host argmax in slots [4, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31 | [dc8] greedy agrees with host argmax in 7/32 slots;[dc8] T=0.02 agrees in 7/32, T=2.0 agrees in 6/32;[dc8] the same seed in the same slot repeated in 32/32 slots;[dc8] cold: padded ids sampled in slots [];[dc8] greedy: padded ids sampled in slots [];[dc8] heterogeneous: padded ids sampled in slots [];
+a4_q_dc8_run3 rc=1 | 1 error in 7.41s |  | RuntimeError: Read 0xffffffff over PCIe ID 21: the board should be reset. |
+a4_q_dc9_bisect rc=1 | 1 error in 7.51s |  | RuntimeError: Read 0xffffffff over PCIe ID 21: the board should be reset. |
+a4_q_padded_greedy rc=1 | 1 failed, 2 warnings in 423.12s |  | TT_FATAL: MatmulMultiCoreProgramConfig: Input B memory layout must be INTERLEAVED, got: TensorMemoryLayout::WIDTH_SHARDED (assert.hpp:104) |
+a4_selector rc=0 | 2 passed in 31.32s |  |  |
+a4_selector_run2 rc=0 | 2 passed in 8.66s |  |  |
+a4_selector_run3 rc=0 | 2 passed in 8.89s |  |  |
