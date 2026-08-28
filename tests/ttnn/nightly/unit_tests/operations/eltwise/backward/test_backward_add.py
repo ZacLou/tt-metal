@@ -122,3 +122,41 @@ def test_bw_add_scalar(input_shapes, scalar, device):
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
+
+
+@pytest.mark.parametrize("input_shapes", ((torch.Size([1, 1, 32, 32])),))
+@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
+def test_bw_add_helper_allocated_grads_honour_memory_config(input_shapes, device, are_required_outputs):
+    """Gradients the op allocates itself must land in the requested memory config.
+
+    Regression for `preallocated_tensors_check`, which allocated via `empty_like`
+    without a memory config, so the gradients inherited the input's config instead.
+    Existing coverage either omits `memory_config` or supplies preallocated outputs,
+    so the requested and inherited configs never diverge there.
+
+    Inputs are placed in L1 and DRAM is requested, so inheriting would be visible.
+    """
+    in_data_a, input_tensor_a = data_gen_with_range(input_shapes, -100, 100, device, True)
+    in_data_b, input_tensor_b = data_gen_with_range(input_shapes, -100, 100, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -50, 50, device)
+
+    input_tensor_a = ttnn.to_memory_config(input_tensor_a, ttnn.L1_MEMORY_CONFIG)
+    input_tensor_b = ttnn.to_memory_config(input_tensor_b, ttnn.L1_MEMORY_CONFIG)
+    grad_tensor = ttnn.to_memory_config(grad_tensor, ttnn.L1_MEMORY_CONFIG)
+
+    # no preallocated outputs, so the op allocates them through the helper
+    result = ttnn.add_bw(
+        grad_tensor,
+        input_tensor_a,
+        input_tensor_b,
+        are_required_outputs=are_required_outputs,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    for i, required in enumerate(are_required_outputs):
+        if not required:
+            continue
+        assert result[i] is not None
+        assert (
+            result[i].memory_config().buffer_type == ttnn.BufferType.DRAM
+        ), f"grad {i} was requested in DRAM but landed in {result[i].memory_config().buffer_type}"
