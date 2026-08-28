@@ -2315,11 +2315,14 @@ The job was **not** in the state a naive reading of "five areas attempted" would
 suggest, and it was also not in the state attempt 1 described. Three things were
 established from the tree and the machine-written logs, not from the handoffs:
 
-1. **The mesh is alive and free.** `ls /dev/tenstorrent | wc -l` is 32 at
-   18:07Z, no pytest holds a device, and the `ttmb` screen session at 18:06:16Z
-   is this attempt's own driver. Attempt 3's queue (`cov_queue.sh`) is not
-   running and `queue.halt` is in place beside a `queue.txt` with 28 unconsumed
-   items.
+1. **The mesh was alive and free at 18:07Z** — and it did not stay that way.
+   `ls /dev/tenstorrent | wc -l` was 32, no pytest held a device, and the `ttmb`
+   screen session at 18:06:16Z was this attempt's own driver. Attempt 3's queue
+   (`cov_queue.sh`) was not running and `queue.halt` was in place beside a
+   `queue.txt` with 28 unconsumed items. **At 18:37Z the mesh broke and five
+   recovery attempts failed** — see "The mesh went down at 18:37Z" below before
+   planning anything. Thirty-one minutes of healthy Galaxy is all this attempt
+   got.
 2. **Every attempt-3 measurement applies at HEAD, and so does every attempt-2
    one.** `git diff --name-only b361770f46b..110ba1f0658` — from the commit all 38
    post-agent queue runs are stamped with, to the commit attempt 4 started at —
@@ -2359,9 +2362,11 @@ established from the tree and the machine-written logs, not from the handoffs:
 | --- | --- |
 | `RESULTS_A4.md` | one row per run, written as it finished, with the log name |
 | `VERDICTS_A4.txt` | machine-written: exit code, pytest summary, first assertion and the test's own marker lines, `grep`-ed out of each log by `cov_verdict4.sh` |
-| `logs4/` | every attempt-4 device log, its reset log, and the five recovery logs |
-| `logs3/a4_h*.log` | the four host gates re-measured at this tree |
+| `RESULTS_A4_MACHINE.md` | the same record, written by `cov_transcribe4.sh` **without any agent awake** — one row per finished log, appended as each run ends, so a night that outlives its agent still writes itself down |
+| `logs4/` | every attempt-4 device log, its reset log, and the five recovery logs. **`*.log` is in `.gitignore`**, so these are on disk and not in git — the same arrangement attempts 2 and 3 used |
+| `logs3/a4_h*.log` | the **seven** host measurements at this tree: `h1` 1D contract gate, `h2` host regression gate, `h3` `llm_runtime`, `h4` boundaries and imports, `h5` the `top_k` contract audit, `h6` all three regression directories in one process, `h7` the D-C9 host corroboration |
 | `queue4.txt` | the resume point. Consumed destructively, so what is in it has never run |
+| `cov_watch4.sh`, `cov_transcribe4.sh` | the two detached helpers attempt 4 left running: one restarts the queue if the mesh recovers, one writes the record |
 | `ENVIRONMENT.md` | the attempt-4 section at the end |
 
 ## The Milestone B exit gate at this tree, §A4
