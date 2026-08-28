@@ -35,6 +35,11 @@
 2400|2100|a4_l_seeded|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs[wormhole_b0-8x4-device_params0]|
 1800|1500|a4_q_dc8_run3_retry|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_device_sampling_claims_behind_dc5_and_dc8[wormhole_b0-8x4-device_params0]|
 2400|2100|a4_l_dc8_retry|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_device_sampling_claims_behind_dc5_and_dc8[wormhole_b0-8x4-device_params0]|
+# ---- appended 19:07Z: the Llama twins of both D-C9 cases (commit below). They
+# sit here, not at the head, because the Qwen halves answer the mechanism at a
+# third of the mesh cost and a twin is only worth running once its original has. ----
+2400|2100|a4_l_dc9_explicit|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_device_sampling_claims_with_an_explicit_token_composition[wormhole_b0-8x4-device_params0]|
+2400|2100|a4_l_dc9_bisect|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_the_selected_column_users_are_the_users_they_claim[wormhole_b0-8x4-device_params0]|
 # ---- revision 2's order resumes here ----
 1800|1500|a4_q_late_capacity_run3|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_paged_capacity_resolved_after_construction_serves_a_request[wormhole_b0-8x4-device_params0]|
 1800|1500|a4_q_cross_slot_run3|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_write_for_one_user_never_appears_in_another_users_blocks[wormhole_b0-8x4-device_params0]|

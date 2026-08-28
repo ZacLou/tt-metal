@@ -104,11 +104,13 @@ policies to completion, in two fresh processes, byte-identically:
 
 | brief claim | measured |
 | --- | --- |
-| padded-vocabulary entries can never be sampled | **PASS on Qwen.** `padded ids sampled in slots []` under **six** policies (greedy, T=0.02, T=2.0, two seeded passes, per-slot heterogeneous). vocab 151936, padded width 19200/device |
-| a seeded request in a slot repeats across runs | **PASS on Qwen.** `the same seed in the same slot repeated in 32/32 slots` |
+| padded-vocabulary entries can never be sampled | **PASS on Qwen, for the eight users the readback surfaces.** `padded ids sampled in slots []` under **six** policies (greedy, T=0.02, T=2.0, two seeded passes, per-slot heterogeneous). vocab 151936, padded width 19200/device |
+| a seeded request in a slot repeats across runs | **PASS on Qwen, same eight users.** `the same seed in the same slot repeated in 32/32 slots` |
 | greedy matches the host argmax exactly | **7/32 slots** — and see finding D-C9: that is the readback, not the sampler |
 
 `logs4/a4_q_dc8.log` (185.57s), `logs4/a4_q_dc8_run2.log` (160.59s).
+
+**Read the two PASSes with D-C9 in hand.** The composed vector has 32 entries but they are one mesh column's **eight** users repeated four times, so both positive claims are measured for 8 distinct users and trivially for their 24 duplicates. That is the first device measurement either claim has ever had, and it is not yet the 32-user statement the brief asks for. The Qwen case that would give the 32-user statement is `a4_q_dc9_explicit`, position 1 in `queue4.txt`, never run.
 
 ### 3. New finding D-C9, and it changes how every sampling number should be read.
 

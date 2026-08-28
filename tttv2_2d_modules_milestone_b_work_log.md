@@ -1166,7 +1166,9 @@ What it established, in the 31 minutes of healthy mesh it had:
   sampling call), Qwen's whole area-4 claim set ran. Measured, twice, byte-
   identically: **no padded vocabulary id under any of six policies**; **the same
   seed in the same slot repeats in 32/32 slots**; greedy agrees with the host
-  argmax in **7/32**.
+  argmax in **7/32**. Both
+  positive readings are for the **eight** distinct users the readback surfaces, not
+  32 — the other 24 entries are duplicates of them, which is D-C9 below.
 * **new finding D-C9, and it explains the 7/32.**
   `GalaxyDirectRunner.decode_sampled` composes the sampled tokens with
   `to_torch_auto_compose`, which infers its composer from topology labels an op

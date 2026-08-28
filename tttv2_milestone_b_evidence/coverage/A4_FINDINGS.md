@@ -46,6 +46,11 @@ Thirty-two slots, eight distinct tokens, repeated four times — one mesh column
 users standing in for all four. Slots 0-3 and 5-7 agree with the host argmax;
 slots 8-31 are copies of slots 0-7.
 
+**This is also the limit of what area 4's two positive readings prove.** The
+padded-vocabulary guarantee and the seed-stability claim were asserted over all
+32 composed entries and held — but 24 of those entries are duplicates of the
+other 8, so what is measured is those claims for **eight distinct users**.
+
 **Root cause, and it is already written down in this repository.**
 `models/common/models/galaxy/collectives.py::compose_galaxy_logits` carries the
 full diagnosis for the *logits* tensor one op earlier in the same graph:

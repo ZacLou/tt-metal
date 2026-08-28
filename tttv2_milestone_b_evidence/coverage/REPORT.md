@@ -2441,8 +2441,8 @@ behind the unchanged cells are in `RESULTS_A3.md`, not repeated here.
 | Brief claim | Before attempt 4 | After |
 | --- | --- | --- |
 | greedy matches the host argmax exactly | never measured on either model; `TT_FATAL` at D-C5 | **measured, and it does not**: 7/32 slots on Qwen, twice, byte-identically — **but the disagreement is D-C9, a readback defect, not the sampler**. Not a verdict on the claim |
-| padded-vocabulary entries can never be sampled | never measured; `a4_q_padded_greedy` re-confirmed the D-C5 abort at 423s | **measured and PASSING on Qwen**: `padded ids sampled in slots []` under **six** policies (greedy, T=0.02, T=2.0, two seeded passes, per-slot heterogeneous), vocab_size 151936, two fresh processes. Llama: not run |
-| deterministic seeded requests stay slot-stable (same seed, same slot, same token) | never measured | **measured and PASSING on Qwen**: `the same seed in the same slot repeated in 32/32 slots`, two fresh processes. The second sense — moving a request to another slot — remains D-C2, a product decision |
+| padded-vocabulary entries can never be sampled | never measured; `a4_q_padded_greedy` re-confirmed the D-C5 abort at 423s | **PASS for the eight users the readback surfaces.** `padded ids sampled in slots []` under **six** policies (greedy, T=0.02, T=2.0, two seeded passes, per-slot heterogeneous), vocab 151936, padded width 19200/device, two fresh processes. **Read this with D-C9 in hand**: the composed vector has 32 entries but they are one mesh column's eight users repeated four times, so the guarantee is measured for **8 distinct users**, not 32. It is the first time it has been measured for any. Llama: not run |
+| deterministic seeded requests stay slot-stable (same seed, same slot, same token) | never measured | **measured and PASSING, for the same eight users**: `the same seed in the same slot repeated in 32/32 slots`, two fresh processes — but 24 of those 32 entries are copies, so the claim is established for **8 distinct users** and trivially for their duplicates. The second sense — moving a request to another slot — remains D-C2, a product decision |
 | per-slot heterogeneous top-k / top-p / temperature | `TT_FATAL` at D-C5 | ran to completion; its assertion is subsumed by the greedy one and is therefore also D-C9-confounded |
 | D4's reciprocal temperature, verified on device | never measured | **still not cleanly measured.** `T=0.02` agreed with the host argmax in 7/32 and `T=2.0` in 6/32 — the same 7/32 the greedy case shows, which is the readback signature, not a temperature signature. `a4_q_temperature` and `a4_l_temperature`, the focused cases, have still never run |
 | `top_k > 32` | prohibited by the brief | **respected.** Maximum `top_k` anywhere in either step-7 file, including the three cases attempt 4 added: **32**. Nothing widens `GalaxySamplingPolicy`'s contract |
@@ -2493,6 +2493,15 @@ byte-identical:
 Thirty-two slots, eight distinct tokens, repeated four times — one mesh column's
 users standing in for all four. Slots 0-3 and 5-7 agree with the host argmax;
 slots 8-31 are copies of slots 0-7.
+
+**This is also the limit of what the two positive readings above prove.** The
+padded-vocabulary guarantee and the seed-stability claim were asserted over all
+32 composed entries and held — but 24 of those entries are duplicates of the
+other 8, so what is measured is those claims for **eight distinct users**. That
+is eight more than any previous attempt measured, and it is not the 32-user
+statement the brief asks for. The case that would give the 32-user statement is
+`test_qwen_device_sampling_claims_with_an_explicit_token_composition`, committed
+at `0e2c0dc50b4` and never run.
 
 **Root cause, and it is already written down in this repository.**
 `models/common/models/galaxy/collectives.py::compose_galaxy_logits` carries the
@@ -2680,3 +2689,42 @@ reconcile against `logs4/queue4.out` and `VERDICTS_A4.txt`, both machine-written
 | **D-C8** | a design decision, not a line | the selector matmul builds its program over the whole compute grid while the loaded decode sub-device manager owns only `prefetch_sender_cores() \| worker_cores()`. `recipes.rope_core_grids`' docstring already names this defect class and names `_subgrid_cores` as the qualified helper; the decision is whether the sampling path runs inside the decode worker sub-device or whether decode's partition widens |
 | **the selector is not the problem** | nothing — it is now qualified | `test_column_user_selector_wh_galaxy.py` passes 3/3 on silicon for 49 seconds of mesh. Its subject is what the `GalaxyColumnUserSelector` docstring calls *"the only unqualified step in the Milestone B device sampling path"*. That docstring's "**Unqualified.** This composition has never run on a Galaxy mesh" is now **out of date and should be corrected** |
 | **the mesh** | an operator | device 7 cannot be opened and device 21 reads `0xffffffff`; the kernel says `Device is unresponsive, cannot reset` and `FW not running`. Every `tt-smi` reset path aborts on device 7 before reaching device 21. This needs an IPMI power cycle or a host reboot — see §A4's infra section |
+
+## §A4 addendum — the recovery this attempt could have tried and did not
+
+`sudo -n true` returns 0 on this host: **passwordless root is available to this
+job.** So `rmmod tenstorrent && modprobe tenstorrent`, followed by a
+`tt-smi -glx_reset`, was technically within reach, and it is the standard next
+step below a host reboot for a wedged Tenstorrent driver. Attempt 4 **did not do
+it**, deliberately, and the reasoning belongs in the record rather than in a
+shrug:
+
+* **it can make the situation worse.** `rmmod` on a driver holding an
+  unresponsive device can block in the kernel and then need a host reboot to
+  clear. The kernel had *already* logged a stack trace through
+  `tt_hwmon_read+0x45/0xa0 [tenstorrent]` in this window, which is evidence the
+  driver state is not healthy — exactly the condition in which an unload is most
+  likely to hang;
+* **the brief authorises one recovery tool, and this is not it.** "On a hang or
+  crash: kill the tree, confirm the device is free, `tt-smi -glx_reset`, confirm
+  `Re-initialized 32 boards`, retry. **Maximum 2 recovery attempts**, then record
+  `BLOCKED (infra)` with logs and move on." Five `tt-smi` attempts were made and
+  logged; the brief's answer to their failing is to record and move on;
+* **the mesh being this job's exclusively is not the same as the host being
+  this job's.** Reloading a kernel module is a change to shared infrastructure,
+  taken unattended, that nobody asked for. An unattended job's conservative
+  option is to leave the machine as it found it and say precisely what it found.
+
+**For whoever reads this next**, in ascending order of severity, the recovery
+that was not tried:
+
+1. `sudo rmmod tenstorrent && sudo modprobe tenstorrent`, then
+   `tt-smi -glx_reset` and confirm `Re-initialized 32 boards after reset`;
+2. an IPMI power cycle of the Galaxy trays;
+3. a host reboot.
+
+The specific chips to check afterwards are **21** (reads `0xffffffff`) and
+**1, 3, 5, 7** (`/dev/tenstorrent/<n>` present but `open()` raises `ENXIO`).
+A healthy mesh opens all 32 nodes and `tt-smi -ls` exits 0 with no `0xffffffff`
+in its output — `cov_watch4.sh` performs exactly that check every five minutes
+and will restart the queue by itself the moment it passes.
