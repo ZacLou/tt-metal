@@ -1127,7 +1127,42 @@ def test_qwen_the_selected_column_users_are_the_users_they_claim(mesh_device: tt
                     f"layout={selected.memory_config().memory_layout}",
                     flush=True,
                 )
+                # The two readings that separate D-C9's two hypotheses, in one
+                # run of one activate cycle. The element count is the whole
+                # question: an auto-composition that concatenates the eight
+                # identical mesh rows yields 8x the rows an honest one does.
+                for name, tensor in (("the relocated decode logits", relocated), ("the selected users", selected)):
+                    try:
+                        topology = tensor.tensor_topology()
+                        print(
+                            f"[dc9] topology of {name}: placements={topology.placements()} "
+                            f"distribution_shape={list(topology.distribution_shape())} "
+                            f"shape={tuple(tensor.shape)}",
+                            flush=True,
+                        )
+                    except Exception as error:  # noqa: BLE001 - diagnostic only
+                        print(f"[dc9] topology of {name} unavailable: {type(error).__name__}: {error}", flush=True)
                 composed = to_torch_auto_compose(selected).float()
+                print(f"[dc9] auto-composed selected: shape={tuple(composed.shape)}", flush=True)
+                try:
+                    explicit = ttnn.to_torch(
+                        selected,
+                        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 2), mesh_shape=GALAXY_MESH_SHAPE),
+                    ).float()
+                    print(f"[dc9] distribution-composed selected: shape={tuple(explicit.shape)}", flush=True)
+                    rows_of_row0 = explicit[0].reshape(-1, explicit.shape[-1])
+                    argmax_explicit = torch.argmax(rows_of_row0[:GALAXY_PHYSICAL_BATCH, :vocab_size], dim=-1)
+                    print(
+                        f"[dc9] mesh row 0, four columns concatenated on the user axis, argmax per row: "
+                        f"{[int(value) for value in argmax_explicit]}",
+                        flush=True,
+                    )
+                except Exception as error:  # noqa: BLE001 - diagnostic only
+                    print(
+                        f"[dc9] the distribution-following composition raised "
+                        f"{type(error).__name__}: {str(error)[:200]}",
+                        flush=True,
+                    )
             finally:
                 ttnn.deallocate(selected)
                 ttnn.deallocate(relocated)
