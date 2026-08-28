@@ -622,7 +622,7 @@ also when the numbers can be re-taken. Until then, treat "never been executed" i
 | `tttv2_milestone_b_evidence/llama/` | `mb-llama`, three attempts. `REPORT.md` is cumulative: §1–§9 attempt 1, §A2 attempt 2, §A3 attempt 3. Logs in `logs/`, `logs2/`, `logs3/` |
 | `tttv2_milestone_b_evidence/qwen/` | `mb-qwen`, two attempts. Attempt 1 host-only; **§A2 supersedes its verdict**. Logs in `logs2/` |
 | `tttv2_milestone_b_evidence/coverage/` | `mb-coverage`, four attempts, §A2/§A3/§A3-op/§A4. `RESULTS_A*.md` are the per-run indexes; `VERDICTS_A4.txt` and `RESULTS_A4_MACHINE.md` are machine-written and were produced with no agent awake. Logs in `logs2/`, `logs3/`, `logs4/`. `queue4.txt` is the unconsumed resume point |
-| `tttv2_milestone_b_evidence/signoff/` | This page. `logs2/s2_*.log` are the eighteen checks it ran; `build/` holds the sections it was assembled from |
+| `tttv2_milestone_b_evidence/signoff/` | This page. `logs2/s2_*.log` are the eighteen checks it ran, and `REPORT.md` records what the job did, what it decided without being able to ask, and what it deliberately did not do |
 
 Raw pytest logs are excluded from git by the repository's `*.log` ignore rule and remain on the host
 that produced them (`wh-glx6u-05`). Every claim above names the log behind it.
