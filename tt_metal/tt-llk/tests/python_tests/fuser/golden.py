@@ -25,6 +25,7 @@ from helpers.golden_generators import (
     TransposeGolden,
     UnarySFPUGolden,
     UntilizeGolden,
+    apply_l1_accumulation,
     get_golden_generator,
 )
 from helpers.llk_params import (
@@ -136,14 +137,14 @@ class Golden:
             tile_shape.face_r_dim,
         )
 
-        if per_block:
+        if node.block_defaults.in1 is not None:
+            tiles = broadcast.view(operand.tile_count, -1)
+            tiles[:] = tiles[node.block_defaults.in1].clone()
+        elif per_block:
             tiles = broadcast.view(operand.tile_count_y, operand.tile_count_x, -1)
             for bx in range(0, operand.tile_count_x, operation.block_tiles_x):
                 block = tiles[:, bx : bx + operation.block_tiles_x]
                 block[:] = block[:, :1]
-        elif node.broadcast_tile is not None:
-            tiles = broadcast.view(operand.tile_count, -1)
-            tiles[:] = tiles[node.broadcast_tile].clone()
 
         return untilize_block(
             broadcast,
@@ -310,7 +311,9 @@ class Golden:
                 num_faces=num_faces,
             ).flatten()
 
-        src_reduced = reduce(tensor_a, block_max or node.reduce_to_tile)
+        src_reduced = reduce(
+            tensor_a, block_max or node.block_defaults.dest is not None
+        )
         dest_reduced = reduce(tensor_dst, block_max)
 
         if pool_type == ReducePool.Average:
@@ -403,9 +406,6 @@ class Golden:
         tile_size = node.output.tile_shape.total_tile_size()
         tile_count_x = node.output.tile_count_x
         tile_count_y = node.output.tile_count_y
-        block_tiles_x = operation.block_tiles_x
-        block_tiles_y = operation.block_tiles_y
-
         tile_dims = (
             node.output.tile_shape.total_row_dim(),
             node.output.tile_shape.total_col_dim(),
@@ -418,23 +418,19 @@ class Golden:
             num_faces=num_faces,
             tile_dimensions=tile_dims,
         ).flatten()
-        tile_grid = tensor.view(tile_count_y, tile_count_x, tile_size)
-
-        accumulated = torch.zeros(
-            block_tiles_y, block_tiles_x, tile_size, dtype=tensor.dtype
-        )
-        for by in range(0, tile_count_y, block_tiles_y):
-            for bx in range(0, tile_count_x, block_tiles_x):
-                bty = min(block_tiles_y, tile_count_y - by)
-                btx = min(block_tiles_x, tile_count_x - bx)
-                accumulated[:bty, :btx] += tile_grid[by : by + bty, bx : bx + btx]
-
-        result_grid = torch.zeros(
-            tile_count_y, tile_count_x, tile_size, dtype=tensor.dtype
-        )
-        result_grid[:block_tiles_y, :block_tiles_x] = accumulated
+        source_tiles = tensor.view(tile_count_y * tile_count_x, tile_size)
+        result_tiles = torch.zeros_like(source_tiles)
+        for block, plan in zip(operation.math.block_data, node.blocks):
+            for call in plan.calls:
+                tile_y, tile_x = divmod(call.dest, block.block_tiles_x)
+                source_id = (
+                    (block.block_y + tile_y) * tile_count_x + block.block_x + tile_x
+                )
+                result_tiles[call.out] = apply_l1_accumulation(
+                    [result_tiles[call.out], source_tiles[source_id]], output_format
+                )
         return untilize_block(
-            result_grid.flatten(),
+            result_tiles.flatten(),
             output_format,
             output_dims,
             tile_dimensions=tile_dims,

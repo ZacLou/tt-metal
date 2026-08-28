@@ -3,7 +3,30 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
-from typing import Union
+from enum import Enum, auto
+from typing import Optional, Tuple, Union
+
+
+class InvocationGranularity(Enum):
+    NONE = auto()
+    TILE = auto()
+    ROW = auto()
+    BLOCK = auto()
+
+
+@dataclass(frozen=True)
+class KernelInvocation:
+    in0: Optional[Union[int, str]] = None
+    in1: Optional[Union[int, str]] = None
+    src0: Optional[Union[int, str]] = None
+    src1: Optional[Union[int, str]] = None
+    dest: Optional[Union[int, str]] = None
+    out: Optional[Union[int, str]] = None
+
+
+@dataclass(frozen=True)
+class NodeBlockPlan:
+    calls: Tuple[KernelInvocation, ...]
 
 
 @dataclass
@@ -24,3 +47,20 @@ class BlockData:
     full_y_limit: Union[int, str]  # Exclusive y limit for full blocks region.
     tile_id_global: Union[int, str]  # Global tile id in L1 (row-major).
     tile_id_block: Union[int, str]  # Tile id within the current block.
+    block_index: int = 0
+    tile_id_src_a: Optional[Union[int, str]] = None
+    tile_id_src_b: Optional[Union[int, str]] = None
+    codegen: bool = False
+    loop_x: bool = False
+    loop_y: bool = False
+
+
+def wrap_generated_calls(
+    code: str, granularity: InvocationGranularity, block: BlockData
+) -> str:
+    if granularity == InvocationGranularity.TILE:
+        code = f"for (std::uint32_t tile_y = 0; tile_y < {block.block_tiles_y}; tile_y++) {{\n{code}}}\n"
+        return f"for (std::uint32_t tile_x = 0; tile_x < {block.block_tiles_x}; tile_x++) {{\n{code}}}\n"
+    if granularity == InvocationGranularity.ROW:
+        return f"for (std::uint32_t tile_y = 0; tile_y < {block.block_tiles_y}; tile_y++) {{\n{code}}}\n"
+    return code

@@ -64,10 +64,15 @@ def untilize_l1_address(output: Operand, block: BlockData) -> str:
     tile_size_16B = output.tile_size
     row_stride = output.tile_count_x * tile_size_16B
     col_stride = tile_size_16B // output.tile_shape.total_row_dim()
+    tile_y = (
+        f"({block.tile_id_block}) / {block.block_tiles_x}"
+        if isinstance(block.tile_id_block, str)
+        else block.tile_id_block // block.block_tiles_x
+    )
 
     return (
         f"L1_ADDRESS({output.cpp_name}[0])"
-        f" + {row_stride} * ({block.block_y} + tile_y)"
+        f" + {row_stride} * ({block.block_y} + {tile_y})"
         f" + {col_stride} * {block.block_x}"
     )
 

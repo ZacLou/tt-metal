@@ -2,21 +2,28 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, List, Union
 
 import torch
+from helpers.tilize_untilize import untilize_block
 
 if TYPE_CHECKING:
     from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
 
-from helpers.llk_params import GoldenType
+from helpers.llk_params import GoldenType, format_dict
 
 from .arch_common import fpu_common, pack_common, unpack_common
 from .base_fpu import Fpu
 from .base_sfpu import Sfpu
 from .base_unpacker import Unpacker
-from .block_data import BlockData
+from .block_data import (
+    BlockData,
+    InvocationGranularity,
+    KernelInvocation,
+    NodeBlockPlan,
+)
 from .fpu_node import FpuNode
 from .pack_node import PackNode
 from .sfpu_node import SfpuNode
@@ -30,9 +37,352 @@ class ComputePipeline:
         self,
         math_nodes: List[Union[FpuNode, SfpuNode]],
         pack_nodes: List[Union[PackNode, SfpuNode]],
+        explicit_blocks: bool = False,
     ):
         self.math_nodes = math_nodes
         self.pack_nodes = pack_nodes
+        self.explicit_blocks = explicit_blocks
+        self.block_data = []
+        self.codegen_block_data = []
+
+    @staticmethod
+    def _positions(granularity: InvocationGranularity, block: BlockData):
+        if granularity == InvocationGranularity.TILE:
+            return (
+                (tile_x, tile_y)
+                for tile_x in range(block.block_tiles_x)
+                for tile_y in range(block.block_tiles_y)
+            )
+        if granularity == InvocationGranularity.ROW:
+            return ((0, tile_y) for tile_y in range(block.block_tiles_y))
+        if granularity == InvocationGranularity.BLOCK:
+            return ((0, 0),)
+        return ()
+
+    @staticmethod
+    def _call(block: BlockData, tile_x: int, tile_y: int) -> KernelInvocation:
+        if any(
+            isinstance(value, str)
+            for value in (block.block_x, block.block_y, tile_x, tile_y)
+        ):
+            global_id = f"({block.tile_count_x} * ({block.block_y} + {tile_y}) + ({block.block_x} + {tile_x}))"
+            dest_id = f"({tile_y} * {block.block_tiles_x} + {tile_x})"
+        else:
+            global_id = (
+                block.tile_count_x * (block.block_y + tile_y) + block.block_x + tile_x
+            )
+            dest_id = tile_y * block.block_tiles_x + tile_x
+        return KernelInvocation(
+            in0=global_id,
+            in1=global_id,
+            src0=dest_id,
+            src1=dest_id,
+            dest=dest_id,
+            out=global_id,
+        )
+
+    @staticmethod
+    def _with_defaults(
+        call: KernelInvocation, defaults: KernelInvocation
+    ) -> KernelInvocation:
+        return replace(
+            call,
+            **{
+                name: value
+                for name, value in vars(defaults).items()
+                if value is not None
+            },
+        )
+
+    @classmethod
+    def _fpu_call(
+        cls,
+        block: BlockData,
+        tile_x: int,
+        tile_y: int,
+        node: FpuNode,
+    ) -> KernelInvocation:
+        call = cls._call(block, tile_x, tile_y)
+        if node.src_b is None:
+            call = replace(call, in1=None)
+        return call
+
+    @staticmethod
+    def _sfpu_call(node: SfpuNode) -> KernelInvocation:
+        sfpu = node.sfpu
+        if hasattr(sfpu, "dst_index_in0"):
+            return KernelInvocation(
+                src0=sfpu.dst_index_in0,
+                src1=sfpu.dst_index_in1,
+                dest=sfpu.dst_index_out,
+            )
+        return KernelInvocation(dest=sfpu.dest_idx)
+
+    @staticmethod
+    def _symbolic_position(granularity: InvocationGranularity):
+        if granularity == InvocationGranularity.TILE:
+            return "tile_x", "tile_y"
+        if granularity == InvocationGranularity.ROW:
+            return 0, "tile_y"
+        if granularity == InvocationGranularity.BLOCK:
+            return 0, 0
+        return None
+
+    def plan(self, operation: "L1Operation"):
+        self.block_data = []
+        self.codegen_block_data = []
+        nodes = self.math_nodes + self.pack_nodes
+        if self.explicit_blocks:
+            tile_count_x = (
+                operation.max_output_dimensions[1]
+                // operation.tile_shape.total_col_dim()
+            )
+            tile_count_y = (
+                operation.max_output_dimensions[0]
+                // operation.tile_shape.total_row_dim()
+            )
+            for block_index in range(len(nodes[0].blocks)):
+                self.block_data.append(
+                    BlockData(
+                        block_x=0,
+                        block_y=0,
+                        block_tiles_x=1,
+                        block_tiles_y=1,
+                        tile_count_x=tile_count_x,
+                        tile_count_y=tile_count_y,
+                        full_x_limit=tile_count_x,
+                        full_y_limit=tile_count_y,
+                        tile_id_global=0,
+                        tile_id_block=0,
+                        block_index=block_index,
+                    )
+                )
+            for node in self.math_nodes:
+                if isinstance(node, FpuNode):
+                    node.unpack_blocks = node.blocks
+            return
+
+        tile_count_x = (
+            operation.max_output_dimensions[1] // operation.tile_shape.total_col_dim()
+        )
+        tile_count_y = (
+            operation.max_output_dimensions[0] // operation.tile_shape.total_row_dim()
+        )
+        full_x_limit = tile_count_x // operation.block_tiles_x * operation.block_tiles_x
+        full_y_limit = tile_count_y // operation.block_tiles_y * operation.block_tiles_y
+
+        def add_blocks(x_origins, y_origins, tiles_x, tiles_y):
+            for block_x in x_origins:
+                for block_y in y_origins:
+                    self.block_data.append(
+                        BlockData(
+                            block_x=block_x,
+                            block_y=block_y,
+                            block_tiles_x=tiles_x,
+                            block_tiles_y=tiles_y,
+                            tile_count_x=tile_count_x,
+                            tile_count_y=tile_count_y,
+                            full_x_limit=full_x_limit,
+                            full_y_limit=full_y_limit,
+                            tile_id_global=0,
+                            tile_id_block=0,
+                            block_index=len(self.block_data),
+                        )
+                    )
+
+        full_x = range(0, full_x_limit, operation.block_tiles_x)
+        full_y = range(0, full_y_limit, operation.block_tiles_y)
+        add_blocks(
+            full_x,
+            full_y,
+            operation.block_tiles_x,
+            operation.block_tiles_y,
+        )
+        if full_y_limit < tile_count_y:
+            add_blocks(
+                full_x,
+                (full_y_limit,),
+                operation.block_tiles_x,
+                tile_count_y - full_y_limit,
+            )
+        if full_x_limit < tile_count_x:
+            add_blocks(
+                (full_x_limit,),
+                full_y,
+                tile_count_x - full_x_limit,
+                operation.block_tiles_y,
+            )
+        if full_x_limit < tile_count_x and full_y_limit < tile_count_y:
+            add_blocks(
+                (full_x_limit,),
+                (full_y_limit,),
+                tile_count_x - full_x_limit,
+                tile_count_y - full_y_limit,
+            )
+
+        def add_codegen_block(
+            block_x, block_y, tiles_x, tiles_y, loop_x=False, loop_y=False
+        ):
+            self.codegen_block_data.append(
+                BlockData(
+                    block_x=block_x,
+                    block_y=block_y,
+                    block_tiles_x=tiles_x,
+                    block_tiles_y=tiles_y,
+                    tile_count_x=tile_count_x,
+                    tile_count_y=tile_count_y,
+                    full_x_limit=full_x_limit,
+                    full_y_limit=full_y_limit,
+                    tile_id_global=0,
+                    tile_id_block=0,
+                    block_index=len(self.codegen_block_data),
+                    codegen=True,
+                    loop_x=loop_x,
+                    loop_y=loop_y,
+                )
+            )
+
+        if full_x_limit > 0 and full_y_limit > 0:
+            add_codegen_block(
+                "block_x",
+                "block_y",
+                operation.block_tiles_x,
+                operation.block_tiles_y,
+                loop_x=True,
+                loop_y=True,
+            )
+        if full_x_limit > 0 and full_y_limit < tile_count_y:
+            add_codegen_block(
+                "block_x",
+                full_y_limit,
+                operation.block_tiles_x,
+                tile_count_y - full_y_limit,
+                loop_x=True,
+            )
+        if full_x_limit < tile_count_x and full_y_limit > 0:
+            add_codegen_block(
+                full_x_limit,
+                "block_y",
+                tile_count_x - full_x_limit,
+                operation.block_tiles_y,
+                loop_y=True,
+            )
+        if full_x_limit < tile_count_x and full_y_limit < tile_count_y:
+            add_codegen_block(
+                full_x_limit,
+                full_y_limit,
+                tile_count_x - full_x_limit,
+                tile_count_y - full_y_limit,
+            )
+
+        for node in self.math_nodes:
+            if isinstance(node, FpuNode):
+                node.unpack_blocks = [
+                    NodeBlockPlan(
+                        tuple(
+                            self._with_defaults(
+                                self._fpu_call(block, x, y, node),
+                                replace(node.block_defaults, dest=None),
+                            )
+                            for x, y in self._positions(
+                                (
+                                    node.unpacker.granularity
+                                    if node.unpacker is not None
+                                    else InvocationGranularity.NONE
+                                ),
+                                block,
+                            )
+                        )
+                    )
+                    for block in self.block_data
+                ]
+                node.blocks = [
+                    NodeBlockPlan(
+                        tuple(
+                            self._with_defaults(
+                                self._fpu_call(block, x, y, node),
+                                node.block_defaults,
+                            )
+                            for x, y in self._positions(node.fpu.granularity, block)
+                        )
+                    )
+                    for block in self.block_data
+                ]
+                unpack_granularity = (
+                    node.unpacker.granularity
+                    if node.unpacker is not None
+                    else InvocationGranularity.NONE
+                )
+                node.codegen_unpack_blocks = []
+                node.codegen_blocks = []
+                for block in self.codegen_block_data:
+                    position = self._symbolic_position(unpack_granularity)
+                    calls = ()
+                    if position is not None:
+                        calls = (
+                            self._with_defaults(
+                                self._fpu_call(block, *position, node),
+                                replace(node.block_defaults, dest=None),
+                            ),
+                        )
+                    node.codegen_unpack_blocks.append(NodeBlockPlan(calls))
+
+                    position = self._symbolic_position(node.fpu.granularity)
+                    calls = ()
+                    if position is not None:
+                        calls = (
+                            self._with_defaults(
+                                self._fpu_call(block, *position, node),
+                                node.block_defaults,
+                            ),
+                        )
+                    node.codegen_blocks.append(NodeBlockPlan(calls))
+            else:
+                call = self._sfpu_call(node)
+                node.blocks = [NodeBlockPlan((call,)) for _ in self.block_data]
+                node.codegen_blocks = [
+                    NodeBlockPlan((call,)) for _ in self.codegen_block_data
+                ]
+
+        for node in self.pack_nodes:
+            if isinstance(node, SfpuNode):
+                call = self._sfpu_call(node)
+                node.blocks = [NodeBlockPlan((call,)) for _ in self.block_data]
+                node.codegen_blocks = [
+                    NodeBlockPlan((call,)) for _ in self.codegen_block_data
+                ]
+                continue
+            node.blocks = []
+            for block in self.block_data:
+                calls = []
+                for x, y in self._positions(node.packer.granularity, block):
+                    call = self._call(block, x, y)
+                    if (
+                        node.pack_l1_accumulation.value
+                        and node.packer.granularity == InvocationGranularity.TILE
+                    ):
+                        call = KernelInvocation(
+                            dest=call.dest, out=y * block.tile_count_x + x
+                        )
+                    calls.append(call)
+                node.blocks.append(NodeBlockPlan(tuple(calls)))
+            node.codegen_blocks = []
+            for block in self.codegen_block_data:
+                position = self._symbolic_position(node.packer.granularity)
+                calls = ()
+                if position is not None:
+                    x, y = position
+                    call = self._call(block, x, y)
+                    if (
+                        node.pack_l1_accumulation.value
+                        and node.packer.granularity == InvocationGranularity.TILE
+                    ):
+                        call = KernelInvocation(
+                            dest=call.dest,
+                            out=f"{y} * {block.tile_count_x} + {x}",
+                        )
+                    calls = (call,)
+                node.codegen_blocks.append(NodeBlockPlan(calls))
 
     def _get_pack_nodes(self) -> List[PackNode]:
         return [pn for pn in self.pack_nodes if isinstance(pn, PackNode)]
@@ -74,74 +424,45 @@ class ComputePipeline:
         init_fn=None,
         uninit_fn=None,
     ) -> str:
-        block_tiles_x = operation.block_tiles_x
-        block_tiles_y = operation.block_tiles_y
-        tile_count_x = (
-            operation.max_output_dimensions[1] // operation.tile_shape.total_col_dim()
-        )
-        tile_count_y = (
-            operation.max_output_dimensions[0] // operation.tile_shape.total_row_dim()
-        )
-
-        full_blocks_x = tile_count_x // block_tiles_x
-        full_blocks_y = tile_count_y // block_tiles_y
-        remaining_tiles_x = tile_count_x % block_tiles_x
-        remaining_tiles_y = tile_count_y % block_tiles_y
-
-        full_x_limit = full_blocks_x * block_tiles_x
-        full_y_limit = full_blocks_y * block_tiles_y
-
-        def make_block(block_x, block_y, block_tiles_x_eff, block_tiles_y_eff):
-            return BlockData(
-                block_x=block_x,
-                block_y=block_y,
-                block_tiles_x=block_tiles_x_eff,
-                block_tiles_y=block_tiles_y_eff,
-                tile_count_x=tile_count_x,
-                tile_count_y=tile_count_y,
-                full_x_limit=full_x_limit,
-                full_y_limit=full_y_limit,
-                tile_id_global="0",
-                tile_id_block="0",
-            )
-
-        def wrap(block, body):
-            code = ""
-            if init_fn is not None:
-                code += init_fn(block)
-            code += body
-            if uninit_fn is not None:
-                code += uninit_fn(block)
-            return code
-
-        def emit_loop(var, limit, step, body):
-            return f"for (std::uint32_t {var} = 0; {var} < {limit}; {var} += {step}) {{\n{body}\n}}\n"
-
-        x_regions = []
-        if full_blocks_x > 0:
-            x_regions.append(("block_x", block_tiles_x, "block_x"))
-        if remaining_tiles_x > 0:
-            x_regions.append((full_x_limit, remaining_tiles_x, None))
-
-        y_regions = []
-        if full_blocks_y > 0:
-            y_regions.append(("block_y", block_tiles_y, "block_y"))
-        if remaining_tiles_y > 0:
-            y_regions.append((full_y_limit, remaining_tiles_y, None))
-
         code = ""
-        for x_origin, x_size, x_var in x_regions:
-            for y_origin, y_size, y_var in y_regions:
-                block = make_block(x_origin, y_origin, x_size, y_size)
+        if not self.explicit_blocks:
+            for block in self.codegen_block_data:
                 body = body_fn(block)
                 if not body:
-                    return code
-                if y_var:
-                    body = emit_loop(y_var, full_y_limit, block_tiles_y, body)
-                if x_var:
-                    body = emit_loop(x_var, full_x_limit, block_tiles_x, body)
-                code += wrap(block, body)
+                    continue
+                if block.loop_y:
+                    body = (
+                        f"for (std::uint32_t block_y = 0; block_y < {block.full_y_limit}; "
+                        f"block_y += {block.block_tiles_y}) {{\n{body}}}\n"
+                    )
+                if block.loop_x:
+                    body = (
+                        f"for (std::uint32_t block_x = 0; block_x < {block.full_x_limit}; "
+                        f"block_x += {block.block_tiles_x}) {{\n{body}}}\n"
+                    )
+                if init_fn is not None:
+                    code += init_fn(block)
+                code += body
+                if uninit_fn is not None:
+                    code += uninit_fn(block)
+            return code
 
+        groups = []
+        for block in self.block_data:
+            shape = (block.block_tiles_x, block.block_tiles_y)
+            if not groups or groups[-1][0] != shape:
+                groups.append((shape, []))
+            groups[-1][1].append(block)
+        for _, blocks in groups:
+            bodies = [(block, body_fn(block)) for block in blocks]
+            bodies = [(block, body) for block, body in bodies if body]
+            if not bodies:
+                continue
+            if init_fn is not None:
+                code += init_fn(bodies[0][0])
+            code += "".join(body for _, body in bodies)
+            if uninit_fn is not None:
+                code += uninit_fn(bodies[-1][0])
         return code
 
     def _zone(self, config: "GlobalConfig", name: str, body: str) -> str:
@@ -357,6 +678,9 @@ class ComputePipeline:
         config: "GlobalConfig",
         golden_type: GoldenType,
     ):
+        if self.explicit_blocks:
+            return self._block_golden(operation, config, golden_type)
+
         first_fpu = next(
             (
                 op
@@ -427,6 +751,80 @@ class ComputePipeline:
                 pack_node.output.l1_golden = result
             else:
                 pack_node.output._master_golden = result
+
+    def _block_golden(
+        self,
+        operation: "L1Operation",
+        config: "GlobalConfig",
+        golden_type: GoldenType,
+    ):
+        pack_nodes = self._get_pack_nodes()
+        outputs = {
+            id(node): torch.zeros(
+                (node.output.tile_count, node.output.tile_shape.total_tile_size()),
+                dtype=format_dict[node.output.data_format],
+            )
+            for node in pack_nodes
+        }
+        config.sentinel.configure_golden(
+            config, operation, output_format=pack_nodes[0].output.data_format
+        )
+        master = golden_type == GoldenType.MASTER_GOLDEN
+        nodes = self.math_nodes + self.pack_nodes
+        for block_index in range(len(nodes[0].blocks)):
+            dest_indices = [
+                index
+                for node in nodes
+                for call in node.blocks[block_index].calls
+                for index in (call.src0, call.src1, call.dest)
+                if index is not None
+            ]
+            tensor_dst = torch.zeros(
+                (
+                    max(dest_indices, default=0) + 1,
+                    operation.tile_shape.total_tile_size(),
+                ),
+                dtype=format_dict[config.sentinel.golden_math_format],
+            )
+            for node in self.math_nodes:
+                config.sentinel.configure_golden(config, operation, node)
+                for call in node.blocks[block_index].calls:
+                    tensor_dst = (
+                        node.block_golden(call, tensor_dst, operation, config, master)
+                        if isinstance(node, FpuNode)
+                        else node.block_golden(call, tensor_dst, operation, config)
+                    )
+            for node in self.pack_nodes:
+                if isinstance(node, SfpuNode):
+                    for call in node.blocks[block_index].calls:
+                        tensor_dst = node.block_golden(
+                            call, tensor_dst, operation, config
+                        )
+                    continue
+                config.sentinel.configure_golden(
+                    config, operation, output_format=node.output.data_format
+                )
+                for call in node.blocks[block_index].calls:
+                    outputs[id(node)] = node.block_golden(
+                        call, tensor_dst, outputs[id(node)], operation, config
+                    )
+
+        for node in pack_nodes:
+            tile_shape = node.output.tile_shape
+            result = untilize_block(
+                outputs[id(node)].flatten(),
+                node.output.data_format,
+                node.output.dimensions,
+                tile_dimensions=(
+                    tile_shape.total_row_dim(),
+                    tile_shape.total_col_dim(),
+                ),
+                num_faces=tile_shape.total_num_faces(),
+            )
+            if golden_type == GoldenType.L1_GOLDEN:
+                node.output.l1_golden = result
+            else:
+                node.output._master_golden = result
 
     def __str__(self):
         result = "Math:"

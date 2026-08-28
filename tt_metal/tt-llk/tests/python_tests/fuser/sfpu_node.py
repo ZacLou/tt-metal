@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 import torch
 
@@ -10,15 +10,21 @@ if TYPE_CHECKING:
     from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
 
+from helpers.golden_generators import (
+    BinarySFPUGolden,
+    UnarySFPUGolden,
+    get_golden_generator,
+)
 from helpers.tilize_untilize import tilize_block, untilize_block
 
 from .base_sfpu import Sfpu
-from .block_data import BlockData
+from .block_data import BlockData, KernelInvocation, NodeBlockPlan
 
 
 class SfpuNode:
-    def __init__(self, sfpu: Sfpu):
+    def __init__(self, sfpu: Sfpu, blocks: Optional[List[NodeBlockPlan]] = None):
         self.sfpu = sfpu
+        self.blocks = blocks
 
     def sfpu_init(
         self,
@@ -38,7 +44,14 @@ class SfpuNode:
     ):
         if config.skip_math_init:
             return ""
-        return self.sfpu.calculate(operation, config, self, block)
+        code = ""
+        plans = self.codegen_blocks if block.codegen else self.blocks
+        for call in plans[block.block_index].calls:
+            block.tile_id_src_a = call.src0
+            block.tile_id_src_b = call.src1
+            block.tile_id_block = call.dest
+            code += self.sfpu.calculate(operation, config, self, block)
+        return code
 
     def sfpu_uninit(
         self,
@@ -153,6 +166,56 @@ class SfpuNode:
             tensor_b,
             tensor_dst.reshape(operation.max_output_dimensions),
         )
+
+    def block_golden(
+        self,
+        call: KernelInvocation,
+        tensor_dst: torch.Tensor,
+        operation: "L1Operation",
+        config: "GlobalConfig",
+    ) -> torch.Tensor:
+        tile_dims = (
+            operation.tile_shape.total_row_dim(),
+            operation.tile_shape.total_col_dim(),
+        )
+        tile_size = operation.tile_shape.total_tile_size()
+        data_format = config.sentinel.golden_math_format
+        if call.src0 is None:
+            result = get_golden_generator(UnarySFPUGolden)(
+                self.sfpu.operation,
+                tensor_dst[call.dest].clone(),
+                data_format,
+                config.dest_acc,
+                data_format,
+                tile_dims,
+                self.sfpu.iterations,
+                0,
+                self.sfpu.fill_const_value,
+                skip_tilize=True,
+            )
+            tensor_dst[call.dest] = result.view(tile_size)
+            return tensor_dst
+
+        work = torch.stack(
+            (
+                tensor_dst[call.src0].clone(),
+                tensor_dst[call.src1].clone(),
+                tensor_dst[call.dest].clone(),
+            )
+        )
+        result = get_golden_generator(BinarySFPUGolden)(
+            self.sfpu.operation,
+            work.flatten(),
+            0,
+            1,
+            2,
+            self.sfpu.iterations,
+            (tile_dims[0] * 3, tile_dims[1]),
+            data_format,
+            skip_tilize=True,
+        )
+        tensor_dst[call.dest] = result.view(3, tile_size)[2]
+        return tensor_dst
 
     def get_headers(self):
         return self.sfpu.get_headers()
