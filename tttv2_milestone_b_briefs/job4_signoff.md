@@ -140,8 +140,30 @@ held, show it. If they did not, say so — that is a finding, not a failure of t
 
 ### 3. `tttv2_milestone_c_brief.md`
 
-A short, honest handoff into Milestone C — executors, runtime integration, tracing and vLLM. It should
-carry:
+A short, honest handoff into Milestone C — executors, runtime integration, tracing and performance.
+
+**Scope decision, taken 2026-08-28, after this brief was first written.** Milestone C has been
+narrowed: **vLLM is deferred and is not part of it.** The generator/`VLLMAdapter` boundary, the TT
+plugin's model/version routing, the DP=4 logical-lane contract and the server/offline smokes are all
+out. What remains is the model-owned executors for both models, the common-runtime integration,
+tracing, and the paired plus absolute performance gates. Write the handoff for **that** scope: note
+the deferral explicitly and once, so the record shows it was a decision and not an omission, and do
+not spend a section planning the serving work. The plan's "Milestone C" and "Definition of Done"
+sections still describe the full scope including vLLM — say so, and **do not edit them to match**;
+recording the split is enough, and this job's licence to edit the plan does not extend to rewriting
+its milestone definitions.
+
+Two consequences worth stating in the handoff, because they change what the next job prioritises:
+
+- **Prefill is sequential per row for Milestone C, batch 32 decode.** Batched prefill applies only
+  under conditions Milestone C need not meet, so concat-32 is not on its critical path. **D-C6 is
+  still routed to Milestone C as a fix to attempt**, because the intent is to get it working — but
+  it now has a documented fallback (sequential prefill) rather than being a blocker. Record it that
+  way: a fix to attempt with a fallback, not a gate that must pass.
+- **Device sampling is on the critical path and has no fallback.** D-C5 and D-C8 stand between this
+  tree and any eager-versus-traced sampled-token comparison, which is a Milestone C gate line.
+
+It should carry:
 
 - what Milestone C inherits as working, with the commands that prove it;
 - what it inherits as broken or unqualified, with the evidence;
