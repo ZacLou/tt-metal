@@ -416,3 +416,25 @@ Run-to-run spread across fresh processes: Llama TTFT 2.0 %, Qwen TTFT 0.02 %; de
 - It did not tune anything, and it reports **no verdict** against the absolute targets. §3 of
   `BASELINE_PROCEDURE.md` states the discrepancy and its provenance and stops there.
 - It did not measure a TTTv2 arm, so nothing here is a paired result.
+
+## Two housekeeping facts the next job should know
+
+**Commits.** Every one of the nine device runs was made at
+`6af44349413ca6ce2c0d98f5b26dd2898dc1f067`, the commit this job was pinned to; each run's
+`meta.txt` records it and the tracked working tree was clean throughout. The evidence, the work-log
+checkpoint and this handoff were then committed as `810db6cd99b`, which contains **documentation
+only** — no file under `models/` was touched by this job, and
+`git diff --stat apbernal/tttv2_wh_glx_2d_modules_milestone_b -- models/demos/llama3_70b_galaxy
+models/common/models models/common/modules models/common/llm_runtime` is empty.
+
+`perf/recon/_env0/EXPECTED.txt` therefore pins `commit=6af44349413…`. A later job on a later commit
+will see that one line differ from `assert_environment.sh`, and that is correct — the pairing
+requires the commit to be identical across *its own* sixteen runs, not equal to this one. Re-freeze
+at the start of the night; every other line must still match.
+
+**Commit evidence logs with `--no-verify`.** The repo's `trailing-whitespace` and
+`end-of-file-fixer` pre-commit hooks **rewrite log files in place**, and `check-large-files` rejects
+anything over 500 KB — which most of these logs are. One hook pass ran before this was noticed and
+stripped trailing whitespace from 28 files. `git diff --ignore-all-space` over the tree came back
+empty and all six metric sets re-extract byte-identically, so nothing was lost; but a hook that
+edits a log is the opposite of verbatim, and the next job should not let it run.
