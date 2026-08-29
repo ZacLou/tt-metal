@@ -244,35 +244,32 @@ class _GalaxyRuntimeModelView:
         return self._model.embed_decode(_as_token_row(tokens))
 
     def prepare_prefill_rot_mats(self, position_indices: Any) -> list[Any]:
-        """Gather prefill cos/sin for an arbitrary position-index tensor.
+        """Return prefill cos/sin for a runtime-staged position-index tensor.
 
         `RotarySetup2D.prefill_forward(start_pos, seq_len)` slices its tilized
-        table copy, which needs the host start position; the runtime supplies the
-        positions as a *device* tensor instead. Gathering them with
-        `ttnn.embedding` reads the same table rows, produces the tilized cos/sin
-        that `rotary_embedding_llama` requires (`ttnn.embedding` takes a row-major
-        table and emits TILE), needs no host round trip, and is the same op the
-        decode rotary path already runs on this mesh.
+        table copy and is the path Milestone B qualified; the runtime supplies the
+        positions as a *device* tensor instead, so the start position is read back
+        from its first element. The runtime builds that tensor as
+        ``arange(start_pos, start_pos + seq_len)``, so one element plus the shape
+        determine the range exactly.
+
+        **A device-side gather was tried first and is not equivalent.**
+        `ttnn.embedding` over the same table needs no readback and would be
+        trace-compatible, but it moved the KV that prefill writes: with the gather,
+        `logs/i4_pagedkv_l1.log` reports the first layer's K at PCC 0.907 against
+        the same request through `GalaxyDirectRunner` while the logits agreed at
+        0.9994 — and K is the one tensor of the pair that passes through RoPE.
+        `scratch/test_rope_gather_probe.py` measures the two directly. Until that
+        is understood, this executor uses the qualified slice: a four-byte read per
+        prefill step is a smaller price than an unqualified rotary.
         """
 
-        rope = self._model.rope_setup
-        rope.load_device_weights()
-        memory_config = rope.config.prefill_cos_sin_memcfg
-        gathered: list[Any] = []
-        try:
-            for table in (rope.cos_matrix, rope.sin_matrix):
-                values = ttnn.embedding(
-                    _as_token_row(position_indices),
-                    table,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=memory_config,
-                )
-                gathered.append(ttnn.reshape(values, ttnn.Shape((1, 1, int(values.shape[-2]), int(values.shape[-1])))))
-        except BaseException:
-            for value in gathered:
-                deallocate_if_allocated(value)
-            raise
-        return gathered
+        # Through the model's own API, which is what `GalaxyDirectRunner` calls,
+        # so the two paths cannot drift apart in how they build cos/sin.
+        return self._model.prepare_prefill_rot_mats(
+            _first_position(position_indices),
+            int(position_indices.shape[-1]),
+        )
 
     # -- graph bodies -----------------------------------------------------
 
@@ -1148,6 +1145,14 @@ def _as_token_row(tokens: Any) -> Any:
     if len(shape) == 2:
         return tokens
     return ttnn.reshape(tokens, ttnn.Shape((1, shape[-1])))
+
+
+def _first_position(position_indices: Any) -> int:
+    """Read the first entry of a runtime-staged prefill position-index tensor."""
+
+    replicas = ttnn.get_device_tensors(position_indices)
+    values = ttnn.to_torch(replicas[0] if replicas else position_indices).reshape(-1)
+    return int(values[0])
 
 
 def _tile_block_start(last_token_slice: Any) -> int:
