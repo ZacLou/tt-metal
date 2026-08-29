@@ -1,6 +1,6 @@
 # `c-exec-llama` — completion handoff (attempt 1)
 
-**Last updated:** 2026-08-29T23:38Z — IN FLIGHT
+**Last updated:** 2026-08-29T23:52Z — IN FLIGHT
 **Base commit:** `67a208db961`. **Branch:** `apbernal/tttv2_wh_glx_2d_modules_milestone_c`.
 **Job window:** started ~22:50Z, driver PID 7812.
 
@@ -191,3 +191,19 @@ question directly. A second probe (`scratch/test_clash_owner_probe.py`) asks who
 L1 buffer, with a named candidate: `galaxy_address_memory_config` places the prefetcher's packed
 weight-address table **HEIGHT_SHARDED in L1 on `prefetch_sender_cores()`**, and the clash names
 core range `[0-0 - 0-3]`.
+
+### 23:52Z — the full-model campaign is running, and the runtime regression gate is met
+
+- **`pytest models/common/tests/llm_runtime`: 1032 passed, 1 skipped in 240.70 s**
+  (`logs/h1_llm_runtime_regression.log`). Byte-identical to Milestone B's expectation, and the one
+  skip is the named demo declining an unsupported `MESH_DEVICE` — not an `hf_config_or_skip` skip.
+  That is one of the brief's finish-condition gates, met. `llm_runtime` is unchanged by this job,
+  so this is a confirmation rather than a new result, but it had to be run.
+- **A full 80-layer run costs 508 s** (`f_ref128`, 1 passed in 508.18 s): 55 s to read the
+  checkpoint, ~5 min to convert and stage weights (every device weight a cache hit from
+  `/localdev/ctr-apbernal/tt_cache`), then the request. So the gate campaign is ~9 min per run
+  including queue overhead — four times the one-layer cost, not the twenty I had budgeted for.
+- Full-model reference at 128 recorded: **prefill argmax 220, decode argmax 674**.
+- 51 runs are queued across `q4`–`q7` and `q2b` behind one flock, in three chains
+  (`chain.sh`, which waits for the lock rather than racing it). `RESULTS.md` is written as each
+  lands, so a session that dies costs transcription and not silicon.

@@ -3,7 +3,7 @@
 **Job:** `c-exec-llama`, attempt 1. **Branch:** `apbernal/tttv2_wh_glx_2d_modules_milestone_c`.
 **Base commit:** `67a208db961`. **Device:** exclusive WH Galaxy `(8, 4)`, 32 boards.
 **`HF_HOME`:** `/localdev/ctr-apbernal/hf_data` for every run; each log's header records it.
-**Last updated:** 2026-08-29T23:47Z — IN FLIGHT.
+**Last updated:** 2026-08-29T23:52Z — IN FLIGHT.
 
 Run-by-run index, machine-written as runs land: [`RESULTS.md`](RESULTS.md). Every log is under
 [`logs/`](logs/) and no log is ever overwritten.
@@ -24,6 +24,23 @@ implementation shakeout, ~120 s each, and they are **not** the gate.
 | 5 | program compilation and `WarmupCoordinator`; program identity on physical geometry | *(pending)* | | |
 | 6 | three startup / serving / cleanup cycles in one process, nothing retained | *(pending)* | | |
 | 7 | teacher-forced accuracy: top-1 ≥ 91%, top-5 ≥ 99% at prefill 512 / decode 511 | *(pending)* | | |
+
+## Gates that are already met
+
+| gate | result | log |
+| --- | --- | --- |
+| `pytest models/common/tests/llm_runtime` green with unchanged expectations | **1032 passed, 1 skipped in 240.70 s** — Milestone B's exact figure; the skip is `demos/llama3_8b/demo.py:378 Unsupported MESH_DEVICE=''`, not an `hf_config_or_skip` skip | `logs/h1_llm_runtime_regression.log` |
+| modularity: zero 1D-module and zero default-runtime-behaviour changes | **0 and 0**, checked mechanically — see §"Modularity note" | this file |
+
+## Cost of a run, measured
+
+| configuration | wall clock | what dominates |
+| --- | --- | --- |
+| one-layer subset (`LLAMA33_70B_GALAXY_TEST_LAYERS=1`) | ~120 s | three safetensors shards, then the request |
+| all 80 layers | **508 s** (`f_ref128`) | 55 s to read the checkpoint, ~5 min to convert and stage 624 device weights, every one a cache hit |
+
+Both numbers are for a warm `/localdev/ctr-apbernal/tt_cache`. The gate campaign is priced at ~9 min
+per full-model run including queue overhead.
 
 ## The one-layer shakeout, in full
 
