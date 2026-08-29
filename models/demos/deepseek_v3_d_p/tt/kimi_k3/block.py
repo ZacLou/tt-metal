@@ -215,16 +215,18 @@ class TtKimiK3Block(LightweightModule):
 
     def _ffn_path(self, ffn_norm_out, *, actual_isl, padding_side, ctx) -> ttnn.Tensor:
         if self.is_moe:
+            # 4D TILE -> 3D -> MoE -> 3D -> 4D, matching TtPrefillBlock._moe_path exactly. `TtMoe`
+            # returns `(out, intermediates)`, and the squeezed input is NOT freed here: upstream
+            # does not free it either, and it is a view the op may still reference.
             moe_input = ttnn.squeeze(ffn_norm_out, dim=0)
-            moe_out = self.ffn(
+            moe_out, _ = self.ffn(
                 moe_input,
-                False,
-                actual_isl,
-                padding_side,
-                ctx.actual_start,
-                ctx.metadata,
+                return_intermediates=False,
+                actual_isl=actual_isl,
+                padding_side=padding_side,
+                actual_start=ctx.actual_start,
+                metadata=ctx.metadata,
             )
-            ttnn.deallocate(moe_input)
             return ttnn.unsqueeze(moe_out, dim=0)
 
         # Dense: gather to the full hidden dim, then TtFfn reduce-scatters internally — the same

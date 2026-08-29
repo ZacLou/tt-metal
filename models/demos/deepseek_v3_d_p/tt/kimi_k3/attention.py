@@ -122,13 +122,23 @@ class TtK3KdaAttention:
 
     writes_kv = False
 
-    def __init__(self, kda, layer_idx: int, state_cache, tp_axis: int, num_links: int, tp_topology):
-        self._kda = kda
+    def __init__(self, kda, layer_idx: int, tp_axis: int, num_links: int, tp_topology, state_cache=None):
+        self.kda = kda
         self.layer_idx = layer_idx
         self._states = state_cache
         self._tp_axis = tp_axis
         self._num_links = num_links
         self._tp_topology = tp_topology
+
+    def bind_state_cache(self, state_cache) -> None:
+        """Give this layer its carry.
+
+        Deferred on purpose: `KdaStateCache` allocates from the `ttKDA` instances, so the cache
+        cannot exist until the layers do, and the layers must not each allocate their own — the
+        whole point of the cache is one address per carry for the life of the run. So construction
+        is two-phase, and this is the seam rather than an attribute someone reaches into.
+        """
+        self._states = state_cache
 
     def forward(self, normed: ttnn.Tensor, ctx: K3AttnContext) -> ttnn.Tensor:
         gathered = ttnn.all_gather(
@@ -142,7 +152,11 @@ class TtK3KdaAttention:
         hidden = ttnn.squeeze(gathered, dim=0)
         ttnn.deallocate(gathered)
 
-        output, new_state = self._kda.forward(hidden, self._states.read(self.layer_idx, ctx.cache_user_id))
+        if self._states is None:
+            raise ValueError(
+                f"KDA layer {self.layer_idx} has no state cache; call bind_state_cache() before the first forward"
+            )
+        output, new_state = self.kda.forward(hidden, self._states.read(self.layer_idx, ctx.cache_user_id))
         ttnn.deallocate(hidden)
         self._states.commit(self.layer_idx, new_state, ctx.cache_user_id)
 
@@ -179,6 +193,7 @@ def build_attention(
     the per-axis pair the model opened — `per_axis_topology()` — and is passed to MLA whole (its SDPA
     runs on the SP axis) but to KDA as its TP element only, since KDA's own CCL is TP-side.
     """
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
     from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
     from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
     from models.demos.deepseek_v3_d_p.tt.mla.mla import ttMLA
@@ -211,12 +226,13 @@ def build_attention(
             )
         )
 
-    if state_cache is None:
-        raise ValueError(f"layer {layer_idx} is a KDA layer and needs a KdaStateCache to carry its recurrence")
+    # `state_cache` may be None here: the cache allocates from the ttKDA instances, so it is built
+    # once every layer exists and bound with `bind_state_cache`. `forward` raises if that never
+    # happened, rather than silently starting each chunk from a fresh zero state.
     return TtK3KdaAttention(
         ttKDA(
             mesh_device,
-            model_cfg_kda_config(model_cfg),
+            kimi_k3_kda_config(),
             state_dict.get("kda_weights"),
             layer_idx=layer_idx,
             weight_cache_path=weight_cache_path,
@@ -226,15 +242,8 @@ def build_attention(
             program_config=kimi_k3_program_config(tp_ccl_topology=tp_topology),
         ),
         layer_idx=layer_idx,
-        state_cache=state_cache,
         tp_axis=tp_axis,
         num_links=num_links,
         tp_topology=tp_topology,
+        state_cache=state_cache,
     )
-
-
-def model_cfg_kda_config(model_cfg: type):
-    """The `KDAConfig` for this model. Split out so a variant config can override it."""
-    from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
-
-    return kimi_k3_kda_config()

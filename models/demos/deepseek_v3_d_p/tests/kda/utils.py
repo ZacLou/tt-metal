@@ -50,14 +50,25 @@ class KimiK3TestCase:
 _FABRIC_1D = {"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D}
 
 
+_FABRIC_2D = {"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_2D}
+
+
 def kda_placements(**device_params):
-    """The two placements, with any extra device params (e.g. `trace_region_size`) merged in."""
+    """The placements, with any extra device params (e.g. `trace_region_size`) merged in.
+
+    Both Galaxy fabrics are carried, not just the one Kimi-K3 is certified on. `attn_res_gather_softmax`
+    was found to hang under FABRIC_2D_TORUS_XY at 8x4 while passing under FABRIC_2D at the same mesh,
+    so "which fabric" is now a live question for every op in this model rather than a setting, and a
+    suite that tests only one of them cannot answer it.
+    """
+    galaxy = pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4")
     return [
         pytest.param((2, 4), {**_FABRIC_1D, **device_params}, id="fabric1d-2x4"),
+        pytest.param((8, 4), {**_FABRIC_2D, **device_params}, marks=galaxy, id="fabric2d-8x4"),
         pytest.param(
             (8, 4),
             torus_xy_device_params(l1_small_size=24576, **device_params),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            marks=galaxy,
             id="torus-xy-8x4",
         ),
     ]

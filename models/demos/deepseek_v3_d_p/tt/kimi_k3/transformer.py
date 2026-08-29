@@ -5,8 +5,10 @@
 
 Owns the three things a hybrid AttnRes model needs and `TtPrefillTransformer` has no place for: the
 schedule that says which layers are MLA, the KDA carries, and the residual the blocks talk to. Every
-leaf below it is the shared one — `TtParallelEmbedding`, `TtDistributedRmsNorm`, `TtLMHead`, and the
-blocks' own `ttMLA` / `TtMoe` / `TtFfn`.
+leaf below it is the shared one — `TtParallelEmbedding`, `TtDistributedRmsNorm`, and the blocks' own
+`ttMLA` / `TtMoe` / `TtFfn`. The LM head is deliberately absent so far: the bring-up gates compare
+per-layer residuals and the KV cache against the golden traces, and logits only enter at the very
+end.
 
 The residual is injected rather than chosen here. `PlainResidualStream` is the bring-up arm: it
 reproduces `ttnn.add` exactly, so a K3 run can be scored layer by layer with AttnRes out of the
@@ -79,6 +81,8 @@ class TtKimiK3Transformer(LightweightModule):
                 vocab_size=config.vocab_size,
                 emb_dim=config.hidden_size,
                 torch_weight=state_dict.get("embed_weight"),
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
                 weight_cache_path=weight_cache_path,
             )
 
@@ -115,7 +119,7 @@ class TtKimiK3Transformer(LightweightModule):
                 first_layer_idx=first_layer_idx,
             )
             if not self.schedule.local_is_mla(local_idx):
-                kda_layers[layer_idx] = attention._kda
+                kda_layers[layer_idx] = attention.kda
 
             self.layers.append(
                 TtKimiK3Block(
@@ -143,7 +147,7 @@ class TtKimiK3Transformer(LightweightModule):
             self.kda_states = KdaStateCache(kda_layers, num_slots=num_users)
             for layer in self.layers:
                 if not layer.attention.writes_kv:
-                    layer.attention._states = self.kda_states
+                    layer.attention.bind_state_cache(self.kda_states)
 
         self.norm = None
         if is_last_rank and build_tail and not kv_only_last_layer:

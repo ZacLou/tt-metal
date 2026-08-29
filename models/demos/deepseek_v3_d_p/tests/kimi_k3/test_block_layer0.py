@@ -54,13 +54,25 @@ SEQ_LEN = 5120
 # small shapes, so this sits between them and will be tightened once the first number is in.
 BLOCK_PCC = 0.98
 
+GALAXY_MARK = pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4")
+
+# Both fabrics, because AttnRes forces the question. `attn_res_gather_softmax` hangs under
+# FABRIC_2D_TORUS_XY and passes under FABRIC_2D at the same 8x4 mesh, so if Kimi-K3 has to run on
+# Fabric2D until that is fixed, every other part of the model has to be known to work there too.
+# This layer covers KDA, both norms and the dense SiTU FFN — the K3-specific half of a block.
 PLACEMENTS = [
     pytest.param(
         (8, 4),
-        torus_xy_device_params(l1_small_size=1152),
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, l1_small_size=1152),
+        marks=GALAXY_MARK,
         id="torus-xy-8x4",
-    )
+    ),
+    pytest.param(
+        (8, 4),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": 1152},
+        marks=GALAXY_MARK,
+        id="fabric2d-8x4",
+    ),
 ]
 
 
@@ -133,10 +145,9 @@ def test_layer0_plain_residual_matches_torch(mesh_device, device_params, tmp_pat
             sp_axis=SP_AXIS,
             tp_axis=TP_AXIS,
         )
-        # The cache needs the built layer, and the layer needs no cache to be built — so the two are
-        # wired after construction rather than in one call.
-        states = KdaStateCache({0: attention._kda})
-        attention._states = states
+        # The cache allocates from the built ttKDA, so construction is two-phase.
+        states = KdaStateCache({0: attention.kda})
+        attention.bind_state_cache(states)
 
         block = TtKimiK3Block(
             mesh_device,
