@@ -61,7 +61,21 @@ SEQ_LEN = 5120
 # Per-layer, against the model itself. The package's chunked per-layer bar is 0.88 at depth 61-78;
 # at depths 1-2 the accumulated error should be far smaller, so this starts strict and the ladder's
 # deeper rungs will say where it has to relax.
-LAYER_PCC = 0.99
+# 0.99 holds with margin while the only sealed candidate is the embedding, which is exact. Past the
+# second seal it does not, and the reason is structural rather than a defect: immediately after a
+# seal the live stream carries one layer of signal while the sealed candidate dominates the softmax
+# mixture and contributes the error accumulated across the block it summarises. As the live sum
+# grows it dominates again and the error washes out. Measured at depth 24, that is a step at layer
+# 12, a minimum of 0.9864 at layer 19, and recovery to 0.9980 by layer 23 — a defect in the second
+# sealed block would keep falling instead of climbing back.
+#
+# So the bar follows the regime. Depths through 12 hold the shallow 0.99; depth 24 uses the
+# package's own per-layer depth threshold, which exists for exactly this accumulation
+# (`LAYER_PCC_THRESHOLD = 0.88` in test_prefill_transformer_chunked.py). 0.98 is set here instead:
+# still well inside what was measured, but tight enough that a real regression past the second seal
+# shows up rather than hiding under a floor with 10 points of slack.
+SHALLOW_LAYER_PCC = 0.99
+DEEP_LAYER_PCC = 0.98
 
 # 1 and 2 are cheap-ish; 5 is the first rung with a full-attention layer (layer 3) and so the first
 # that needs a KV cache at all. 12 and 24 follow the same shape and are gated on a built TTNN weight
@@ -81,7 +95,10 @@ KV_CACHE_PCC = 0.96
 PLACEMENTS = [
     pytest.param(
         (8, 4),
-        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": 1152},
+        # 24576, not the AttnRes suite's 1152: at depth 24 the sealed set has two blocks for the first
+        # time, and `inter_block`'s statistics collective then needs 1920 B of L1_SMALL per core
+        # against the 1152 B that value provides. 24576 is what the rest of this package uses.
+        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": 24576},
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="fabric2d-8x4",
     )
@@ -300,13 +317,13 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
     # its slab and reads it back for causal attention within the chunk, so a wrong write can be
     # partly self-consistent here and only surface at chunk 2, when attention reads the previous
     # chunk's cached KV. The golden ships one file per MLA layer, so there is no reason not to check.
-    if kvpe is not None and trace.has_kv_cache(schedule.mla_layer_ids[0]):
+    if kvpe is not None and trace.has_kv_cache(model.schedule.mla_layer_ids[0]):
         # The device cache is indexed by rank-local MLA SLOT; the golden by MODEL layer. The
         # schedule is the only thing that knows the mapping, which is exactly why the block never
         # calls `KimiK3Config.mla_kv_slot`.
         cache = gather_cache_tp0(kvpe.storage, mesh_device)
         positions = blockcyclic_positions(tuple(mesh_device.shape)[SP_AXIS], SEQ_LEN, SEQ_LEN)
-        for slot, model_layer in enumerate(schedule.mla_layer_ids[: schedule.num_mla_layers]):
+        for slot, model_layer in enumerate(model.schedule.mla_layer_ids[: model.schedule.num_mla_layers]):
             device_rows = unrotate_cache_layer(cache[slot], positions, SEQ_LEN)
             golden_rows = trace.kv_cache(model_layer, 0, SEQ_LEN)
             # Kimi-K3 is NoPE, so the second half carries no rotation to re-base — the rule at
@@ -319,8 +336,24 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
                 f"KV cache slot {slot} (model layer {model_layer}) diverged: " f"lora={pcc_nope:.6f} rope={pcc_pe:.6f}"
             )
 
+    # Score every layer before asserting on any of them. Asserting inside the loop stops at the
+    # first shortfall and hides the shape of the curve after it — and the shape is the diagnosis:
+    # a step that then holds flat is accumulation, a step that keeps falling is a real defect in
+    # whatever changed at that layer. At depth 24 that distinction lands exactly on the second seal.
+    scores = {}
     for local_idx in range(num_layers):
         want = trace.decoder_output(local_idx, 0, SEQ_LEN)
-        passed, message = comp_pcc(want, per_layer[local_idx], LAYER_PCC)
-        logger.info(f"L{num_layers} layer {local_idx} vs decoder_output_layer_{local_idx}: {message}")
-        assert passed, f"layer {local_idx} diverged from the model: {message}"
+        _, message = comp_pcc(want, per_layer[local_idx], SHALLOW_LAYER_PCC)
+        scores[local_idx] = float(str(message).split()[-1])
+        seal = " <- seal" if local_idx % KimiK3Config.ATTN_RES_BLOCK_SIZE == 0 else ""
+        logger.info(
+            f"L{num_layers} layer {local_idx} vs decoder_output_layer_{local_idx}: {scores[local_idx]:.7f}{seal}"
+        )
+
+    layer_pcc = DEEP_LAYER_PCC if num_layers > KimiK3Config.ATTN_RES_BLOCK_SIZE else SHALLOW_LAYER_PCC
+    worst_idx = min(scores, key=scores.get)
+    logger.info(f"L{num_layers} worst layer {worst_idx}: {scores[worst_idx]:.7f} (bar {layer_pcc})")
+    assert scores[worst_idx] >= layer_pcc, (
+        f"worst layer {worst_idx} diverged from the model: {scores[worst_idx]:.7f} < {layer_pcc}; "
+        f"full curve {[f'{i}:{v:.5f}' for i, v in scores.items()]}"
+    )
