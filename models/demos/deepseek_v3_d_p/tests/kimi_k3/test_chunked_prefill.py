@@ -203,7 +203,7 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
     output_pcc_bar = DEEP_OUTPUT_PCC if num_layers > KimiK3Config.ATTN_RES_BLOCK_SIZE else SHALLOW_OUTPUT_PCC
     footprints = []
     failures = []
-    last_layer_pccs = {}
+    per_chunk_layer_pccs = {}
 
     for chunk in range(NUM_CHUNKS):
         start = chunk * CHUNK
@@ -242,7 +242,7 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
             for idx in range(num_layers)
         }
         output_pcc = min(layer_pccs.values())
-        last_layer_pccs = layer_pccs
+        per_chunk_layer_pccs[chunk] = layer_pccs
 
         # Snapshots land every 640 tokens, so the boundary after chunk k is row 8(k+1) - 1. The
         # golden's [heads, v_dim, k_dim] needs transposing into the layer's [heads, k_dim, v_dim].
@@ -294,12 +294,18 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
         if golden_conv is not None and conv_pcc < CARRY_PCC:
             failures.append(f"chunk {chunk} conv carry {conv_pcc}")
 
-    # The whole per-layer curve on the final chunk, which is the worst case and the one a report
-    # should quote — a worst-layer summary hides where the error actually sits.
-    logger.info(f"  per-layer PCC on the final chunk (tokens {TOTAL_LEN - CHUNK}..{TOTAL_LEN}):")
-    for idx in sorted(last_layer_pccs):
-        seal = " <- seal" if idx % KimiK3Config.ATTN_RES_BLOCK_SIZE == 0 else ""
-        logger.info(f"    layer {idx:2d}: {last_layer_pccs[idx]:.6f}{seal}")
+    # The per-layer curve at the first, middle and last chunk. A worst-layer summary hides where the
+    # error sits, and quoting only the final chunk hides whether degradation is progressive or
+    # saturates after the first few chunks — which is the difference between something that will
+    # keep getting worse at 1M tokens and something that will not.
+    sampled = (0, NUM_CHUNKS // 2, NUM_CHUNKS - 1)
+    logger.info(
+        "  per-layer PCC by context length: " + "  ".join(f"chunk {c} = {(c + 1) * CHUNK} tok" for c in sampled)
+    )
+    for idx in sorted(per_chunk_layer_pccs[0]):
+        seal = "  <- seal" if idx % KimiK3Config.ATTN_RES_BLOCK_SIZE == 0 else ""
+        cells = "  ".join(f"{per_chunk_layer_pccs[c][idx]:.6f}" for c in sampled)
+        logger.info(f"    layer {idx:2d}: {cells}{seal}")
 
     # The KV slabs, after every chunk has been written. This is where a stale or misindexed slab
     # shows: within one chunk MLA reads back what it just wrote and can be self-consistent while

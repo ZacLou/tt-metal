@@ -114,6 +114,9 @@ def test_prefill_cost(mesh_device, device_params, num_layers, num_chunks):
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
         max_seq_len=total_len,
+        # `actual_start` is only accepted by a model built for chunking, and ttMLA asserts the pair
+        # match. A single-chunk run passes neither.
+        is_chunked=num_chunks > 1,
         weight_cache_path=cache,
     )
 
@@ -144,7 +147,8 @@ def test_prefill_cost(mesh_device, device_params, num_layers, num_chunks):
         """One whole prefill: every chunk, in order, as a request would arrive."""
         model.reset_streams()
         for index, tokens in enumerate(chunks):
-            out = model.forward(tokens, kvpe_cache=kvpe, actual_start=index * SEQ_LEN)
+            start = index * SEQ_LEN if num_chunks > 1 else None
+            out = model.forward(tokens, kvpe_cache=kvpe, actual_start=start)
             if out is not None:
                 ttnn.deallocate(out)
 
@@ -177,6 +181,35 @@ def test_prefill_cost(mesh_device, device_params, num_layers, num_chunks):
     finally:
         if model.kda_states is not None:
             model.kda_states.deallocate()
+
+    # Per-chunk device time, when there is more than one chunk. The total divided by the count is an
+    # average, and the average hides the thing worth knowing: MLA attends over every token cached so
+    # far, so chunk N should cost more than chunk N-1 while the KDA layers stay flat. Profiling each
+    # chunk separately is the only way to see that curve.
+    if num_chunks > 1:
+        model.reset_streams()
+        per_chunk = []
+        for index, tokens in enumerate(chunks):
+
+            def one(_tokens=tokens, _index=index):
+                out = model.forward(_tokens, kvpe_cache=kvpe, actual_start=_index * SEQ_LEN)
+                if out is not None:
+                    ttnn.deallocate(out)
+
+            try:
+                _, records = profile_realtime_program(mesh_device, one, collect_all=True)
+                path = defaultdict(float)
+                for record in records:
+                    path[record["runtime_id"]] = max(path[record["runtime_id"]], record["duration_ns"])
+                per_chunk.append(sum(path.values()) / 1e6)
+            except RuntimeError:
+                per_chunk.append(float("nan"))
+        logger.info(
+            f"PERF L{num_layers:2d} per-chunk device ms: "
+            + " ".join(f"{c:.1f}" for c in per_chunk)
+            + f"  (first {per_chunk[0]:.1f}, last {per_chunk[-1]:.1f}, "
+            + f"growth {per_chunk[-1] - per_chunk[0]:+.1f} ms over {num_chunks} chunks)"
+        )
 
     logger.info(
         f"PERF L{num_layers:2d} x {num_chunks:2d}chunk ({total_len:6d} tok): eager {eager_ms:9.2f} ms "
