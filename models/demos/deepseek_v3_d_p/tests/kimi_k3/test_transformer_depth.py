@@ -38,6 +38,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, 
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
+    TRACE_1M,
     TRACE_100K,
     load_checkpoint_tensors,
     resolve_checkpoint,
@@ -63,7 +64,13 @@ LAYER_PCC = 0.99
 # 1 and 2 are cheap-ish; 5 is the first rung with a full-attention layer (layer 3) and so the first
 # that needs a KV cache at all. 12 and 24 follow the same shape and are gated on a built TTNN weight
 # cache rather than a per-run conversion.
-DEPTHS = [1, 2, 5]
+DEPTHS = [1, 2, 5, 12, 24]
+
+# The 100k trace instruments the inside of a layer — kda_*, moe_io, mla_io — but only records
+# decoder_output for layers 0..4, so it can only score depths up to 5. The 1M trace records
+# decoder_output for layers 0..24 and the 24 MLA layers' KV, and nothing else; it is the only oracle
+# for the deeper rungs, and the inner taps below fall silent there because `trace.has` says so.
+DEEP_TRACE_FROM = 12
 
 PLACEMENTS = [
     pytest.param(
@@ -111,7 +118,7 @@ def _compose(mesh_device, tensor):
 @pytest.mark.parametrize("num_layers", DEPTHS, ids=[f"L{n}" for n in DEPTHS])
 def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
     checkpoint = resolve_checkpoint()
-    trace = resolve_trace(TRACE_100K)
+    trace = resolve_trace(TRACE_1M if num_layers >= DEEP_TRACE_FROM else TRACE_100K)
     if checkpoint is None or trace is None:
         pytest.skip("needs KIMI_K3_HF_MODEL and the 100k golden trace")
 
@@ -264,7 +271,16 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         if got is not None and local_idx == 0 and trace.has("kda", "kda_output_layer_0"):
             want = trace.rows("kda", "kda_output_layer_0", 0, SEQ_LEN)
             logger.info(f"  L{num_layers} layer 0 attn_out vs kda_output: {comp_pcc(want, got, 0.99)[1]}")
-        elif got is not None and local_idx > 0 and trace.has("moe_io", f"moe_output_layer_{local_idx}"):
+        elif (
+            got is not None
+            and local_idx > 0
+            and local_idx % KimiK3Config.ATTN_RES_BLOCK_SIZE
+            and trace.has("moe_io", f"moe_output_layer_{local_idx}")
+        ):
+            # `attn_i = out_i - out_{i-1} - moe_i` holds only while the running sum is continuous
+            # across the boundary. At a seal layer (`i % 12 == 0`) the stream restarts, so out_i
+            # carries none of out_{i-1} and the subtraction is meaningless. Skip those rather than
+            # print a number that looks like a failure.
             want = (
                 trace.decoder_output(local_idx, 0, SEQ_LEN)
                 - trace.decoder_output(local_idx - 1, 0, SEQ_LEN)
