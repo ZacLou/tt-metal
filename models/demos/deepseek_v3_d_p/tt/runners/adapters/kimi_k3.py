@@ -107,12 +107,53 @@ class KimiK3Adapter(MLAPrefillAdapter):
 
         return KimiSparseMoeBlock
 
-    def allocate_kv_cache(self, **kwargs):
-        raise NotImplementedError(
-            "Kimi-K3 KV-cache allocation needs the 24-of-93 model-layer -> kv-slot map; the "
-            "inherited MLA allocator would size the cache to the full 93-layer count. Use "
-            "KimiK3Config.mla_kv_slot() when wiring this up."
+    def allocate_kv_cache(self, *, mesh_device, hf_config, params):
+        """Size the KV cache to this rank's FULL-ATTENTION layers, not its layers.
+
+        The inherited allocator takes `params.num_layers` and would reserve 93 slots per user for a
+        model that writes 24. Worse, the slot arithmetic downstream
+        (`cache_user_id * layer_num + cache_layer_idx`) is computed against whatever count the cache
+        was sized to, so an oversized cache is not merely wasteful — it puts every user's rows at
+        the wrong stride.
+
+        The count is rank-local. `KimiK3Config.mla_kv_slot()` returns the model-wide slot and is the
+        wrong tool here for any rank with `first_layer_idx > 0`; `KimiK3LayerSchedule` is the
+        rank-local one. See `tt/kimi_k3/layer_schedule.py`.
+
+        A K3 rank can legitimately hold ZERO full-attention layers — a 1-layer bring-up run is layer
+        0, which is KDA — and then there is no cache to allocate at all.
+        """
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
+        from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
+
+        schedule = KimiK3LayerSchedule.build(KimiK3Config, params.first_layer_idx, params.num_layers)
+        if schedule.num_mla_layers == 0:
+            return MlaKvCaches(kvpe=None)
+
+        return MlaKvCaches(
+            kvpe=allocate_mla_kvpe_cache(
+                mesh_device=mesh_device,
+                hf_config=hf_config,
+                max_seq_len=params.max_seq_len,
+                mesh_shape=params.mesh_shape,
+                sp_axis=params.sp_axis,
+                num_layers=schedule.num_mla_layers,
+                num_users=params.num_users,
+            )
         )
+
+    def layer_split_boundaries(self, num_layers: int):
+        """Pipeline ranks may only start on an AttnRes block boundary.
+
+        AttnRes seals every `ATTN_RES_BLOCK_SIZE` layers, and a rank starting at layer `F` inherits
+        exactly `F // 12` sealed snapshots from upstream. Constraining `F` to a multiple of 12 makes
+        that count static, which is what lets the cross-rank activation handoff have a fixed width
+        instead of one that depends on where the split landed. GLM-5.2 constrains its splits for the
+        same class of reason.
+        """
+        block = KimiK3Config.ATTN_RES_BLOCK_SIZE
+        return {boundary for boundary in range(0, num_layers + 1, block)}
 
     def build_runtime(self, **kwargs):
         raise NotImplementedError(
