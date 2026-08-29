@@ -53,6 +53,7 @@ from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWa
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root, mark_layer_cached
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 
 CHUNK = 5120
@@ -101,6 +102,7 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params):
     checkpoint = Path(checkpoint)
     root = resolve_model_root(checkpoint)
     config = kimi_k3_hf_config(max_seq=CHUNK)
+    cache = cache_root(checkpoint, tuple(mesh_device.shape), TP_AXIS)
 
     attn_res = TtAttnRes(
         mesh_device,
@@ -135,7 +137,7 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params):
         mesh_device,
         config,
         KimiK3Config,
-        _model_state_dict(checkpoint, NUM_LAYERS, root),
+        _model_state_dict(checkpoint, NUM_LAYERS, root, cache),
         num_layers=NUM_LAYERS,
         seq_len=CHUNK,
         residual_factory=residual_factory,
@@ -143,7 +145,10 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params):
         tp_axis=TP_AXIS,
         max_seq_len=CHUNK,
         is_chunked=True,
+        weight_cache_path=cache,
     )
+    for layer_idx in range(NUM_LAYERS):
+        mark_layer_cached(cache, layer_idx)
 
     golden_carry = trace.rows("kda", "kda_recurrent_state_layer_0")
     footprints = []

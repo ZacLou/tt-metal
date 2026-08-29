@@ -49,7 +49,7 @@ from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWa
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import load_layer_state_dict, load_routed_expert_weights
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root, mark_layer_cached
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 
@@ -82,26 +82,19 @@ PLACEMENTS = [
 ]
 
 
-def _model_state_dict(checkpoint: Path, num_layers: int, root: str) -> dict:
+def _model_state_dict(checkpoint: Path, num_layers: int, root: str, cache: Path | None = None) -> dict:
     """The transformer's state dict: embedding, final norm, and one entry per layer.
 
     Routed experts are fetched per layer rather than up front — 59 GB each — so a caller that only
-    wants layer 0 never pays for them.
+    wants layer 0 never pays for them, and a layer whose TTNN cache is already complete is not read
+    from the checkpoint at all.
     """
-    from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import load_tensors
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import load_layer_state_dict_cached, load_tensors
 
     model = load_tensors(
         checkpoint, {"embed_weight": f"{root}embed_tokens.weight", "norm_weight": f"{root}norm.weight"}
     )
-    layers = []
-    for layer_idx in range(num_layers):
-        layer = load_layer_state_dict(checkpoint, layer_idx)
-        if layer_idx >= KimiK3Config.NUM_DENSE_LAYERS:
-            logger.info(f"layer {layer_idx}: reading {KimiK3Config.NUM_ROUTED_EXPERTS} routed experts (~59 GB)")
-            layer["routed_expert_weights"] = load_routed_expert_weights(
-                checkpoint, layer_idx, KimiK3Config.NUM_ROUTED_EXPERTS
-            )
-        layers.append(layer)
+    layers = [load_layer_state_dict_cached(checkpoint, idx, cache) for idx in range(num_layers)]
     return {"embed_weight": model["embed_weight"].float(), "norm_weight": model["norm_weight"], "layers": layers}
 
 
@@ -125,7 +118,11 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
     checkpoint = Path(checkpoint)
     root = resolve_model_root(checkpoint)
     config = kimi_k3_hf_config(max_seq=SEQ_LEN)
-    state_dict = _model_state_dict(checkpoint, num_layers, root)
+    # `$TT_KIMI_K3_PREFILL_TTNN_CACHE` turns the checkpoint read into a one-time cost per depth.
+    # Every component already writes its tensorbins when handed a `weight_cache_path`; the markers
+    # below record which layers finished, so a later run skips the 59 GB per MoE layer entirely.
+    cache = cache_root(checkpoint, tuple(mesh_device.shape), TP_AXIS)
+    state_dict = _model_state_dict(checkpoint, num_layers, root, cache)
 
     attn_res = TtAttnRes(
         mesh_device,
@@ -164,7 +161,14 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
         max_seq_len=SEQ_LEN,
+        weight_cache_path=cache,
     )
+
+    # Only now is each layer's cache known good: it was just built from real weights end to end.
+    # Recording completeness rather than inferring it is deliberate — a per-component
+    # `check_cache_complete` that is subtly wrong yields a silently wrong model, not a failure.
+    for layer_idx in range(num_layers):
+        mark_layer_cached(cache, layer_idx)
 
     # One KV slot per FULL-ATTENTION layer, not per layer. Depths 1 and 2 hold none — layers 0 and 1
     # are both KDA — so there is nothing to allocate and `kvpe_cache=None` is the honest argument.

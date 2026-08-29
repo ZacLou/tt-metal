@@ -21,10 +21,13 @@ root is read off the index rather than guessed, and `language_model.model.` is t
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from pathlib import Path
 
 import torch
+from loguru import logger
 from safetensors import safe_open
 
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_kda_config
@@ -179,3 +182,109 @@ def load_routed_expert_weights(checkpoint_dir: Path, layer_idx: int, num_experts
     }
     flat = load_tensors(Path(checkpoint_dir), wanted)
     return [{alias: flat[f"{expert}::{alias}"] for alias in ROUTED_EXPERT_KEYS} for expert in range(num_experts)]
+
+
+# --- TTNN weight cache -----------------------------------------------------------------------
+#
+# Building a Kimi-K3 layer from the checkpoint costs ~59 GB of host reads for its 896 routed experts
+# plus a bfloat4_b conversion of 28 experts per chip, and the depth ladder pays it again at every
+# rung: L12 spends over an hour on weights before the first token moves. Every component in the
+# stack already accepts `weight_cache_path` and already writes its tensorbins when given one, so the
+# only missing piece is knowing whether a layer's cache is COMPLETE — and therefore whether the
+# checkpoint needs opening at all.
+#
+# The obvious implementation, composing each component's own `check_cache_complete`, is the one to
+# avoid. Those checks are per-component and easy to get subtly wrong, and being wrong is not a
+# failure but a silently wrong model: a cache missing MLA's `g_proj` reports complete and the layer
+# loads a `torch.empty` placeholder. That exact bug was already found once in this bring-up.
+#
+# So completeness is recorded rather than inferred. A layer's marker is written only after the layer
+# has been built end to end from real weights, which is the only moment its cache is known good. The
+# marker path carries the checkpoint identity and the mesh geometry, so a different checkpoint, mesh
+# or TP axis simply misses and rebuilds instead of loading someone else's tensors.
+
+_CACHE_ENV = "TT_KIMI_K3_PREFILL_TTNN_CACHE"
+
+# Alongside the other prefill caches on the models share, next to `glm52_ttnn_cache` and the GLM and
+# DeepSeek caches. `/mnt/models` itself is group-writable only by local-syseng, so this sits in
+# `deepseek-prefill-cache/`, which is where the golden traces and the other models' TTNN caches
+# already live. This is a DEFAULT rather than a requirement: the point of a cache is that every run
+# benefits without anyone remembering an environment variable, and
+# `$TT_KIMI_K3_PREFILL_TTNN_CACHE` still relocates it (or disables it, if set empty).
+_DEFAULT_CACHE = Path("/mnt/models/deepseek-prefill-cache/kimi-k3-ttnn-cache")
+
+
+def _checkpoint_identity(checkpoint_dir: Path) -> str:
+    """A short stable id for a checkpoint, from its index rather than its 5.5 TB of tensors."""
+    index = Path(checkpoint_dir) / "model.safetensors.index.json"
+    digest = hashlib.sha256()
+    digest.update(Path(checkpoint_dir).resolve().name.encode())
+    stat = index.stat()
+    digest.update(str(stat.st_size).encode())
+    return digest.hexdigest()[:16]
+
+
+def cache_root(checkpoint_dir: Path, mesh_shape: tuple[int, int], tp_axis: int) -> Path | None:
+    """Where this (checkpoint, mesh, tp_axis) keeps its tensorbins, or None if caching is off.
+
+    Defaults to the models share so runs pick it up with no configuration; set
+    `$TT_KIMI_K3_PREFILL_TTNN_CACHE` to relocate it, or to the empty string to disable caching. A
+    None return is always safe to pass straight through as `weight_cache_path`.
+    """
+    override = os.getenv(_CACHE_ENV)
+    if override == "":
+        return None  # explicitly empty disables caching, for a run that must build from weights
+    root = Path(override) if override else _DEFAULT_CACHE
+    rows, columns = mesh_shape
+    path = (
+        root
+        / f"kimi_k3_bh_{rows * columns}dev"
+        / _checkpoint_identity(checkpoint_dir)
+        / f"mesh{rows}x{columns}.tpaxis{tp_axis}"
+    )
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        # An unwritable share should slow a run down, not fail it.
+        logger.warning(f"KDA/K3 weight cache unavailable at {path} ({error}); building from the checkpoint")
+        return None
+    return path
+
+
+def _marker(root: Path, layer_idx: int) -> Path:
+    return root / f".layer_{layer_idx}.complete"
+
+
+def layer_is_cached(root: Path | None, layer_idx: int) -> bool:
+    return root is not None and _marker(root, layer_idx).is_file()
+
+
+def mark_layer_cached(root: Path | None, layer_idx: int) -> None:
+    """Record that this layer's cache is complete. Call ONLY after building it from real weights."""
+    if root is not None:
+        _marker(root, layer_idx).touch()
+
+
+def load_layer_state_dict_cached(
+    checkpoint_dir: Path,
+    layer_idx: int,
+    root: Path | None,
+    *,
+    model_cfg: type = KimiK3Config,
+    num_routed_experts: int | None = None,
+) -> dict:
+    """This layer's weights, or an empty dict when its cache is already complete.
+
+    An empty dict is the whole mechanism: every component reads its weights with
+    `state_dict.get(...)`, and each falls back to its tensorbins when the entry is missing and a
+    `weight_cache_path` is set. Nothing in the stack needed changing for this.
+    """
+    if layer_is_cached(root, layer_idx):
+        logger.info(f"layer {layer_idx}: cache hit, not opening the checkpoint")
+        return {}
+    state_dict = load_layer_state_dict(checkpoint_dir, layer_idx, model_cfg=model_cfg)
+    if layer_idx >= model_cfg.NUM_DENSE_LAYERS:
+        experts = num_routed_experts if num_routed_experts is not None else model_cfg.NUM_ROUTED_EXPERTS
+        logger.info(f"layer {layer_idx}: cache miss, reading {experts} routed experts (~59 GB)")
+        state_dict["routed_expert_weights"] = load_routed_expert_weights(checkpoint_dir, layer_idx, experts)
+    return state_dict
