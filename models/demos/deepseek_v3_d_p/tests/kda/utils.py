@@ -8,6 +8,7 @@ import json
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+import pytest
 import torch
 
 import ttnn
@@ -15,6 +16,7 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
     KIMI_K3_FIRST_KDA_LAYER,
     KIMI_K3_HF_REVISION,
@@ -35,6 +37,43 @@ class KimiK3TestCase:
     hidden: torch.Tensor
     checkpoint_dir: Path
     checkpoint_identity: str
+
+
+# The two placements a KDA mesh test can actually be run on.
+#
+# `(2, 4)` under Fabric1D is the LoudBox arm every one of these tests was written for. It does not
+# run on a Blackhole Galaxy: that box opens only all-32-device configs, and a sub-mesh request there
+# does not skip — it times out in `Fabric Router Sync` after ten seconds. So the Galaxy arm is not
+# redundant coverage, it is the *only* coverage on the box Kimi-K3 runs on, and it differs in the
+# way that matters: TorusXY wraps both mesh axes, so `per_axis_topology()` is `(Ring, Ring)` and the
+# halo exchange and the distributed affine prefix run as rings rather than lines.
+_FABRIC_1D = {"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D}
+
+
+def kda_placements(**device_params):
+    """The two placements, with any extra device params (e.g. `trace_region_size`) merged in."""
+    return [
+        pytest.param((2, 4), {**_FABRIC_1D, **device_params}, id="fabric1d-2x4"),
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(l1_small_size=24576, **device_params),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ]
+
+
+KDA_PLACEMENTS = kda_placements()
+
+# Every KDA mesh test wants the same per-rank work regardless of how deep the sequence axis is:
+# 640 tokens is 20 chunks of one tile, which is what the recurrence's grouped scan is tuned around
+# and what a 5120-token Galaxy prefill chunk gives each of its 8 sequence ranks.
+TOKENS_PER_SP_RANK = 640
+
+
+def sp_sequence(mesh_device: ttnn.MeshDevice, sp_axis: int, per_rank: int = TOKENS_PER_SP_RANK) -> int:
+    """Total sequence length that gives every sequence-parallel rank `per_rank` tokens."""
+    return tuple(mesh_device.shape)[sp_axis] * per_rank
 
 
 def report_finiteness(name: str, tensor: torch.Tensor) -> tuple[bool, str]:

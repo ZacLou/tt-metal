@@ -25,9 +25,9 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import EPS, attn_res_stack
 from models.demos.deepseek_v3_d_p.tests.attn_res.assertions import assert_accurate
 from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
-    FABRIC,
     HIDDEN_SIZE,
     PER_CHIP_TOKENS,
+    PLACEMENTS,
     blackhole_only,
     compose,
     generator,
@@ -44,7 +44,6 @@ LAYERS = 93
 # Scales each module's contribution so 93 rounds of accumulation stay in bf16's range.
 MODULE_SCALE = 0.02
 
-PLACEMENTS = [pytest.param((2, 4), FABRIC, id="mesh-2x4")]
 
 pytestmark = blackhole_only
 
@@ -116,7 +115,7 @@ def test_transformer_loop_matches_reference(mesh_device, device_params):
     nothing evicts, so what crosses is a sealed set one snapshot deeper at every boundary,
     not just the activation.
     """
-    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
+    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, topology=mesh_topology(mesh_device))
     hidden_states, (q_pre, q_post, q_out) = _host_case(op)
 
     embeddings = place(op, hidden_states.unsqueeze(0).unsqueeze(0))

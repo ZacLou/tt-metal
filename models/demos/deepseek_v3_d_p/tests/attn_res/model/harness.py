@@ -19,6 +19,9 @@ import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import EPS
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 HIDDEN_SIZE = 7168
 PER_CHIP_TOKENS = 640
@@ -35,6 +38,40 @@ PROJ_STD = 0.02
 # returning wrong numbers. 2D is what the rest of this model runs on and what the op's
 # own unit test pins, and the two must agree — the op picks its route from the config.
 FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
+
+# Kimi-K3's own profile. This is NOT the `(2, 4)` arm at a wider sequence axis, which the op
+# genuinely is indifferent to: TorusXY physically wraps both axes, so `per_axis_topology()`
+# returns `(Ring, Ring)` and the read's exchange runs as a ring rather than a line. That is a
+# different collective on the *tensor* axis, which is the axis this op is built around. It is also
+# the only placement a Blackhole Galaxy can open at all — a sub-mesh request there does not skip,
+# it dies in `Fabric Router Sync` after ten seconds — so without this arm AttnRes has no coverage
+# whatsoever on the box Kimi-K3 runs on.
+TORUS_XY = torus_xy_device_params()
+TORUS_XY_TRACED = torus_xy_device_params(trace_region_size=23887872)
+
+# `mesh_device` skips a placement asking for more chips than the host has, so a box holding
+# neither shape collects these and skips rather than failing.
+PLACEMENTS = [
+    pytest.param((2, 4), FABRIC, id="mesh-2x4"),
+    pytest.param(
+        (8, 4),
+        TORUS_XY,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id="torus-xy-8x4",
+    ),
+]
+
+
+def mesh_topology(mesh_device):
+    """The per-axis CCL topology of the fabric that is actually open, as `TtAttnRes` wants it.
+
+    `TtAttnRes` takes one `ttnn.Topology` per mesh axis and defaults to all-Linear. On TorusXY that
+    default is wrong in a way nothing downstream reports: the collective would be issued as a line
+    on an axis the fabric physically wraps. Querying the live fabric keeps the op on the same route
+    every other module in this model takes — `MLAPrefillAdapter.build_runtime` does the same.
+    """
+    return list(per_axis_topology())[: len(tuple(mesh_device.shape))]
+
 
 # The op was brought up and measured only on Blackhole, and its mixture runs on
 # `ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc`, which has no Wormhole coverage.
@@ -58,6 +95,29 @@ def random_queries(rng, count):
     """`count` folded queries, each a norm weight times a projection row."""
     randn = lambda: torch.randn(HIDDEN_SIZE, generator=rng)
     return [(1.0 + 0.1 * randn()) * (PROJ_STD * randn()) for _ in range(count)]
+
+
+def reference_block_reads(running_sum, block_residual, queries, eps=EPS):
+    """Every read site of one block on host, materializing the candidate set once.
+
+    Algebraically identical to calling `attn_res` per site — `test_attn_res.py` still scores against
+    `attn_res` itself, so the two cannot drift — but it hoists the two loop-invariant parts out of
+    the block: `attn_res` rebuilds `cat(block_residual, running_sum).float()` on every call, and
+    `(v * q).sum(-1)` materializes a second `[N, S+1, d]` fp32 tensor to reduce it away. Neither
+    depends on the query.
+
+    Measured at the Galaxy arm's shape (N=5120, S=8, 24 sites): 2.0 s here against ~10 s for the
+    per-site form, and no 1.3 GB temporaries. `candidates @ query` produces the `[N, S+1]` scores
+    directly. Small in absolute terms — the first run of this test is dominated by JIT-linking the
+    gather-softmax kernel, not by host arithmetic — but it is per-test-run forever after, and the
+    per-site form scales with sites x tokens for no reason.
+    """
+    candidates = torch.cat((block_residual, running_sum.unsqueeze(1)), dim=1).float()
+    rms_inv = torch.rsqrt(candidates.pow(2).mean(-1) + eps)
+    for query in queries:
+        scores = torch.matmul(candidates, query.float()) * rms_inv
+        probs = scores.softmax(-1)
+        yield torch.matmul(probs.unsqueeze(1), candidates).squeeze(1).to(running_sum.dtype)
 
 
 def place(op, tensor, mesh_mapper=None):

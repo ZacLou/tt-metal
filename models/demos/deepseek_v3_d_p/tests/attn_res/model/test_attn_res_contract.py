@@ -37,6 +37,8 @@ from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
     FABRIC,
     HIDDEN_SIZE,
     PER_CHIP_TOKENS,
+    PLACEMENTS,
+    TORUS_XY_TRACED,
     blackhole_only,
     compose,
     generator,
@@ -57,11 +59,17 @@ NUM_SEALED = 8
 # Trace capture needs its own region; the rest of the suite runs eager and does not reserve one.
 TRACED = {**FABRIC, "trace_region_size": 23887872}
 
-on_mesh = pytest.mark.parametrize(
-    "mesh_device, device_params", [pytest.param((2, 4), FABRIC, id="mesh-2x4")], indirect=True
-)
+# Same two placements as the rest of the suite; the traced arm only swaps in a trace region.
+GALAXY_MARK = pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4")
+
+on_mesh = pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
 on_traced_mesh = pytest.mark.parametrize(
-    "mesh_device, device_params", [pytest.param((2, 4), TRACED, id="mesh-2x4")], indirect=True
+    "mesh_device, device_params",
+    [
+        pytest.param((2, 4), TRACED, id="mesh-2x4"),
+        pytest.param((8, 4), TORUS_XY_TRACED, marks=GALAXY_MARK, id="torus-xy-8x4"),
+    ],
+    indirect=True,
 )
 
 pytestmark = blackhole_only
@@ -88,7 +96,7 @@ def test_read_repeats_exactly_without_disturbing_its_inputs(mesh_device, device_
     which makes an accidental in-place write land in a caller's tensor rather than a
     temporary — and every read after it would still match its own oracle.
     """
-    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, tp_axis=TP_AXIS)
+    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, tp_axis=TP_AXIS, topology=mesh_topology(mesh_device))
     num_tokens = PER_CHIP_TOKENS * op.sp_factor
     running_sum, block_residual, queries = _host_inputs(num_tokens)
 
@@ -140,7 +148,7 @@ def test_trace_replay_matches_eager(mesh_device, device_params):
     One site, not the block. Capture cost scales with the call sequence and the sequence
     that matters here is a single fused read.
     """
-    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, tp_axis=TP_AXIS)
+    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, tp_axis=TP_AXIS, topology=mesh_topology(mesh_device))
     num_tokens = PER_CHIP_TOKENS * op.sp_factor
     running_sum, block_residual, queries = _host_inputs(num_tokens)
 

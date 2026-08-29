@@ -4,16 +4,22 @@
 """PCC: the Kimi K3 attention-residuals read (`models/demos/deepseek_v3_d_p/tt/attn_res`)
 against the torch oracle, at the per-chip shape prefill actually runs.
 
-One placement, one shape: `(2, 4)` on a LoudBox, 1280 tokens split 2 ways over the
-sequence axis and `d` split 4 ways over the tensor axis, so every chip holds the 640 rows
-`harness.py` fixes and `d/4 = 1792` columns. TP factor 4 is Galaxy's, which is what makes
-this box's reduction the same reduction Galaxy runs.
+Two placements, one shape. `(2, 4)` on a LoudBox: 1280 tokens split 2 ways over the sequence
+axis and `d` split 4 ways over the tensor axis, so every chip holds the 640 rows `harness.py`
+fixes and `d/4 = 1792` columns. `(8, 4)` TorusXY on a Galaxy: the same TP factor and the same
+per-chip shape, over a wider sequence axis.
+
+The Galaxy arm is not the LoudBox arm restated. The op is genuinely indifferent to the sequence
+axis — `test_sequence_axis_communicates_nothing` below is what proves it — but TorusXY wraps both
+axes physically, so `per_axis_topology()` returns `(Ring, Ring)` and the read's exchange runs as a
+ring on the *tensor* axis, which is the axis this op is built around. That is a different
+collective, not a wider one. It is also the only placement a Blackhole Galaxy can open: a sub-mesh
+request there does not skip, it dies in `Fabric Router Sync` after ten seconds, so without this arm
+the op has no coverage at all on the box Kimi-K3 runs on.
 
 No single-device arm. The read's exchange is what its one dispatch is built around, so
 `TtAttnRes` rejects `tp_factor == 1` outright rather than degrading to something the
-model never executes. No Galaxy `(8, 4)` arm either: it holds the same TP factor over a
-wider sequence axis, which the op is indifferent to, so it costs 32 chips to re-run the
-reduction this arm already covers.
+model never executes.
 
 The parametrization that remains is over branches, not shapes: `S` selects whether the
 statistics cross the tensor axis folded or unfolded. The seal cadence across a whole stack
@@ -43,16 +49,18 @@ from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import (
     load_attn_res_state_dict,
 )
 from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
-    FABRIC,
     HIDDEN_SIZE,
     PER_CHIP_TOKENS,
+    PLACEMENTS,
     blackhole_only,
     compose,
     generator,
+    mesh_topology,
     place_case,
     random_case,
     random_queries,
     read_block,
+    reference_block_reads,
 )
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import AttnResWeights, walk_sites
@@ -74,8 +82,6 @@ TP_AXIS = 1
 # layers hold 187 queries and take 186 reads: 92 pre, 93 post, and one model-level read
 # after the stack.
 LAYERS = 93
-
-PLACEMENTS = [pytest.param((2, 4), FABRIC, id="mesh-2x4")]
 
 on_placements = pytest.mark.parametrize(
     "mesh_device, device_params", PLACEMENTS, indirect=["mesh_device", "device_params"]
@@ -123,7 +129,9 @@ def _make_op(mesh_device, checkpoint_dir):
     real-weight path is the one the block hands every other module, rather than one this op
     alone would need special-casing for.
     """
-    build = lambda **kwargs: TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, tp_axis=TP_AXIS, **kwargs)
+    build = lambda **kwargs: TtAttnRes(
+        mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, tp_axis=TP_AXIS, topology=mesh_topology(mesh_device), **kwargs
+    )
     cache_path = attn_res_tensor_cache_path(mesh_device, TP_AXIS, checkpoint_dir)
     cache_args = dict(num_layers=LAYERS, tensor_parallel_axis=TP_AXIS)
 
@@ -169,9 +177,20 @@ def test_read_matches_reference(mesh_device, num_sealed, device_params, kimi_k3_
     tt_queries = walk_sites(*_device_queries(op, host)[:2])[:READ_SITES]
     tt_prefix, tt_block = place_case(op, running_sum, block_residual)
 
+    # The block's oracle, batched: `attn_res` rebuilds the whole candidate set per site, which at
+    # this shape is a 1.3 GB fp32 tensor twenty-four times over. Site 0 is scored against `attn_res`
+    # itself below, so the batched form is anchored to the oracle rather than replacing it.
+    wants = reference_block_reads(running_sum, block_residual, queries)
+
     worst_pcc, worst_rel_err = 1.0, 0.0
-    for site, got in enumerate(read_block(op, tt_block, tt_prefix, tt_queries)):
-        want = attn_res(running_sum, block_residual, queries[site], EPS)
+    for site, (got, want) in enumerate(zip(read_block(op, tt_block, tt_prefix, tt_queries), wants)):
+        if site == 0:
+            assert_accurate(
+                attn_res(running_sum, block_residual, queries[0], EPS),
+                want,
+                name="batched oracle vs attn_res",
+                pcc_threshold=PCC_GATE,
+            )
         pcc = assert_accurate(want, got, name=f"S={num_sealed} site {site}", pcc_threshold=PCC_GATE)
         worst_pcc = min(worst_pcc, pcc)
         worst_rel_err = max(worst_rel_err, _rel_err(got, want))

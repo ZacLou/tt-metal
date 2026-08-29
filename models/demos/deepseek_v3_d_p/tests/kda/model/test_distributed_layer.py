@@ -12,12 +12,14 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    KDA_PLACEMENTS,
     assert_accurate,
     assert_bit_identical,
     random_weights,
     reconstruct_convolution_at_sp_rank,
     reconstruct_sp_tp_tensor,
     reconstruct_state_at_sp_rank,
+    sp_sequence,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
@@ -25,12 +27,7 @@ from models.tt_transformers.tt.ccl import TT_CCL
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True),
-    pytest.mark.parametrize(
-        "device_params",
-        [{"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-        indirect=True,
-    ),
+    pytest.mark.parametrize("mesh_device, device_params", KDA_PLACEMENTS, indirect=True),
 ]
 
 
@@ -65,8 +62,9 @@ def test_sp_layer_matches_serial_reference(
         norm_eps=1e-5,
     )
     weights = random_weights(config)
-    # SP2 produces 20 local chunks; configured group size 8 falls back to divisor 5.
-    sequence = 1280
+    # 20 local chunks per sequence rank; configured group size 8 falls back to divisor 5. Derived
+    # rather than fixed so the Galaxy arm keeps the same per-rank work over a deeper sequence axis.
+    sequence = sp_sequence(mesh_device, sp_axis)
     hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(937)).to(
         torch.bfloat16
     )

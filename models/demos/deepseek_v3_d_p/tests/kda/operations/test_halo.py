@@ -9,17 +9,12 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.tests.kda.utils import assert_bit_identical, assert_equal
+from models.demos.deepseek_v3_d_p.tests.kda.utils import KDA_PLACEMENTS, assert_bit_identical, assert_equal
 from models.demos.deepseek_v3_d_p.tt.kda import ops
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True),
-    pytest.mark.parametrize(
-        "device_params",
-        [{"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-        indirect=True,
-    ),
+    pytest.mark.parametrize("mesh_device, device_params", KDA_PLACEMENTS, indirect=True),
 ]
 
 
