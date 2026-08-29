@@ -64,11 +64,17 @@ class GoldenTrace:
         with (self.path / "metadata.json").open(encoding="utf-8") as handle:
             return json.load(handle)
 
-    def token_ids(self, count: int) -> torch.Tensor:
-        """The first `count` prompt tokens, as `[1, count]` int64."""
-        ids = self.metadata["token_ids"][:count]
+    def token_ids(self, count: int, start: int = 0) -> torch.Tensor:
+        """`count` prompt tokens beginning at `start`, as `[1, count]` int64.
+
+        `start` is what a chunked run needs: chunk k of a 5120-token prefill wants
+        `token_ids(5120, 5120 * k)`, and every stream this class reads is indexed the same way.
+        """
+        ids = self.metadata["token_ids"][start : start + count]
         if len(ids) < count:
-            raise ValueError(f"{self.path.name} has {len(ids)} tokens, asked for {count}")
+            raise ValueError(
+                f"{self.path.name} has {len(self.metadata['token_ids'])} tokens, " f"asked for {count} from {start}"
+            )
         return torch.tensor([ids], dtype=torch.int64)
 
     def has(self, group: str, key: str) -> bool:
