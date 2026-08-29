@@ -47,11 +47,12 @@ SP_AXIS, TP_AXIS = 0, 1
 SEQ_LEN = 5120
 NUM_LAYERS = 1
 
-# Against the real model rather than a reference, so this carries the whole device error budget:
-# bf16 activations through a 5120-step recurrence, a SiTU FFN, and an AttnRes read whose softmax
-# runs in fp32 on device and fp32 on the GPU. The package's chunked per-layer bar is 0.88 and its
-# single-shot transformer bar is 0.99; one layer against the model should beat both comfortably.
-GOLDEN_PCC = 0.99
+# Measured 0.9998514 at 5120 tokens. Against the real model rather than a reference, so this carries
+# the whole device error budget: bf16 activations through a 5120-step recurrence, a SiTU FFN, and an
+# AttnRes read whose softmax runs in fp32 on both sides. The package's chunked per-layer bar is 0.88
+# and its single-shot transformer bar is 0.99; one layer against the model beats both, so the bar
+# sits where the measurement is rather than where the convention is.
+GOLDEN_PCC = 0.999
 
 PLACEMENTS = [
     pytest.param(
