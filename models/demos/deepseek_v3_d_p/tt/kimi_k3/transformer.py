@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.block import TtKimiK3Block
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_state import KdaStateCache
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import PlainResidualStream
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 
@@ -64,6 +65,12 @@ class TtKimiK3Transformer(LightweightModule):
     ):
         super().__init__()
         self.mesh_device = mesh_device
+        # Resolve once, here, rather than letting `None` reach a collective. The MoE's
+        # `reduce_scatter_minimal_async` validates `topology == Ring or Linear` and a None is a
+        # TT_FATAL eight frames deep in `all_reduce_async`. Everything below wants the per-axis pair
+        # the fabric actually opened, which is what `MLAPrefillAdapter.build_runtime` passes too.
+        topology = topology if topology is not None else per_axis_topology()
+        self.topology = topology
         self.schedule = KimiK3LayerSchedule.build(model_cfg, first_layer_idx, num_layers)
         self.first_layer_idx = first_layer_idx
         self.is_first_rank = is_first_rank

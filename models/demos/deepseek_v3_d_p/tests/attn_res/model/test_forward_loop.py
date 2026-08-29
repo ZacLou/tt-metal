@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
     blackhole_only,
     compose,
     generator,
+    mesh_topology,
     place,
     random_hidden,
     random_queries,

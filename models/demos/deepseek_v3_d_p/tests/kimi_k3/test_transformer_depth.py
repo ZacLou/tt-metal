@@ -24,14 +24,25 @@ rather than a fresh conversion each run.
 from pathlib import Path
 
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+
+# Aliased: the local `attn_res` in this module is the TtAttnRes instance, and the collision is
+# silent until the reference is called and LightweightModule.__call__ looks for a `forward`.
+from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import attn_res as attn_res_reference
+from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import fold_query
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_100K, resolve_checkpoint, resolve_trace
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
+    TRACE_100K,
+    load_checkpoint_tensors,
+    resolve_checkpoint,
+    resolve_trace,
+)
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
@@ -176,9 +187,41 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
     )
 
     per_layer = {}
+    inner = {}
 
     def tap(local_idx, hidden):
         per_layer[local_idx] = _compose(mesh_device, hidden)
+
+    # Wrap each layer's two norms so their outputs are recorded without adding debug plumbing to the
+    # block. The FFN norm's output is the model's own `moe_input_layer_i`, and the attention norm's
+    # is `kda_input_layer_i` where the trace records it — so a divergence can be placed on one side
+    # of the layer or the other instead of only at its output.
+    def _record(layer, name, fn):
+        def wrapped(x):
+            out = fn(x)
+            inner[(layer, name)] = _compose(mesh_device, out)
+            return out
+
+        return wrapped
+
+    for local_idx, layer in enumerate(model.layers):
+        layer.attn_norm = _record(local_idx, "attn_norm", layer.attn_norm)
+        if not layer.kv_only:
+            layer.ffn_norm = _record(local_idx, "ffn_norm", layer.ffn_norm)
+
+        # And the attention output itself. The trace records it directly only for layer 0
+        # (`kda_output_layer_0`), but for any later layer it is derivable from the schedule:
+        # `out_i = out_{i-1} + attn_i + mlp_i` with no seal, so
+        # `attn_i = decoder_output_i - decoder_output_{i-1} - moe_output_i`.
+        attention = layer.attention
+        inner_fn = attention.forward
+
+        def _attn(normed, ctx, _idx=local_idx, _fn=inner_fn):
+            out = _fn(normed, ctx)
+            inner[(_idx, "attn_out")] = _compose(mesh_device, out)
+            return out
+
+        attention.forward = _attn
 
     try:
         # No rope tensors: K3 is NoPE, so `ttMLA` binds `_apply_rope_none` at construction and the
@@ -189,7 +232,50 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         if model.kda_states is not None:
             model.kda_states.deallocate()
 
-    worst = 1.0
+    # Report the inner taps first: when a layer's output is wrong, these say which half.
+    for local_idx in range(num_layers):
+        got = inner.get((local_idx, "attn_norm"))
+        if trace.has("kda", f"kda_input_layer_{local_idx}"):
+            want = trace.rows("kda", f"kda_input_layer_{local_idx}", 0, SEQ_LEN)
+            logger.info(f"  L{num_layers} layer {local_idx} attn_norm vs kda_input: {comp_pcc(want, got, 0.99)[1]}")
+        elif got is not None and local_idx == 1:
+            # The trace records kda_input only for layer 0, but layer 1's is derivable and is the
+            # single most diagnostic number in this test: it is the first PRE-ATTENTION AttnRes read
+            # the walk issues (layer 0's is skipped, nothing being sealed yet), and the first read
+            # where the sealed candidate carries real weight — 27% of the softmax mass against the
+            # 4% layer 0's post-read gave it. So it separates "the read is wrong" from "the
+            # recurrence is wrong" in one comparison.
+            #     read_1   = attn_res(running_sum=out_0, block_residual=[embed], q_pre[1])
+            #     kda_in_1 = input_layernorm_1(read_1)
+            names = [
+                f"{root}layers.1.{k}"
+                for k in ("self_attention_res_norm.weight", "self_attention_res_proj.weight", "input_layernorm.weight")
+            ]
+            w = {k: v.float() for k, v in load_checkpoint_tensors(checkpoint, names).items()}
+            read1 = attn_res_reference(
+                trace.decoder_output(0, 0, SEQ_LEN),
+                trace.decoder_input(0, SEQ_LEN).unsqueeze(1),
+                fold_query(w[names[0]], w[names[1]]),
+                eps=KimiK3Config.RMS_NORM_EPS,
+            )
+            want = read1 * torch.rsqrt(read1.pow(2).mean(-1, keepdim=True) + KimiK3Config.RMS_NORM_EPS) * w[names[2]]
+            logger.info(f"  L{num_layers} layer 1 attn_norm vs DERIVED kda_input: {comp_pcc(want, got, 0.99)[1]}")
+        got = inner.get((local_idx, "attn_out"))
+        if got is not None and local_idx == 0 and trace.has("kda", "kda_output_layer_0"):
+            want = trace.rows("kda", "kda_output_layer_0", 0, SEQ_LEN)
+            logger.info(f"  L{num_layers} layer 0 attn_out vs kda_output: {comp_pcc(want, got, 0.99)[1]}")
+        elif got is not None and local_idx > 0 and trace.has("moe_io", f"moe_output_layer_{local_idx}"):
+            want = (
+                trace.decoder_output(local_idx, 0, SEQ_LEN)
+                - trace.decoder_output(local_idx - 1, 0, SEQ_LEN)
+                - trace.rows("moe_io", f"moe_output_layer_{local_idx}", 0, SEQ_LEN)
+            )
+            logger.info(f"  L{num_layers} layer {local_idx} attn_out vs derived attn: {comp_pcc(want, got, 0.99)[1]}")
+        if trace.has("moe_io", f"moe_input_layer_{local_idx}"):
+            got = inner.get((local_idx, "ffn_norm"))
+            want = trace.rows("moe_io", f"moe_input_layer_{local_idx}", 0, SEQ_LEN)
+            logger.info(f"  L{num_layers} layer {local_idx} ffn_norm vs moe_input: {comp_pcc(want, got, 0.99)[1]}")
+
     for local_idx in range(num_layers):
         want = trace.decoder_output(local_idx, 0, SEQ_LEN)
         passed, message = comp_pcc(want, per_layer[local_idx], LAYER_PCC)

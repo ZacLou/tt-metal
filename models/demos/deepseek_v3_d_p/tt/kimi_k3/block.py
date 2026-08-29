@@ -74,12 +74,15 @@ class TtKimiK3Block(LightweightModule):
         self.attention = attention
         self.kv_only = kv_only
         self.num_links = num_links
-        self.topology = topology
         self.is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
 
         emb_dim = config.hidden_size
         # Norms and the dense FFN reduce on the tensor axis only; MLA and MoE want both elements.
-        tp_topology = topology[1] if isinstance(topology, tuple) else topology
+        # `ttnn.all_gather` takes ONE topology, so handing it the per-axis pair is a TypeError deep
+        # inside the binding rather than anything that reads as a wiring mistake -- which is why
+        # `TtPrefillBlock` stores the TP element under `self.topology` and this does the same.
+        tp_topology = topology[tp_axis] if isinstance(topology, (tuple, list)) else topology
+        self.topology = tp_topology
 
         self.attn_norm = TtDistributedRmsNorm(
             mesh_device=mesh_device,
