@@ -1,0 +1,8 @@
+f_ref512|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_reference_prefill_and_decode[wormhole_b0-512-device_params0-mesh_device0]|
+f_exec512_r1|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_prefill_matches_reference[wormhole_b0-512-device_params0-mesh_device0]|
+f_exec512_r2|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_prefill_matches_reference[wormhole_b0-512-device_params0-mesh_device0]|
+f_exec512_r3|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_prefill_matches_reference[wormhole_b0-512-device_params0-mesh_device0]|
+f_ref2048|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_reference_prefill_and_decode[wormhole_b0-2048-device_params0-mesh_device0]|
+f_exec2048_r1|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_prefill_matches_reference[wormhole_b0-2048-device_params0-mesh_device0]|
+f_exec2048_r2|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_prefill_matches_reference[wormhole_b0-2048-device_params0-mesh_device0]|
+f_exec2048_r3|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_prefill_matches_reference[wormhole_b0-2048-device_params0-mesh_device0]|

@@ -69,6 +69,12 @@ _REFERENCE_NAME = "Llama-3.3-70B-Instruct"
 _BLOCK_SIZE = 32
 _MAX_SEQ_LEN = 2048
 _PREFILL_LENGTHS = (128, 512, 2048)
+#: The lengths the *runtime's* planner asks the model for. `_padded_prefill_length`
+#: pads <=128 to 128, <=1024 to 1024, and everything else to the next power of two,
+#: so a 512-token prompt is a 1024-token device request and the model needs a 1024
+#: recipe rather than a 512 one. `GalaxyDirectRunner.padded_prefill_length` resolves
+#: against the same registered set, so both sides of every comparison pad alike.
+_RECIPE_LENGTHS = (128, 1024, 2048)
 _LOGITS_PCC = 0.99
 _KV_PCC = 0.99
 _TEACHER_FORCED_TOP1 = 0.91
@@ -106,19 +112,25 @@ def _load_hf_subset():
     return lambda: load_layer_subset_causal_lm(_hf_model(), layer_indices=tuple(range(layers)))
 
 
-def _blocks_per_user(active_slots: int) -> int:
-    return -(-_MAX_SEQ_LEN // _BLOCK_SIZE)
+def _blocks_per_user(max_seq_len: int = _MAX_SEQ_LEN) -> int:
+    return -(-max_seq_len // _BLOCK_SIZE)
 
 
-def _paged_config(active_slots: int = GALAXY_PHYSICAL_BATCH) -> GalaxyPagedAttentionConfig:
+def _paged_config(
+    active_slots: int = GALAXY_PHYSICAL_BATCH,
+    max_seq_len: int = _MAX_SEQ_LEN,
+) -> GalaxyPagedAttentionConfig:
     """Static block ownership: every active slot gets a full context, plus sinks."""
 
-    per_user = _blocks_per_user(active_slots)
+    per_user = _blocks_per_user(max_seq_len)
     sinks = GALAXY_PHYSICAL_BATCH - active_slots
     return GalaxyPagedAttentionConfig(block_size=_BLOCK_SIZE, max_num_blocks=per_user * active_slots + sinks)
 
 
-def _page_table_rows(active_slots: int = GALAXY_PHYSICAL_BATCH) -> torch.Tensor:
+def _page_table_rows(
+    active_slots: int = GALAXY_PHYSICAL_BATCH,
+    max_seq_len: int = _MAX_SEQ_LEN,
+) -> torch.Tensor:
     """Return the `[32, blocks_per_user]` block ownership table.
 
     The same static ownership `GalaxyDirectRunner` uses, restated here because it
@@ -128,7 +140,7 @@ def _page_table_rows(active_slots: int = GALAXY_PHYSICAL_BATCH) -> torch.Tensor:
     repeats its own sink block so anything it is asked to write lands there.
     """
 
-    per_user = _blocks_per_user(active_slots)
+    per_user = _blocks_per_user(max_seq_len)
     rows = torch.empty((GALAXY_PHYSICAL_BATCH, per_user), dtype=torch.int32)
     active_total = active_slots * per_user
     for slot in range(GALAXY_PHYSICAL_BATCH):
@@ -145,7 +157,7 @@ def _load(mesh_device: ttnn.MeshDevice, **overrides: Any):
     kwargs: dict[str, Any] = dict(
         hf_model=hf_model,
         max_seq_len=_MAX_SEQ_LEN,
-        prefill_sequence_lengths=(128, 512, 2048),
+        prefill_sequence_lengths=_RECIPE_LENGTHS,
         n_layers=_layers(),
         paged_attention_config=_paged_config(),
         enable_device_sampling=False,
@@ -356,8 +368,15 @@ def _report_kv_windows(case: str, expected: torch.Tensor, actual: torch.Tensor, 
 # ---------------------------------------------------------------------------
 
 
-def _executor_prefill(executor: Llama33_70BGalaxyExecutor, kv_cache: Any, prompt: list[int], *, slot: int = 0):
-    rows = _page_table_rows()
+def _executor_prefill(
+    executor: Llama33_70BGalaxyExecutor,
+    kv_cache: Any,
+    prompt: list[int],
+    *,
+    slot: int = 0,
+    rows: torch.Tensor | None = None,
+):
+    rows = _page_table_rows() if rows is None else rows
     return executor.prefill_forward(
         torch.tensor(prompt, dtype=torch.long).reshape(1, -1),
         rows[slot : slot + 1],
@@ -620,12 +639,24 @@ def test_executor_paged_kv_shrinks_to_a_smaller_physical_pool(mesh_device: ttnn.
         )
         kv_cache = executor.allocate_kv_cache()
         assert executor.kv_cache_manager.bound_context.cache_shapes[0][0] == physical
-        logits = _executor_prefill(executor, kv_cache, _prompt(length))
+        # A pool sized for one active slot can only be addressed by a page table
+        # sized for one active slot: slot 0 owns a full context and the other
+        # thirty-one own one sink block each.
+        rows = _page_table_rows(active_slots=active_slots)
+        assert int(rows.max()) < physical
+        logits = _executor_prefill(executor, kv_cache, _prompt(length), rows=rows[0:1])
         first = int(torch.argmax(logits.float().reshape(-1)))
         tokens = [0] * GALAXY_PHYSICAL_BATCH
         positions = [0] * GALAXY_PHYSICAL_BATCH
         tokens[0], positions[0] = first, length
-        decode = _decode_logits(_executor_decode(executor, kv_cache, tokens, positions))
+        decode = _decode_logits(
+            executor.decode_forward(
+                torch.tensor(tokens, dtype=torch.long),
+                torch.tensor(positions, dtype=torch.long),
+                rows,
+                kv_cache=kv_cache,
+            )
+        )
         assert torch.isfinite(decode[0]).all()
         print(f"[exec] shrunk pool {physical} blocks: first token {first}", flush=True)
     finally:
@@ -652,7 +683,12 @@ def test_executor_prefix_cached_prefill(mesh_device: ttnn.MeshDevice) -> None:
     length = 128
     cached = _BLOCK_SIZE
     prompt = _prompt(length)
-    handle = _load(mesh_device)
+    # A cached request is a chunked request to the planner, and the 2D attention
+    # module resolves one frozen recipe per prefill shape: the prefix/chunked
+    # attention mode at 128 has to be registered at construction or
+    # `_validate_prefill` rejects the request before any device work
+    # (`logs/i7_prefix_l1.log`). This is model configuration, not a workaround.
+    handle = _load(mesh_device, chunked_prefill_sequence_lengths=(128,))
     executor = None
     try:
         executor, kv_cache = _open_executor(handle)
@@ -682,15 +718,26 @@ def test_executor_prefix_cached_prefill(mesh_device: ttnn.MeshDevice) -> None:
 def test_executor_chunked_prefill(mesh_device: ttnn.MeshDevice) -> None:
     """Coverage 4: a prompt longer than one prefill chunk, planned as chunks."""
 
-    length = 1024
-    chunk = 512
+    # The planner chunks when the padded request exceeds `max_prefill_chunk_size`,
+    # which the model's runtime config fixes at 2048. So a genuinely chunked
+    # request needs a context longer than that: 4096 tokens in two 2048-token
+    # chunks, with the 2048 prefix/chunked recipe registered.
+    max_seq_len = 4096
+    length = 4096
+    chunk = 2048
     prompt = _prompt(length)
-    handle = _load(mesh_device, prefill_sequence_lengths=(128, 512))
+    handle = _load(
+        mesh_device,
+        max_seq_len=max_seq_len,
+        prefill_sequence_lengths=(128, 2048),
+        chunked_prefill_sequence_lengths=(2048,),
+        paged_attention_config=_paged_config(max_seq_len=max_seq_len),
+    )
     executor = None
     try:
-        executor, kv_cache = _open_executor(handle, prefill_seq_lens=(512,))
-        assert executor.prefill_runtime.config.max_prefill_chunk_size >= chunk
-        rows = _page_table_rows()
+        executor, kv_cache = _open_executor(handle, prefill_seq_lens=(128,))
+        assert executor.prefill_runtime.config.max_prefill_chunk_size == chunk
+        rows = _page_table_rows(max_seq_len=max_seq_len)
         logits = executor.prefill_forward(
             torch.tensor(prompt, dtype=torch.long).reshape(1, -1),
             rows[0:1],
@@ -728,7 +775,10 @@ def test_executor_warmup_and_program_identity(mesh_device: ttnn.MeshDevice, orde
     than avoids it.
     """
 
-    handle = _load(mesh_device)
+    # Every warmup plan includes one cached (prefix) prefill case per configured
+    # sequence length, so the prefix/chunked recipe must be registered for the
+    # coordinator to be able to complete at all.
+    handle = _load(mesh_device, chunked_prefill_sequence_lengths=(128,))
     executor = None
     try:
         executor, kv_cache = _open_executor(handle)

@@ -617,37 +617,66 @@ class Llama33_70BGalaxyExecutor:
         return self.warmup.already_warmed_up_prefill
 
     def configure_paged_kv_cache(self, config: PagedKVCacheConfig) -> None:
-        """Resolve the physical KV geometry before the first allocation."""
+        """Resolve the physical KV geometry before the first allocation.
+
+        The runtime's late-resolution step is documented as "only ``num_blocks``
+        becomes final", and on a 1D model that is all it takes. On Galaxy it is
+        not: `Attention2D.bind_kv_cache` validates a bound cache against the
+        block count its **own** metadata declares, so a physical pool smaller
+        than the construction ceiling is refused at binding —
+
+            ValueError: paged KV cache shape must be (2048, 1, 32, 128),
+                        got (95, 1, 32, 128)                (`logs/i9_shrink_l1.log`)
+
+        The model therefore has to be told the physical count, not just the
+        ceiling. That is the model-owned half of this step and it lives here.
+        Resolving may only shrink: the ceiling was a construction-time capacity
+        bound, and narrowing it to the physical pool is what makes the bound
+        cache, the module metadata and the page-table geometry describe one
+        geometry.
+        """
 
         self._ensure_active()
         if self._runtime_configuration_sealed:
             raise RuntimeError("runtime configuration is sealed")
         if not isinstance(config, PagedKVCacheConfig):
             raise TypeError("config must be a PagedKVCacheConfig")
-        if self.kv_cache_manager.config.is_resolved():
-            raise RuntimeError("paged KV cache configuration is already resolved")
-        if config.dtype != self.kv_cache_manager.config.dtype:
-            raise ValueError("resolved paged KV cache cannot change dtype")
-        if config.memory_config != self.kv_cache_manager.config.memory_config:
-            raise ValueError("resolved paged KV cache cannot change memory_config")
         current = self.kv_cache_manager.config
-        if (config.block_size, config.max_num_blocks) == (current.block_size, current.max_num_blocks):
-            # The documented late-resolution step: only the physical block count
-            # becomes final. The model's per-layer paged metadata is unchanged, so
-            # the manager keeps its identity and its validated model contract.
-            self.kv_cache_manager.configure(config)
-        else:
-            # A ceiling change also moves the model's per-layer paged metadata, and
-            # `GalaxyPagedKVContract` snapshots that metadata at construction. The
-            # manager owns no device resource before `allocate()`, so the honest
-            # move is to rebuild it against the model's updated contract rather
-            # than to let a stale snapshot validate the replacement.
-            self.model.configure_paged_attention(
-                block_size=config.block_size,
-                max_num_blocks=config.max_num_blocks,
+        if current.is_resolved():
+            raise RuntimeError("paged KV cache configuration is already resolved")
+        if config.dtype != current.dtype:
+            raise ValueError("resolved paged KV cache cannot change dtype")
+        if config.memory_config != current.memory_config:
+            raise ValueError("resolved paged KV cache cannot change memory_config")
+        if config.block_size != current.block_size:
+            raise ValueError("resolved paged KV cache cannot change block_size")
+        if not config.is_resolved():
+            raise ValueError("resolved paged KV cache must contain num_blocks")
+        physical = int(config.num_blocks)
+        if physical > current.max_num_blocks:
+            raise ValueError(
+                f"resolved paged KV capacity {physical} exceeds the construction ceiling {current.max_num_blocks}"
             )
-            self.kv_cache_manager = PagedKVCacheManager(self.model.paged_kv_contract(), config)
-        self.config = replace(self.config, paged_kv_cache=config)
+        resolved = PagedKVCacheConfig(
+            block_size=int(config.block_size),
+            max_num_blocks=physical,
+            dtype=config.dtype,
+            memory_config=config.memory_config,
+            num_blocks=physical,
+        )
+        if physical == current.max_num_blocks:
+            # Nothing about the model's per-layer metadata moves, so the manager
+            # keeps its identity and its already-validated model contract.
+            self.kv_cache_manager.configure(resolved)
+        else:
+            # The model's paged metadata moves, and `GalaxyPagedKVContract`
+            # snapshots that metadata at construction. The manager owns no device
+            # resource before `allocate()`, so the honest move is to rebuild it
+            # against the model's updated contract rather than to let a stale
+            # snapshot validate the replacement.
+            self.model.configure_paged_attention(block_size=resolved.block_size, max_num_blocks=physical)
+            self.kv_cache_manager = PagedKVCacheManager(self.model.paged_kv_contract(), resolved)
+        self.config = replace(self.config, paged_kv_cache=resolved)
         self._refresh_page_table_layout()
 
     def allocate_kv_cache(self) -> list[list[Any]]:

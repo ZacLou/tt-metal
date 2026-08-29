@@ -1,6 +1,6 @@
 # `c-exec-llama` — completion handoff (attempt 1)
 
-**Last updated:** 2026-08-29T23:30Z — IN FLIGHT
+**Last updated:** 2026-08-29T23:38Z — IN FLIGHT
 **Base commit:** `67a208db961`. **Branch:** `apbernal/tttv2_wh_glx_2d_modules_milestone_c`.
 **Job window:** started ~22:50Z, driver PID 7812.
 
@@ -147,3 +147,47 @@ from `warmup_model_prefill` -> `warmup_prefill` -> `compile_prefill` -> ... -> `
 - Item 6 (three startup/serve/cleanup cycles, each of which prefills *and* decodes) is expected to
   clash on cycle 2's prefill. That is exactly the D-C7-adjacent gate line the brief warned about.
 - Items 1, 2, 3 and 7 are unaffected: they prefill before they decode and never prefill again.
+
+### 23:38Z — the one-layer shakeout, all ten runs, and two configuration facts worth inheriting
+
+| run | result | what it says |
+| --- | --- | --- |
+| `i1_ref128_l1` | passed | reference recorded through `GalaxyDirectRunner` |
+| `i2_exec128_l1` | **passed** | prefill 128 logits PCC **0.99941** |
+| `i3_decode1_l1` | **passed** | decode row 0 logits PCC **0.99359** |
+| `i4_pagedkv_l1` | failed | late resolution, metadata and bind/unbind all reached; **KV first-layer K PCC 0.907** |
+| `i5_warmup_l1` | failed | L1 address clash, decode-warmup-then-prefill |
+| `i6_repeat_l1` | failed | cycle 0 correct (115745, 20110 — identical to the reference); **cycle 1's prefill clashes** |
+| `i7_prefix_l1` | failed | `no prefill config for recipe … attention_mode=PREFIX_CHUNKED` |
+| `i8_chunked_l1` | failed | `no all_gather resources for axis=1, geometry=(1, 1, 1024, 32), sequence=1024` |
+
+**Two of those are my test's configuration, not defects, and both are worth writing down
+because `c-exec-qwen` will meet them.**
+
+1. **A cached request is a chunked request to the planner**
+   (`plan.py`: `uses_chunked_prefill = sequence_length > max_prefill_chunk_size or cached > 0`),
+   and `Attention2D` resolves one frozen recipe per prefill *shape* — so the
+   `PREFIX_CHUNKED` attention mode has to be registered at construction through
+   `chunked_prefill_sequence_lengths`. Without it the request is refused on the host, before any
+   device work. Fixed by configuring the model, not by relaxing anything.
+2. **The runtime's planner, not the model, decides the padded device length.**
+   `_padded_prefill_length` pads ≤128 to 128, ≤1024 to **1024**, and anything larger to the next
+   power of two. So a **512-token prompt is a 1024-token device request**, and a model built with
+   `prefill_sequence_lengths=(128, 512, 2048)` has no 1024 recipe and no 1024 CCL resources —
+   which is exactly what `i8` reported. The registered set is now `(128, 1024, 2048)`.
+   `GalaxyDirectRunner.padded_prefill_length` resolves against the same registered set, so both
+   sides of every comparison pad alike and the 512 claim is a 512-token prompt in a 1024-token
+   wave on both paths.
+
+Also: `_max_prefill_chunk_size` refuses any chunk that is not a multiple of 2048, and the model's
+runtime config fixes `max_prefill_chunk_size` at 2048 — so a *genuinely* chunked request needs a
+context longer than 2048. The chunked test now uses 4096 tokens in two 2048-token chunks with
+`max_seq_len=4096`.
+
+**Open at this checkpoint:** the KV K PCC of 0.907 while the same request's logits agree at 0.9994.
+K is the one tensor of the pair that passes through RoPE, and this executor gathers its prefill
+cos/sin rather than slicing them, so a rope probe (`scratch/test_rope_gather_probe.py`) asks that
+question directly. A second probe (`scratch/test_clash_owner_probe.py`) asks who owns the clashing
+L1 buffer, with a named candidate: `galaxy_address_memory_config` places the prefetcher's packed
+weight-address table **HEIGHT_SHARDED in L1 on `prefetch_sender_cores()`**, and the clash names
+core range `[0-0 - 0-3]`.
