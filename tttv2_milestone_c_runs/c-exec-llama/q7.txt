@@ -1,0 +1,14 @@
+f_tf_r2|7200|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_teacher_forced_accuracy[wormhole_b0-device_params0-mesh_device0]|
+f_tf_r3|7200|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_teacher_forced_accuracy[wormhole_b0-device_params0-mesh_device0]|
+f_repeat_r1|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_repeated_startup_and_cleanup[wormhole_b0-device_params0-mesh_device0]|
+f_repeat_r2|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_repeated_startup_and_cleanup[wormhole_b0-device_params0-mesh_device0]|
+f_repeat_r3|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_repeated_startup_and_cleanup[wormhole_b0-device_params0-mesh_device0]|
+f_prefix_r1|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_prefix_cached_prefill[wormhole_b0-device_params0-mesh_device0]|
+f_prefix_r2|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_prefix_cached_prefill[wormhole_b0-device_params0-mesh_device0]|
+f_prefix_r3|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_prefix_cached_prefill[wormhole_b0-device_params0-mesh_device0]|
+f_warmup_df_r1|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_warmup_and_program_identity[wormhole_b0-decode_first-device_params0-mesh_device0]|
+f_warmup_df_r2|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_warmup_and_program_identity[wormhole_b0-decode_first-device_params0-mesh_device0]|
+f_warmup_df_r3|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_warmup_and_program_identity[wormhole_b0-decode_first-device_params0-mesh_device0]|
+f_chunked_r1|7200|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_chunked_prefill[wormhole_b0-device_params0-mesh_device0]|
+f_chunked_r2|7200|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_chunked_prefill[wormhole_b0-device_params0-mesh_device0]|
+f_chunked_r3|7200|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_chunked_prefill[wormhole_b0-device_params0-mesh_device0]|

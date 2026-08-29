@@ -1,0 +1,13 @@
+f_pagedkv_r1|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_paged_kv_contract[wormhole_b0-device_params0-mesh_device0]|
+f_pagedkv_r2|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_paged_kv_contract[wormhole_b0-device_params0-mesh_device0]|
+f_pagedkv_r3|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_paged_kv_contract[wormhole_b0-device_params0-mesh_device0]|
+f_warmup_pf_r1|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_warmup_and_program_identity[wormhole_b0-prefill_first-device_params0-mesh_device0]|
+f_warmup_pf_r2|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_warmup_and_program_identity[wormhole_b0-prefill_first-device_params0-mesh_device0]|
+f_warmup_pf_r3|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_warmup_and_program_identity[wormhole_b0-prefill_first-device_params0-mesh_device0]|
+f_tf_r1|7200|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_teacher_forced_accuracy[wormhole_b0-device_params0-mesh_device0]|
+f_decode32_r1|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_decode_first_token[wormhole_b0-32-device_params0-mesh_device0]|
+f_decode32_r2|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_decode_first_token[wormhole_b0-32-device_params0-mesh_device0]|
+f_decode32_r3|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_decode_first_token[wormhole_b0-32-device_params0-mesh_device0]|
+f_shrink_r1|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_paged_kv_shrinks_to_a_smaller_physical_pool[wormhole_b0-device_params0-mesh_device0]|
+f_shrink_r2|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_paged_kv_shrinks_to_a_smaller_physical_pool[wormhole_b0-device_params0-mesh_device0]|
+f_shrink_r3|5400|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_paged_kv_shrinks_to_a_smaller_physical_pool[wormhole_b0-device_params0-mesh_device0]|
