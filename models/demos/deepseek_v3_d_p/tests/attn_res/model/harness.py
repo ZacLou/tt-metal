@@ -21,7 +21,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import EPS
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params, torus_y_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 HIDDEN_SIZE = 7168
@@ -54,11 +54,11 @@ FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
 # the op writes to it directly.
 TORUS_XY = torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE)
 
-# The middle ground worth measuring before Kimi-K3 gives up its rings entirely. TORUS_Y wraps the
-# SEQUENCE axis only, so `per_axis_topology()` is `(Ring, Linear)`: MLA's ring-attention SDPA keeps
-# its ring on the 8-chip axis, where a ring is worth most, while AttnRes's exchange runs on a tensor
-# axis the fabric does not wrap — which is the condition under which it is known to work.
-TORUS_Y = torus_y_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE)
+# A sequence-only torus would have been the middle ground — `(Ring, Linear)`, so MLA keeps its ring
+# on the 8-chip axis while AttnRes's exchange runs on an unwrapped tensor axis, the condition under
+# which it is known to work. It is not available: `FABRIC_2D_TORUS_Y` at 8x4 is rejected on this box
+# as an "unfeasible combination of fabric config and mesh", the Galaxy being cabled and certified for
+# the both-axes torus. Recorded rather than left as a permanently-skipping arm.
 TORUS_XY_TRACED = torus_xy_device_params(
     fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, trace_region_size=23887872
 )
@@ -72,7 +72,6 @@ PLACEMENTS = [
     # Plain Fabric2D at Galaxy width. Held alongside the torus arm to separate the two variables the
     # Galaxy changes at once — mesh width and fabric wrap — because they fail differently.
     pytest.param((8, 4), FABRIC, marks=GALAXY_MARK, id="fabric2d-8x4"),
-    pytest.param((8, 4), TORUS_Y, marks=GALAXY_MARK, id="torus-y-8x4"),
     pytest.param((8, 4), TORUS_XY, marks=GALAXY_MARK, id="torus-xy-8x4"),
 ]
 
