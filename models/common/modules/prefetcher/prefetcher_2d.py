@@ -486,24 +486,37 @@ class Prefetcher2D:
         stopped by `activate`, so nothing is reading the buffer.
 
         There is no `deallocate` on a `global_circular_buffer`; the L1 is held by
-        the C++ object and freed by its destructor, so *both* references have to
-        go - this owner's and the sealed decode context's. `gc.collect()` is not
-        called: CPython frees the object as soon as the last reference is cleared,
-        and a collect here would be a much bigger hammer than this needs.
+        the C++ object and freed by its destructor, so **every** reference has to
+        go. `gc.collect()` is not called: CPython frees the object as soon as the
+        last reference is cleared, and a collect here would be a much bigger
+        hammer than this needs.
+
+        This used to clear two references - this owner's and the sealed decode
+        context's - and that was the same incomplete-reference bug as `D-C7`.
+        A `Prefetcher2DContext` is captured **by value** at module construction,
+        so every module built against a context holds its own reference to the
+        buffer, and clearing the owner's map leaves all of them live. The
+        destructor therefore never ran, the L1 was never returned, and the
+        following prefill aborted at an L1 address that had not moved - which is
+        exactly what Milestone B observed and read as "the buffer's L1 is not
+        returned when the last reference goes".
+
+        That reading was wrong, and it is now measured to be wrong:
+        `tttv2_milestone_c_evidence/defects/logs/c4_dc7_probe2.log` shows a second
+        production-size buffer being created the instant the first is dropped, and
+        `logs/d11_q_two_pools_run1.log` shows 792 256 B per bank coming back once
+        `cleanup()` clears every context - against a `GALAXY_GLOBAL_CB_SIZE` of
+        792 064 B. The references were the problem, not the destructor.
         """
 
         if not self.config.release_global_cb_on_prefill or self._global_cb is None:
             return
-        decode_context = self._contexts.get("decode")
-        if decode_context is not None:
-            object.__setattr__(decode_context, "global_cb", None)
+        for context in self._contexts.values():
+            object.__setattr__(context, "global_cb", None)
         self._global_cb = None
         # Printed, not logged at debug, and unconditional once the flag is on: the
         # only way to tell "the release did not run" from "the release did not
-        # help" in a device log is to see this line. Measured on `(8, 4)`: it *does*
-        # run and it does **not** help - the following prefill still aborts with
-        # the L1 clash at the same base address, so the global CB's L1 is not
-        # returned when the last Python reference goes. See REPORT.md §A3.6.
+        # help" in a device log is to see this line.
         print("[prefetcher] released the global circular buffer on entering prefill", flush=True)
 
     def cleanup(self) -> None:
