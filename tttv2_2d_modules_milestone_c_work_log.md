@@ -140,3 +140,31 @@ sampler, the program configs and the partition are shared code and identical bet
 Llama's 32/32 against Qwen's 31/32 means the Qwen residual is not in the shared path — it is
 something about Qwen's logits or its vocabulary padding, which is a far smaller search space
 than the sampling stack.
+
+**Late findings, and they reframe two workstreams.**
+
+`D-C12` is not "the second `GalaxyDirectRunner` in a process". It is **the second sampling call**,
+and the mechanism is the **ttnn program cache**: with the cache cleared, four consecutive sampling
+calls on four different inputs are all correct; warm, only the first is (four fresh processes,
+16 s each, no checkpoint). Nothing in the tree caught it because every area-4 gate samples once per
+model load, and the one case that samples six times feeds identical logits each time, so a result
+that lags by a call is bit-identical to a correct one. It is a correctness hazard for anything
+that decodes more than one token.
+
+**The Llama L1 clash is not the global circular buffer, and this is now a measurement rather than
+an inference.** A one-layer subset reproduces the clash in 141 seconds with allocator dumps at ten
+boundaries. With `release_global_cb_on_prefill` on, the 792 064 B buffer is present at the second
+runner's open and **absent** by the failing prefill - the release genuinely frees it - and the
+abort still names 544 832. Eliminated: the global CB, first-runner residue, the embedding weight
+table, the staged token ids (both explicitly DRAM). What remains is a sharded buffer the bank-table
+dump does not enumerate, or a runtime allocation.
+
+**Two residuals are numerics, not defects.** Qwen's greedy slot 4 is an exact bfloat16 tie - ids 16
+and 17 both at 15.375, so the row has no unique argmax. And concat-32 differs from sequential
+prefill by up to **1.06** in logit value, eight ulp at magnitude 15, so the argmax flips only on the
+7 of 32 rows whose top-two gap is smaller than that. Neither assertion was moved.
+
+**D-C7 is qualified on silicon**: 792 256 B per L1 bank returned against a `GALAXY_GLOBAL_CB_SIZE`
+of 792 064, byte-identical in three fresh processes. Behind it, a new defect `D-C13`: the second
+model's L1 is **fragmented, not full** - 1 261 952 B free, largest block 759 488, 32 576 B short,
+the same numbers every run.
