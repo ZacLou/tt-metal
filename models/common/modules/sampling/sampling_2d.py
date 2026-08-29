@@ -337,6 +337,12 @@ class Sampling2D(LightweightModule):
 
         so the count is searched for rather than named, the way
         `recipes.lm_head_reduce_core_count` searches for the LM head reduction's.
+
+        One known limit, stated rather than guarded: the shard height is one
+        tile, which is right for every Galaxy decode shape (`users_per_shard` is
+        8, so the padded height is 32) and wrong for a hypothetical input padded
+        to two tiles or more. That case aborts in `interleaved_to_sharded` on the
+        shard shape rather than sampling anything, so it is loud, not silent.
         """
 
         cfg = self.config
