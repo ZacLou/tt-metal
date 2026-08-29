@@ -322,6 +322,69 @@ inline void invert_doubling(
     sum->pop_front(1);
 }
 
+// Invert (I-N) for a strictly-lower 32x32 N by Horner accumulation of the nilpotent series
+// (I-N)^-1 = I + N + N^2 + ... + N^31, evaluated as S <- I + N*S thirty times.
+//
+// This replaces the doubling product (I+N)(I+N^2)(I+N^4)(I+N^8)(I+N^16) below, which is exact in
+// real arithmetic and materially cheaper — eight matmuls against thirty — but is not usable at the
+// magnitudes Kimi-K3 actually produces. Its intermediates are the explicit powers N^2, N^4, N^8,
+// N^16, and on real Kimi-K3 layer-1 chunks ||N||inf reaches 17 with a median of 2.4, so ||N^16||
+// reaches O(1e2) while the inverse it is helping compute is bounded by 1. Those large intermediates
+// then cancel, and the cancellation costs more significant digits than the hardware carries: in
+// Torch the doubling product is accurate to 5e-4 in true fp32 but errs by 12.99 once intermediates
+// round to bf16, and on device no compute config recovers it — LoFi, HiFi2 and HiFi4 with and
+// without fp32 dest accumulation all land between 6.1 and 64.5 max absolute error, the best of them
+// being the HiFi4 + fp32-dest configuration this op already runs under.
+//
+// Horner's intermediates are the partial sums, which are bounded by ||(I-N)^-1|| itself, so nothing
+// large is ever formed and nothing has to cancel. On the same real chunks it errs by 0.00227 with
+// bf16-rounded intermediates, three orders of magnitude better than the doubling product and close
+// to its own fp32 result. The series must be summed in full: truncating to twenty terms still errs
+// by 0.68, because N is only nilpotent at the 32nd power.
+//
+// The cost is 30 tile matmuls per chunk in place of 8. See invert_doubling for the faster path, and
+// prefer restoring it only behind a check that the chunk's ||N|| is small enough to keep the high
+// powers bounded.
+inline void invert_horner(
+    DataflowBuffer& negative_strict_lower_akk,
+    uint32_t tile,
+    DataflowBuffer& inverse,
+    DataflowBuffer& identity,
+
+    // intermediate
+    DataflowBuffer& scratch_0,
+    DataflowBuffer& scratch_1,
+    DataflowBuffer& scratch_2,
+    DataflowBuffer& product) {
+    DataflowBuffer& matrix = scratch_2;
+    DataflowBuffer* total = &scratch_0;
+    DataflowBuffer* next_total = &scratch_1;
+
+    copy_tile_to_buffer(negative_strict_lower_akk, tile, matrix);
+    matrix.wait_front(1);
+
+    // S <- I + N, the first partial sum. N stays resident for every later step, so it is never
+    // popped inside the loop the way the doubling path pops its running power.
+    elementwise_binary<ElementwiseBinaryOp::Add>(identity, matrix, *total, 1);
+    total->wait_front(1);
+
+    for (uint32_t step = 0; step < 30; ++step) {
+        matmul_blocks<1, 1, 1, false>(matrix, *total, product);
+        product.wait_front(1);
+        elementwise_binary<ElementwiseBinaryOp::Add>(identity, product, *next_total, 1);
+        next_total->wait_front(1);
+        total->pop_front(1);
+        product.pop_front(1);
+        DataflowBuffer* consumed = total;
+        total = next_total;
+        next_total = consumed;
+    }
+
+    copy_tile_to_buffer(*total, 0, inverse);
+    total->pop_front(1);
+    matrix.pop_front(1);
+}
+
 // Transpose a tiled row [1,row_tiles] into a tiled column [row_tiles,1].
 inline void transpose_tile_row_to_column(DataflowBuffer& in, DataflowBuffer& o, uint32_t row_tiles) {
     const uint32_t in_id = in.get_id();
@@ -565,7 +628,7 @@ inline void prepare_t_inv(
         lower_akk.pop_front(chunk_matrix_tiles);
     }
 
-    invert_doubling(
+    invert_horner(
         akk,
         0,
         t_inv,
