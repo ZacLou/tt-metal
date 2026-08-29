@@ -106,6 +106,14 @@ class GoldenTrace:
         """The stack's first live stream — bit-identical to `embed_tokens[token_ids]`."""
         return self.rows("decoder_io", "decoder_input_layer_0", start, end)
 
+    def has_kv_cache(self, layer: int) -> bool:
+        """Whether this trace records the KV slab for one MLA layer, by *model* layer index.
+
+        Both traces record them, but only for the MLA layers within their depth, so callers check
+        rather than assume — the same way `has` gates every other optional stream.
+        """
+        return (self.path / "kv_cache" / f"layer_{layer}.safetensors").is_file()
+
     def kv_cache(self, layer: int, start: int = 0, end: int | None = None) -> torch.Tensor:
         """`[tokens, kv_lora_rank + qk_rope_head_dim]` for one MLA layer, by *model* layer index.
 

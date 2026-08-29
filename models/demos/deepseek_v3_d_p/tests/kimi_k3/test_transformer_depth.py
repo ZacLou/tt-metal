@@ -50,8 +50,10 @@ from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weigh
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
+from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_tp0, unrotate_cache_layer
 
 SP_AXIS, TP_AXIS = 0, 1
 SEQ_LEN = 5120
@@ -71,6 +73,10 @@ DEPTHS = [1, 2, 5, 12, 24]
 # decoder_output for layers 0..24 and the 24 MLA layers' KV, and nothing else; it is the only oracle
 # for the deeper rungs, and the inner taps below fall silent there because `trace.has` says so.
 DEEP_TRACE_FROM = 12
+
+# The package's shallow-layer KV bar. Depth 24 is still shallow by its standards (the 0.85 floor
+# exists for full-depth bf8_b drift), so hold the tighter one and let a real regression show.
+KV_CACHE_PCC = 0.96
 
 PLACEMENTS = [
     pytest.param(
@@ -289,6 +295,29 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
             got = inner.get((local_idx, "ffn_norm"))
             want = trace.rows("moe_io", f"moe_input_layer_{local_idx}", 0, SEQ_LEN)
             logger.info(f"  L{num_layers} layer {local_idx} ffn_norm vs moe_input: {comp_pcc(want, got, 0.99)[1]}")
+
+    # The KV cache is scored separately because the residual stream does not imply it. MLA writes
+    # its slab and reads it back for causal attention within the chunk, so a wrong write can be
+    # partly self-consistent here and only surface at chunk 2, when attention reads the previous
+    # chunk's cached KV. The golden ships one file per MLA layer, so there is no reason not to check.
+    if kvpe is not None and trace.has_kv_cache(schedule.mla_layer_ids[0]):
+        # The device cache is indexed by rank-local MLA SLOT; the golden by MODEL layer. The
+        # schedule is the only thing that knows the mapping, which is exactly why the block never
+        # calls `KimiK3Config.mla_kv_slot`.
+        cache = gather_cache_tp0(kvpe.storage, mesh_device)
+        positions = blockcyclic_positions(tuple(mesh_device.shape)[SP_AXIS], SEQ_LEN, SEQ_LEN)
+        for slot, model_layer in enumerate(schedule.mla_layer_ids[: schedule.num_mla_layers]):
+            device_rows = unrotate_cache_layer(cache[slot], positions, SEQ_LEN)
+            golden_rows = trace.kv_cache(model_layer, 0, SEQ_LEN)
+            # Kimi-K3 is NoPE, so the second half carries no rotation to re-base — the rule at
+            # test_mla.py:608 in reverse.
+            pcc_nope, pcc_pe = cache_half_pccs(golden_rows, device_rows, KimiK3Config.KV_LORA_RANK, pe_interleave=False)
+            logger.info(
+                f"L{num_layers} KV slot {slot} (model layer {model_layer}): " f"lora={pcc_nope:.6f} rope={pcc_pe:.6f}"
+            )
+            assert min(pcc_nope, pcc_pe) >= KV_CACHE_PCC, (
+                f"KV cache slot {slot} (model layer {model_layer}) diverged: " f"lora={pcc_nope:.6f} rope={pcc_pe:.6f}"
+            )
 
     for local_idx in range(num_layers):
         want = trace.decoder_output(local_idx, 0, SEQ_LEN)
