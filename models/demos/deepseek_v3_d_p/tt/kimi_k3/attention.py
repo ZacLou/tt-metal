@@ -149,3 +149,92 @@ class TtK3KdaAttention:
         # `_project_output` reduce-scatters on the TP axis and returns `[B, T, d/tp]`, so the only
         # thing left is the leading axis the block's residual expects.
         return ttnn.unsqueeze(output, dim=0)
+
+
+def build_attention(
+    mesh_device,
+    config,
+    model_cfg: type,
+    state_dict: dict,
+    layer_idx: int,
+    schedule,
+    *,
+    seq_len: int,
+    state_cache=None,
+    sp_axis: int = 0,
+    tp_axis: int = 1,
+    num_links: int = 1,
+    topology=None,
+    weight_cache_path=None,
+    max_seq_len: Optional[int] = None,
+    is_chunked: bool = False,
+    slot_num: int = 1,
+    kv_only: bool = False,
+    is_balanced: bool = False,
+    first_layer_idx: int = 0,
+) -> K3Attention:
+    """The one place the hybrid schedule turns into a module.
+
+    Everything below this call is polymorphic; everything above it knows the schedule. `topology` is
+    the per-axis pair the model opened — `per_axis_topology()` — and is passed to MLA whole (its SDPA
+    runs on the SP axis) but to KDA as its TP element only, since KDA's own CCL is TP-side.
+    """
+    from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
+    from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
+    from models.demos.deepseek_v3_d_p.tt.mla.mla import ttMLA
+    from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
+
+    topology = topology if topology is not None else per_axis_topology()
+    tp_topology = topology[tp_axis] if isinstance(topology, (tuple, list)) else topology
+
+    if schedule.is_mla(layer_idx):
+        return TtK3MlaAttention(
+            ttMLA(
+                config,
+                state_dict.get("mla_weights", {}),
+                mesh_device,
+                layer_idx=layer_idx,
+                seq_len=max_seq_len if max_seq_len is not None else seq_len,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                topology=topology,
+                is_balanced=is_balanced,
+                weight_cache_path=weight_cache_path,
+                is_chunked=is_chunked,
+                active_seq_len=seq_len,
+                slot_num=slot_num,
+                # The rank's MLA count, not its layer count: the KV cache holds one slot per
+                # full-attention layer. See layer_schedule.py.
+                layer_num=schedule.num_mla_layers,
+                kv_only=kv_only,
+                first_layer_idx=first_layer_idx,
+            )
+        )
+
+    if state_cache is None:
+        raise ValueError(f"layer {layer_idx} is a KDA layer and needs a KdaStateCache to carry its recurrence")
+    return TtK3KdaAttention(
+        ttKDA(
+            mesh_device,
+            model_cfg_kda_config(model_cfg),
+            state_dict.get("kda_weights"),
+            layer_idx=layer_idx,
+            weight_cache_path=weight_cache_path,
+            tt_ccl=get_tt_ccl(mesh_device),
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            program_config=kimi_k3_program_config(tp_ccl_topology=tp_topology),
+        ),
+        layer_idx=layer_idx,
+        state_cache=state_cache,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        tp_topology=tp_topology,
+    )
+
+
+def model_cfg_kda_config(model_cfg: type):
+    """The `KDAConfig` for this model. Split out so a variant config can override it."""
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
+
+    return kimi_k3_kda_config()
