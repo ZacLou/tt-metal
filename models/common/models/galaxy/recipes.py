@@ -537,13 +537,25 @@ def exact_gather_compute_kernel_config() -> Any:
     | fidelity | values changed | max abs delta |
     | --- | --- | --- |
     | default | 4 300 324 / 4 915 200 | 0.875 |
-    | HiFi4 + fp32 dest acc | **0 / 4 915 200** | **0.0** |
+    | HiFi4 | **0 / 4 915 200** | **0.0** |
 
     A bfloat16 ulp at magnitude 15 is 0.125, so the default's error is several
     ulps and flips an argmax. That is Milestone C finding **D-C11**.
+
+    **`fp32_dest_acc_en` is deliberately off.** It buys nothing here - a one-hot
+    row has exactly one non-zero product per output element, so there is no
+    accumulation to protect - and it costs: it halves the destination register
+    file, so `out_subblock_h * out_subblock_w` must then be at most 4 rather
+    than 8, and Qwen's `per_core_N = 20` resolves `out_subblock_w = 5`:
+
+        TT_FATAL ... MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w
+                     5 times out_subblock_h 1 needs to be at most 4 to fit in
+                     hardware
+
+    HiFi4 alone is what the measurement above qualified.
     """
 
-    return compute_kernel_config(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+    return compute_kernel_config(math_fidelity=ttnn.MathFidelity.HiFi4)
 
 
 def column_user_selector_program_config(users_per_column: int, padded_local_vocab: int) -> Any:

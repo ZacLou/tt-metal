@@ -485,7 +485,7 @@ class GalaxyColumnUserSelector:
     "exact row gather" above was returning every logit changed by up to 0.875.
     Measured on `(8, 4)` over a 32x153600 bfloat16 tensor of decode-logit
     magnitudes: **4 300 324 of 4 915 200 values changed, mean |delta| 0.204**, and
-    at ``HiFi4`` with ``fp32_dest_acc_en`` **zero changed**. A bfloat16 ulp at
+    at ``HiFi4`` **zero changed**. A bfloat16 ulp at
     logit magnitude 15 is 0.125, so that corruption is several ulps and it flips
     an argmax: Qwen's device greedy sampling disagreed with the host argmax in
     4 of 32 slots, by gaps of 0.125 to 0.5, and none of those four was a tie.
