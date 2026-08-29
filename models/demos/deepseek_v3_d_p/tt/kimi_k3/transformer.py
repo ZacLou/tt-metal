@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.block import TtKimiK3Block
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_state import KdaStateCache
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import PlainResidualStream
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import mark_layer_cached
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
@@ -149,6 +150,12 @@ class TtKimiK3Transformer(LightweightModule):
                     **block_kwargs,
                 )
             )
+            # This layer's tensorbins are now all written, so its cache is known complete. Marking
+            # here rather than after the whole stack means an interrupted build keeps the layers it
+            # finished: a 24-layer run that dies at layer 22 would otherwise leave 22 layers of
+            # tensorbins on disk with nothing recording that they are usable, and the next run would
+            # rebuild every one of them.
+            mark_layer_cached(weight_cache_path, layer_idx)
 
         if kda_layers:
             self.kda_states = KdaStateCache(kda_layers, num_slots=num_users)

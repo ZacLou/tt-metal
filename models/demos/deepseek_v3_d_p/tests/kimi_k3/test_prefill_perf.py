@@ -48,7 +48,7 @@ from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWa
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root, mark_layer_cached
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.mla.kv_cache import allocate_mla_kvpe_cache
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
@@ -110,8 +110,6 @@ def test_prefill_cost(mesh_device, device_params, num_layers):
         max_seq_len=SEQ_LEN,
         weight_cache_path=cache,
     )
-    for layer_idx in range(num_layers):
-        mark_layer_cached(cache, layer_idx)
 
     kvpe = None
     if model.schedule.num_mla_layers:

@@ -49,7 +49,7 @@ from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWa
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root, mark_layer_cached
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 
@@ -163,12 +163,6 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         max_seq_len=SEQ_LEN,
         weight_cache_path=cache,
     )
-
-    # Only now is each layer's cache known good: it was just built from real weights end to end.
-    # Recording completeness rather than inferring it is deliberate — a per-component
-    # `check_cache_complete` that is subtly wrong yields a silently wrong model, not a failure.
-    for layer_idx in range(num_layers):
-        mark_layer_cached(cache, layer_idx)
 
     # One KV slot per FULL-ATTENTION layer, not per layer. Depths 1 and 2 hold none — layers 0 and 1
     # are both KDA — so there is nothing to allocate and `kvpe_cache=None` is the honest argument.
