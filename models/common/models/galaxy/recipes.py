@@ -370,6 +370,79 @@ def dense_matmul_worker_rectangle(height: int) -> ttnn.CoreRangeSet:
     return ttnn.CoreRangeSet({ttnn.CoreRange(start, ttnn.CoreCoord(start.x + width - 1, start.y + height - 1))})
 
 
+#: The static circular-buffer budget one 2D mcast matmul may spend per core.
+#:
+#: `validate_circular_buffer_region` measured the real ceiling on this mesh at
+#: **1 499 136 B**, and the largest currently-qualified Galaxy dense matmul - the
+#: 2048-token sequential prefill `wo` projection on Llama - spends 1 343 488 B of
+#: it. This sits between the two, so every shape Milestone B qualified keeps the
+#: program config it was qualified with, byte for byte, and only a shape that
+#: would have overflowed is re-blocked.
+GALAXY_MATMUL_CB_BUDGET = 1_400_000
+
+#: `MCAST_INPUT_BUFFERING_DEPTH` in
+#: `ttnn/cpp/ttnn/operations/matmul/device/utilities/matmul_utilities.hpp`.
+_MCAST_INPUT_BUFFERING_DEPTH = 2
+
+#: A bfloat16 tile. The in0/in1/out circular buffers are all bfloat16 here, and
+#: over-estimating a block-float in1 only makes the budget more conservative.
+_TILE_BYTES = 2 * TILE * TILE
+
+
+def dense_matmul_cb_bytes(out_block_h: int, out_block_w: int, in0_block_w: int) -> int:
+    """Return the static circular-buffer bytes per core of a 2D mcast matmul.
+
+    Transcribed from `matmul_multicore_reuse_mcast_2d_program_factory.cpp`
+    (`in0_CB_size`, `in1_CB_size`, `out_CB_size`): the input buffers are
+    `out_block_* x in0_block_w` deep-buffered, the output buffer is
+    `out_block_h x out_block_w` and is **not** double buffered, and interm0
+    shares the output buffer whenever the output is interleaved.
+
+    Checked against silicon: Qwen's concat-32 QKV projection at length 128
+    resolves `out_block_h=32, out_block_w=14, in0_block_w=4`, and this returns
+    1 671 168 B against the 1 669 312 B `validate_circular_buffer_region`
+    reported (`a3_q_concat_len128.log`); at length 256 it returns 3 112 960 B
+    against 3 111 104 B. The 1 856 B difference is tile alignment and is in the
+    conservative direction.
+    """
+
+    inputs = (out_block_h + out_block_w) * in0_block_w * _MCAST_INPUT_BUFFERING_DEPTH
+    return _TILE_BYTES * (inputs + out_block_h * out_block_w)
+
+
+def _divisors_descending(value: int) -> tuple[int, ...]:
+    return tuple(candidate for candidate in range(value, 0, -1) if not value % candidate)
+
+
+def dense_matmul_output_blocks(per_core_M: int, per_core_N: int, in0_block_w: int) -> tuple[int, int]:
+    """Return `(out_block_h, out_block_w)` inside `GALAXY_MATMUL_CB_BUDGET`.
+
+    `ttnn` defaults both to `per_core_*`, which makes the circular buffers grow
+    with the *whole* per-core tile count. The concatenated physical-batch-32
+    prefill multiplies the row count by 32, so at length 128 the QKV projection
+    asks 1 669 312 B of a 1 499 136 B L1 and the program cannot be placed at all
+    - Milestone B finding **D-C6**, measured byte-identically on both models at
+    128, 256, 512 and 1024 because both geometries resolve the same
+    `(per_core_M, per_core_N, in0_block_w)`.
+
+    The output block is what decides that footprint, and it is free to be
+    smaller than the per-core work: the core simply loops over more blocks. So
+    the largest divisor of `per_core_M` that fits the budget is taken, and only
+    if no `out_block_h` fits at all is `out_block_w` narrowed too. Every shape
+    that already fits keeps `out_block_* == per_core_*`, which is what `ttnn`
+    would have defaulted to, so no qualified program config moves.
+    """
+
+    for out_block_w in _divisors_descending(per_core_N):
+        for out_block_h in _divisors_descending(per_core_M):
+            if dense_matmul_cb_bytes(out_block_h, out_block_w, in0_block_w) <= GALAXY_MATMUL_CB_BUDGET:
+                return out_block_h, out_block_w
+    raise ValueError(
+        f"no output block of a {per_core_M}x{per_core_N} tile core with in0_block_w={in0_block_w} "
+        f"fits {GALAXY_MATMUL_CB_BUDGET} B of circular buffers"
+    )
+
+
 def dense_matmul_program_config(rows: int, local_k: int, local_n: int) -> Any:
     """Return the qualified interleaved multicast matmul program config.
 
@@ -412,16 +485,96 @@ def dense_matmul_program_config(rows: int, local_k: int, local_n: int) -> Any:
     # (by ~20 kB). Halving the K block halves the in1 buffer, which is far more
     # than the shortfall, at the cost of more K iterations per output block.
     in0_block_w = math.gcd(k_tiles, 4)
+    per_core_M = math.ceil(m_tiles / grid_y)
+    per_core_N = math.ceil(n_tiles / grid_x)
+    out_block_h, out_block_w = dense_matmul_output_blocks(per_core_M, per_core_N, in0_block_w)
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
         in0_block_w=in0_block_w,
         out_subblock_h=1,
         out_subblock_w=1,
-        per_core_M=math.ceil(m_tiles / grid_y),
-        per_core_N=math.ceil(n_tiles / grid_x),
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
         transpose_mcast=False,
         fused_activation=None,
         fuse_batch=True,
+        allowed_worker_cores=allowed,
+    )
+
+
+def worker_matmul_rectangle() -> ttnn.CoreRangeSet:
+    """Return the tallest worker rectangle a 1D mcast matmul may anchor in.
+
+    ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``gather_in0=False``
+    resolves its work grid to ``allowed_worker_cores.bounding_box().grid_size()``
+    anchored at ``allowed_worker_cores.bounding_box().start_coord``
+    (``matmul_multicore_reuse_mcast_1d_program_factory.cpp``), so the field only
+    confines the op when the set it is given *is* that rectangle. Handing it
+    ``worker_cores()`` directly would not: the worker envelope's bounding box is
+    ``[1-0 - 6-9]``, which spans the ``x=4`` prefetch sender column.
+
+    Full height, because a 1D mcast matmul spreads ``N`` over every core in the
+    grid; ``dense_matmul_worker_rectangle`` is the 2D form of the same search and
+    is asked for the height its ``M`` needs instead.
+    """
+
+    return dense_matmul_worker_rectangle(worker_cores().bounding_box().grid_size().y)
+
+
+def column_user_selector_program_config(users_per_column: int, padded_local_vocab: int) -> Any:
+    """Return the worker-confined program config for the column user selector.
+
+    ``GalaxyColumnUserSelector`` multiplies a one-hot ``[users_per_column, 32]``
+    selector by the decode logits, so ``M`` is a single tile and ``K`` is a
+    single tile while ``N`` is the whole per-device vocabulary - 504 tiles on
+    Llama-3.3-70B, 600 on Qwen3-32B. Two facts decide the form:
+
+    - **it must not resolve its own grid.** Left to auto-selection the op takes
+      the full seven-column compute grid, which under the loaded decode
+      sub-device manager aborts with
+
+          TT_FATAL @ program.cpp:2205: num_intersections == num_cores
+          Kernel group cores do not match sub device cores for programmable
+          core type TENSIX
+
+      (Milestone B finding **D-C8**, three fresh processes on both models);
+    - **the 2D mcast form cannot carry this shape.** It lays its work grid out as
+      ``num_blocks_x x num_blocks_y`` from the rectangle's start, and with
+      ``M`` one tile ``num_blocks_y`` is 1, so all of ``N`` lands on the three
+      cores of ``dense_matmul_worker_rectangle(1)``. ``per_core_N`` would be 168
+      tiles, and the in1 and output circular buffers alone would ask ~1 MB of L1
+      on ``x=1..3`` beside the resident decode activations.
+
+    So this is the 1D ``mcast_in0`` form over the full 30-core worker rectangle,
+    with ``per_core_N`` rounded up to a divisor of the tile count so the last
+    core carries no remainder and ``out_subblock_w`` divides it.
+    """
+
+    if users_per_column <= 0 or padded_local_vocab <= 0:
+        raise ValueError("column user selection needs a positive user count and vocabulary width")
+    if padded_local_vocab % TILE:
+        raise ValueError(f"padded local vocabulary {padded_local_vocab} must be tile aligned")
+    allowed = worker_matmul_rectangle()
+    grid = allowed.bounding_box().grid_size()
+    cores = allowed.num_cores()
+    n_tiles = padded_local_vocab // TILE
+    minimum = math.ceil(n_tiles / cores)
+    per_core_N = next((width for width in range(minimum, n_tiles + 1) if not n_tiles % width), minimum)
+    out_subblock_w = max(width for width in range(1, min(8, per_core_N) + 1) if not per_core_N % width)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(grid.x, grid.y),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        per_core_M=math.ceil(users_per_column / TILE),
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+        gather_in0=False,
+        untilize_out=False,
         allowed_worker_cores=allowed,
     )
 
