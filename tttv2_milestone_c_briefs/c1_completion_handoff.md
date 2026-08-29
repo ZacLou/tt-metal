@@ -1,6 +1,6 @@
 # `c-exec-llama` — completion handoff (attempt 1)
 
-**Last updated:** 2026-08-29T23:52Z — IN FLIGHT
+**Last updated:** 2026-08-29T23:56Z — IN FLIGHT
 **Base commit:** `67a208db961`. **Branch:** `apbernal/tttv2_wh_glx_2d_modules_milestone_c`.
 **Job window:** started ~22:50Z, driver PID 7812.
 
@@ -207,3 +207,25 @@ core range `[0-0 - 0-3]`.
 - 51 runs are queued across `q4`–`q7` and `q2b` behind one flock, in three chains
   (`chain.sh`, which waits for the lock rather than racing it). `RESULTS.md` is written as each
   lands, so a session that dies costs transcription and not silicon.
+
+### 23:56Z — at 80 layers, with the qualified rotary, prefill agrees at PCC 1.0
+
+`f_exec128_r1`: **1 passed in 195.96 s, `[exec] prefill 128 logits 1.0`.**
+
+The 0.99941 of the one-layer runs was the rotary gather, and swapping it for the model's own
+qualified slice closed the gap completely: eager prefill through `Llama33_70BGalaxyExecutor` and the
+same request through `GalaxyDirectRunner` now agree to the limit of the measurement, on the real
+80-layer checkpoint. That is coverage item 1 at length 128, run 1 of 3.
+
+It also priced the campaign properly: **196 s per full-model run** once the reference run has warmed
+the page cache, against the 508 s of the first one. All 51 queued runs fit.
+
+**One consequence of the address clash deserves to be said plainly, because it is bigger than the
+coverage item it blocks.** A serving system interleaves prefill and decode by construction — that is
+what continuous batching *is*. On this mesh, at this commit, a prefill after a decode in the same
+process raises `program.cpp:1763`. So the clash does not merely block brief item 6; it blocks
+serving. Item 6 is the gate that happens to catch it. Anything downstream that plans to serve
+requests continuously — `c-trace`'s mode transitions and `c-perf-paired`'s paired measurement in
+particular — should assume it is blocked on this defect too, and should not discover it again from
+scratch. The cheapest reproduction is now 110 s and needs no request:
+`warmup_model_decode` then `warmup_model_prefill` on a one-layer subset.

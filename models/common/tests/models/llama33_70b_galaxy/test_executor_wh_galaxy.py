@@ -782,27 +782,48 @@ def test_executor_warmup_and_program_identity(mesh_device: ttnn.MeshDevice, orde
     executor = None
     try:
         executor, kv_cache = _open_executor(handle)
-        if order == "decode_first":
-            executor.warmup_model_decode(kv_cache=kv_cache)
-            decode_programs = len(executor.program_compiler.compiled_programs)
-            assert decode_programs >= 1
-            executor.warmup_model_prefill(kv_cache=kv_cache)
-        else:
-            executor.warmup_model_prefill(kv_cache=kv_cache)
-            executor.warmup_model_decode(kv_cache=kv_cache)
-            decode_programs = 1
-        assert executor.already_warmed_up_prefill, "prefill warmup coverage did not complete"
-        after_warmup = len(executor.program_compiler.compiled_programs)
-        print(f"[exec] warmup ({order}) compiled {after_warmup} programs", flush=True)
-
-        # Program identity uses the physical geometry. One active decode row and
-        # thirty-two must reuse one program, and a second prefill of the same
-        # padded geometry must not compile a new one.
         prompt = _prompt(128)
-        _executor_prefill(executor, kv_cache, prompt, slot=0)
-        _executor_prefill(executor, kv_cache, prompt, slot=1)
         tokens = [0] * GALAXY_PHYSICAL_BATCH
         positions = [0] * GALAXY_PHYSICAL_BATCH
+
+        if order == "decode_first":
+            executor.warmup_model_decode(kv_cache=kv_cache)
+            assert len(executor.program_compiler.compiled_programs) >= 1
+            executor.warmup_model_prefill(kv_cache=kv_cache)
+            assert executor.already_warmed_up_prefill, "prefill warmup coverage did not complete"
+            print(
+                f"[exec] warmup (decode_first) compiled "
+                f"{len(executor.program_compiler.compiled_programs)} programs",
+                flush=True,
+            )
+            return
+
+        # Prefill coverage, then the prefill identity check, then decode coverage
+        # and the decode identity check. The order is not a convenience: on this
+        # mesh a prefill after a decode raises the open Llama L1 address clash,
+        # so a serve-everything-after-warming-everything shape would measure the
+        # clash instead of program identity. The `decode_first` parametrization
+        # above reports that; this one measures what the identity claim is about.
+        executor.warmup_model_prefill(kv_cache=kv_cache)
+        assert executor.already_warmed_up_prefill, "prefill warmup coverage did not complete"
+        after_prefill_warmup = len(executor.program_compiler.compiled_programs)
+        print(f"[exec] prefill warmup compiled {after_prefill_warmup} programs", flush=True)
+
+        # Two prefills of the same padded geometry into different slots must
+        # reuse one program: the identity carries padded geometry, not the slot.
+        _executor_prefill(executor, kv_cache, prompt, slot=0)
+        _executor_prefill(executor, kv_cache, prompt, slot=1)
+        assert (
+            len(executor.program_compiler.compiled_programs) == after_prefill_warmup
+        ), "serving prefill after warmup compiled a program warmup did not cover"
+
+        executor.warmup_model_decode(kv_cache=kv_cache)
+        after_warmup = len(executor.program_compiler.compiled_programs)
+        assert after_warmup > after_prefill_warmup, "decode warmup compiled no program"
+        print(f"[exec] warmup (prefill_first) compiled {after_warmup} programs", flush=True)
+
+        # One active decode row and thirty-two must reuse one program: the
+        # identity carries the lane's fixed capacity, not the active row count.
         positions[0] = 128
         _executor_decode(executor, kv_cache, tokens, positions)
         for slot in range(GALAXY_PHYSICAL_BATCH):
@@ -810,7 +831,7 @@ def test_executor_warmup_and_program_identity(mesh_device: ttnn.MeshDevice, orde
         _executor_decode(executor, kv_cache, tokens, positions)
         assert (
             len(executor.program_compiler.compiled_programs) == after_warmup
-        ), "serving after warmup compiled a program warmup did not cover"
+        ), "serving decode after warmup compiled a program warmup did not cover"
     finally:
         if executor is not None:
             executor.cleanup()
