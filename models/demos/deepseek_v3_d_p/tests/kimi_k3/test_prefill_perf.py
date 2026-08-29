@@ -49,17 +49,22 @@ from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weigh
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
-from models.demos.deepseek_v3_d_p.tt.mla.kv_cache import allocate_mla_kvpe_cache
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
 DEPTHS = [1, 5, 12, 24]
-ITERATIONS = 10
+# 1 chunk is 5120 tokens; 11 chunks is 56320 — the "55k" leg. The second is not just a longer run:
+# MLA attends over every token cached so far, so chunk N costs more than chunk N-1, and the
+# per-chunk curve is the only thing that shows how prefill scales with context.
+CHUNK_COUNTS = [1, 11]
+ITERATIONS = 5
 
 
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
 @pytest.mark.parametrize("num_layers", DEPTHS, ids=[f"L{n}" for n in DEPTHS])
-def test_prefill_cost(mesh_device, device_params, num_layers):
+@pytest.mark.parametrize("num_chunks", CHUNK_COUNTS, ids=[f"{n}chunk" for n in CHUNK_COUNTS])
+def test_prefill_cost(mesh_device, device_params, num_layers, num_chunks):
     checkpoint = resolve_checkpoint()
     trace = resolve_trace(TRACE_100K)
     if checkpoint is None or trace is None:
@@ -67,7 +72,8 @@ def test_prefill_cost(mesh_device, device_params, num_layers):
 
     checkpoint = Path(checkpoint)
     root = resolve_model_root(checkpoint)
-    config = kimi_k3_hf_config(max_seq=SEQ_LEN)
+    total_len = SEQ_LEN * num_chunks
+    config = kimi_k3_hf_config(max_seq=total_len)
     cache = cache_root(checkpoint, tuple(mesh_device.shape), TP_AXIS)
 
     attn_res = TtAttnRes(
@@ -107,7 +113,7 @@ def test_prefill_cost(mesh_device, device_params, num_layers):
         residual_factory=residual_factory,
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
-        max_seq_len=SEQ_LEN,
+        max_seq_len=total_len,
         weight_cache_path=cache,
     )
 
@@ -116,25 +122,31 @@ def test_prefill_cost(mesh_device, device_params, num_layers):
         kvpe = allocate_mla_kvpe_cache(
             mesh_device=mesh_device,
             hf_config=config,
-            max_seq_len=SEQ_LEN,
+            max_seq_len=total_len,
             mesh_shape=tuple(mesh_device.shape),
             sp_axis=SP_AXIS,
             num_layers=model.schedule.num_mla_layers,
             num_users=1,
         )
-    tokens_tt = prepare_prefill_input_tensor(
-        trace.token_ids(SEQ_LEN)[0].tolist(),
-        mesh_device,
-        tuple(mesh_device.shape)[SP_AXIS],
-        False,
-        tuple(mesh_device.shape),
-        SP_AXIS,
-    )
+    chunks = [
+        prepare_prefill_input_tensor(
+            trace.token_ids(SEQ_LEN, SEQ_LEN * c)[0].tolist(),
+            mesh_device,
+            tuple(mesh_device.shape)[SP_AXIS],
+            False,
+            tuple(mesh_device.shape),
+            SP_AXIS,
+        )
+        for c in range(num_chunks)
+    ]
 
     def once():
-        out = model.forward(tokens_tt, kvpe_cache=kvpe)
-        if out is not None:
-            ttnn.deallocate(out)
+        """One whole prefill: every chunk, in order, as a request would arrive."""
+        model.reset_streams()
+        for index, tokens in enumerate(chunks):
+            out = model.forward(tokens, kvpe_cache=kvpe, actual_start=index * SEQ_LEN)
+            if out is not None:
+                ttnn.deallocate(out)
 
     try:
         for _ in range(3):  # warm the program cache; the first pass compiles
@@ -167,12 +179,13 @@ def test_prefill_cost(mesh_device, device_params, num_layers):
             model.kda_states.deallocate()
 
     logger.info(
-        f"L{num_layers:2d} @ {SEQ_LEN} tokens, 8x4: eager {eager_ms:8.2f} ms "
-        f"({SEQ_LEN / eager_ms * 1e3:8.0f} tok/s, {eager_ms / num_layers:6.2f} ms/layer)"
+        f"PERF L{num_layers:2d} x {num_chunks:2d}chunk ({total_len:6d} tok): eager {eager_ms:9.2f} ms "
+        f"({total_len / eager_ms * 1e3:8.0f} tok/s, {eager_ms / num_layers:7.2f} ms/layer)"
     )
     if device_ms is not None:
         logger.info(
-            f"        device kernel {device_ms:8.2f} ms over {programs} programs "
-            f"({SEQ_LEN / device_ms * 1e3:8.0f} tok/s, {device_ms / num_layers:6.2f} ms/layer) "
-            f"-- host overhead {eager_ms - device_ms:.2f} ms ({(1 - device_ms / eager_ms) * 100:.0f}%)"
+            f"PERF L{num_layers:2d} x {num_chunks:2d}chunk ({total_len:6d} tok): device {device_ms:9.2f} ms "
+            f"over {programs} programs ({total_len / device_ms * 1e3:8.0f} tok/s, "
+            f"{device_ms / num_layers:7.2f} ms/layer) -- host {eager_ms - device_ms:7.2f} ms "
+            f"({(1 - device_ms / eager_ms) * 100:3.0f}%)"
         )

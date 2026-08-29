@@ -95,10 +95,14 @@ KV_CACHE_PCC = 0.96
 PLACEMENTS = [
     pytest.param(
         (8, 4),
-        # 24576, not the AttnRes suite's 1152: at depth 24 the sealed set has two blocks for the first
-        # time, and `inter_block`'s statistics collective then needs 1920 B of L1_SMALL per core
-        # against the 1152 B that value provides. 24576 is what the rest of this package uses.
-        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": 24576},
+        # 4096, between the AttnRes suite's 1152 and the 24576 the rest of the package uses. Both ends
+        # are wrong here. At depth 24 the sealed set has two blocks for the first time and
+        # `inter_block`'s statistics collective needs 16 B per bank more than 1152 provides, so 1152
+        # fails outright. But L1_SMALL comes out of the same L1 the circular buffers use, and at
+        # 24576 MLA's chunked attention then fails to place its CBs ("statically allocated circular
+        # buffers ... clash with L1 buffers") once there is a second chunk to attend over. 4096
+        # clears AttnRes with margin while leaving MLA its working space.
+        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": 4096},
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="fabric2d-8x4",
     )
