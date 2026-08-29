@@ -168,3 +168,45 @@ prefill by up to **1.06** in logit value, eight ulp at magnitude 15, so the argm
 of 792 064, byte-identical in three fresh processes. Behind it, a new defect `D-C13`: the second
 model's L1 is **fragmented, not full** - 1 261 952 B free, largest block 759 488, 32 576 B short,
 the same numbers every run.
+
+---
+
+## 2026-08-30 — `c-exec-llama` attempt 1: the Galaxy Llama has an executor, and it runs
+
+`models/common/models/llama33_70b_galaxy/executor.py` composes the common runtime for the 2D
+tensor model — one `PagedKVCacheManager` over the model's own KV contract, one `OutputReader`,
+resolved prefill/decode configs, one `ProgramCompiler`, one `EagerExecutor`, one
+`WarmupCoordinator`, and the trace collaborators built exactly as the 1D executor builds them so
+`c-trace` can layer over this same eager instance. **Zero lines of `llm_runtime` changed, zero 1D
+module files changed**, and `pytest models/common/tests/llm_runtime` is still 1032 passed / 1
+skipped.
+
+**It worked on the first silicon run.** Eager prefill at 128 through the executor agrees with the
+qualified `GalaxyDirectRunner` at **PCC 0.99941**, the first decode step at **0.99359**, and
+batch-32 decode has all 32 slots taking the reference argmax.
+
+**Two placements the runtime cannot be handed as they are, both model-owned in the executor.**
+`DecodeRuntime` maps decode positions and the decode page table *replicated*; the Galaxy decode
+graph needs them column-sharded, and a replicated device tensor cannot be resharded on device
+because per-device-different slicing is not one SPMD op. And the runtime's logits readers
+concatenate mesh *columns* along the vocabulary axis while on Galaxy the vocabulary is sharded over
+mesh *rows* — that is D-B23, and `compose_galaxy_logits` already carries the measurement. Both are
+adaptation in the model package, which is where the plan's extension discipline puts them.
+
+**The Llama L1 address clash is narrower than "a second allocation cycle".** It is **a prefill
+after a decode in one process**, and it now reproduces in **110 seconds** with one executor, one KV
+allocation, one compiled decode program and no request at all: `warmup_decode`, then
+`warmup_prefill`, 232 ms apart. Three addresses have now been seen — 544 832 (c-defects), 543 488,
+542 944 — all on core range `[0-0 - 0-3]` against the same CB region end of 630 080. So the
+*region* is fixed and the address is not, and a few-kilobyte buffer there is consistent with
+c-defects' dumps finding no live block over 100 kB at the failing prefill. It blocks the
+repeated-cycle gate and the decode-first warmup order; both are reported rather than worked around.
+
+**Four things the bring-up found that are not defects and that `c-exec-qwen` will meet.** A cached
+request is a chunked request to the planner, so the `PREFIX_CHUNKED` attention recipe must be
+registered at construction. The planner's own padding table turns a 512-token prompt into a
+1024-token device request, so the registered recipe set is `(128, 1024, 2048)`. A physical KV pool
+smaller than the construction ceiling has to reach the *model*, because `Attention2D.bind_kv_cache`
+validates against the block count its own metadata declares. And the prefill rotary must use the
+model's qualified slice, not a device gather: the gather left the first layer's K at PCC 0.907 while
+the same request's logits agreed at 0.9994.
