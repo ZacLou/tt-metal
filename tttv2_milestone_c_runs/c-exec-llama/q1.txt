@@ -1,0 +1,2 @@
+i1_ref128_l1|1800|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_reference_prefill_and_decode[wormhole_b0-128-device_params0-mesh_device0]|LLAMA33_70B_GALAXY_TEST_LAYERS=1
+i2_exec128_l1|1800|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_prefill_matches_reference[wormhole_b0-128-device_params0-mesh_device0]|LLAMA33_70B_GALAXY_TEST_LAYERS=1

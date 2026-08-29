@@ -1,0 +1,2 @@
+j1_rope_probe_l1|1800|tttv2_milestone_c_runs/c-exec-llama/scratch/test_rope_gather_probe.py::test_rope_gather_matches_the_slice[wormhole_b0-device_params0-mesh_device0]|LLAMA33_70B_GALAXY_TEST_LAYERS=1
+j2_pagedkv_l1_diag|1800|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_paged_kv_contract[wormhole_b0-device_params0-mesh_device0]|LLAMA33_70B_GALAXY_TEST_LAYERS=1

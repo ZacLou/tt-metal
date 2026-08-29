@@ -1,0 +1,6 @@
+f_ref128|3600|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_reference_prefill_and_decode[wormhole_b0-128-device_params0-mesh_device0]|
+f_exec128_r1|3600|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_prefill_matches_reference[wormhole_b0-128-device_params0-mesh_device0]|
+f_decode1_r1|3600|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_decode_first_token[wormhole_b0-1-device_params0-mesh_device0]|
+f_warmup_r1|4800|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_warmup_and_program_identity[wormhole_b0-device_params0-mesh_device0]|
+f_repeat_r1|4800|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_repeated_startup_and_cleanup[wormhole_b0-device_params0-mesh_device0]|
+f_pagedkv_r1|3600|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_paged_kv_contract[wormhole_b0-device_params0-mesh_device0]|

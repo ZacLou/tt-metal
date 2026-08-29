@@ -312,6 +312,45 @@ def _require_reference(length: int) -> dict[str, torch.Tensor]:
     return torch.load(path, map_location="cpu", weights_only=False)
 
 
+def _report_kv_windows(case: str, expected: torch.Tensor, actual: torch.Tensor, length: int) -> None:
+    """Report the KV comparison window by window before asserting on the whole.
+
+    One PCC over the whole prefix cannot separate "every position is slightly
+    off" from "one block is garbage", and `test_model_wh_galaxy._report_kv_pcc`
+    already established that the distinction is what identifies the defect.
+    Reporting is not asserting: the gate below is untouched.
+    """
+
+    if expected.shape != actual.shape:
+        print(f"[kv] {case}: shape {tuple(expected.shape)} vs {tuple(actual.shape)}", flush=True)
+        return
+    windows = {
+        "all": slice(0, length),
+        "first32": slice(0, min(32, length)),
+        "last32": slice(max(0, length - 32), length),
+    }
+    for name, window in windows.items():
+        _, message = _pcc(expected[:, window, :], actual[:, window, :], 0.0)
+        print(f"[kv] {case} {name}: {message}", flush=True)
+    diff = (expected - actual).abs()
+    per_position = diff.amax(dim=(0, 2))
+    worst = torch.topk(per_position, k=min(8, per_position.numel()))
+    print(
+        f"[kv] {case}: reference |max|={float(expected.abs().max()):.6g} device |max|="
+        f"{float(actual.abs().max()):.6g} maxabsdiff={float(diff.max()):.6g}",
+        flush=True,
+    )
+    print(
+        f"[kv] {case}: worst positions {worst.indices.tolist()} values "
+        f"{[round(float(v), 5) for v in worst.values]}",
+        flush=True,
+    )
+    print(
+        f"[kv] {case}: per-head maxabsdiff {[round(float(v), 5) for v in diff.amax(dim=(1, 2))]}",
+        flush=True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Executor request helpers
 # ---------------------------------------------------------------------------
@@ -523,6 +562,7 @@ def test_executor_paged_kv_contract(mesh_device: ttnn.MeshDevice, expect_error) 
             )
             for kind, actual in (("k", actual_k), ("v", actual_v)):
                 expected = reference[f"kv_{label}_{kind}"].float()
+                _report_kv_windows(f"{label} {kind.upper()}", expected, actual, length)
                 passed, message = _pcc(expected, actual, _KV_PCC)
                 print(f"[exec] KV {label} layer {kind.upper()} {message}", flush=True)
                 assert passed, f"KV {label} layer {kind.upper()} PCC below {_KV_PCC}: {message}"
@@ -674,20 +714,36 @@ def test_executor_chunked_prefill(mesh_device: ttnn.MeshDevice) -> None:
 
 @pytest.mark.parametrize("mesh_device", [GALAXY_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True)
-def test_executor_warmup_and_program_identity(mesh_device: ttnn.MeshDevice) -> None:
-    """Coverage 5: warmup completes, and program identity ignores active rows."""
+@pytest.mark.parametrize("order", ["prefill_first", "decode_first"])
+def test_executor_warmup_and_program_identity(mesh_device: ttnn.MeshDevice, order: str) -> None:
+    """Coverage 5: warmup completes, and program identity ignores active rows.
+
+    `WarmupCoordinator` documents that the two warmup calls may be made in either
+    order, so both orders are measured. They are not equivalent on this mesh:
+    `logs/i5_warmup_l1.log` shows one compiled decode program followed by the
+    Llama L1 address clash on the very next prefill (`program 922`, L1 buffer at
+    543488, core range `[0-0 - 0-3]`, from `Embedding2D._forward`). That is
+    c-defects' open defect, reached here by a much cheaper route than its
+    141-second probe, and the parametrization is how this file reports it rather
+    than avoids it.
+    """
 
     handle = _load(mesh_device)
     executor = None
     try:
         executor, kv_cache = _open_executor(handle)
-        executor.warmup_model_decode(kv_cache=kv_cache)
-        decode_programs = len(executor.program_compiler.compiled_programs)
-        assert decode_programs >= 1
-        executor.warmup_model_prefill(kv_cache=kv_cache)
+        if order == "decode_first":
+            executor.warmup_model_decode(kv_cache=kv_cache)
+            decode_programs = len(executor.program_compiler.compiled_programs)
+            assert decode_programs >= 1
+            executor.warmup_model_prefill(kv_cache=kv_cache)
+        else:
+            executor.warmup_model_prefill(kv_cache=kv_cache)
+            executor.warmup_model_decode(kv_cache=kv_cache)
+            decode_programs = 1
         assert executor.already_warmed_up_prefill, "prefill warmup coverage did not complete"
         after_warmup = len(executor.program_compiler.compiled_programs)
-        print(f"[exec] warmup compiled {after_warmup} programs ({decode_programs} decode)", flush=True)
+        print(f"[exec] warmup ({order}) compiled {after_warmup} programs", flush=True)
 
         # Program identity uses the physical geometry. One active decode row and
         # thirty-two must reuse one program, and a second prefill of the same
