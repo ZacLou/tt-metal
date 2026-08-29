@@ -164,9 +164,19 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params):
             tuple(mesh_device.shape),
             SP_AXIS,
         )
-        hidden = model.forward(tokens_tt, kvpe_cache=None, actual_start=start)
-        got = _compose(mesh_device, hidden)
-        ttnn.deallocate(hidden)
+        # The comparison is against the LIVE running sum, which is what `decoder_output_layer_i`
+        # records — not `forward`'s return, which has passed through the final norm. `layer_tap` is
+        # the same seam the depth ladder uses.
+        captured = {}
+        out = model.forward(
+            tokens_tt,
+            kvpe_cache=None,
+            actual_start=start,
+            layer_tap=lambda idx, h: captured.__setitem__(idx, _compose(mesh_device, h)),
+        )
+        if out is not None:
+            ttnn.deallocate(out)
+        got = captured[NUM_LAYERS - 1]
 
         want = trace.decoder_output(0, start, start + CHUNK)
         output_pcc = float(str(comp_pcc(want, got, OUTPUT_PCC)[1]).split()[-1])
