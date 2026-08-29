@@ -883,10 +883,13 @@ def test_executor_teacher_forced_accuracy(mesh_device: ttnn.MeshDevice) -> None:
     forced = [int(value) for value in reference_tokens[prompt_len:]]
     aligned = align_top5(top5_tokens, reference_tokens, prompt_len)
 
-    handle = _load(mesh_device, prefill_sequence_lengths=(512,))
+    # The planner pads a 512-token prompt to a 1024-token device request, so the
+    # model is built with the default registered set `(128, 1024, 2048)` rather
+    # than with a 512 recipe it would never be asked for.
+    handle = _load(mesh_device)
     executor = None
     try:
-        executor, kv_cache = _open_executor(handle, prefill_seq_lens=(512,))
+        executor, kv_cache = _open_executor(handle)
         logits = _executor_prefill(executor, kv_cache, prompt)
         predictions = [int(torch.argmax(logits.float().reshape(-1)))]
         tokens = [0] * GALAXY_PHYSICAL_BATCH
