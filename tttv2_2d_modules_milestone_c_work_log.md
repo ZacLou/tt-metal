@@ -70,3 +70,73 @@ Findings that change how later jobs must be run:
 Schedule handed to `c-perf-paired`: the TTTv1 half of the paired night is **~2.5 h** (2 models ×
 1 cold warmup + 3 measured). Whether the full 16-run night fits depends on the TTTv2 arm, which this
 job did not measure.
+
+## 2026-08-29 — `c-defects` attempt 1
+
+Four defects at one call site, not two. Milestone B measured D-C5 (the column user selector's
+matmul rejects the LM head's WIDTH_SHARDED decode output) and D-C8 (with that satisfied, the
+matmul's auto-selected grid leaves the loaded decode sub-device). Fixing them exposed **D-C10**
+— three more full-grid programs inside `Sampling2D.decode_forward`: `ttnn.topk`'s
+implicit-tile-padding fill, `ttnn.manual_seed` and `ttnn.sampling`. All four are one defect
+class, the one `recipes.rope_core_grids` already names: a grid resolved independently of the
+partition that has to contain it. **D-C9**, the sampled-token readback composing the wrong mesh
+axis, is fixed with it, so all 32 users are read back for the first time on this mesh.
+
+`test_column_user_selector_wh_galaxy.py` now stages the LM head's real placement under a
+loaded decode sub-device manager at both models' widths: 6 passed, three fresh processes.
+
+**D-C7** was measured before it was changed. `MeshDevice` exposes no allocator statistics, so
+the probe used the symptom — two production-size global CBs cannot coexist in one L1 bank — and
+found that the L1 *is* returned when the last Python reference goes. The surviving reference was
+in `Prefetcher2D.cleanup()`, which cleared its own map but not the `global_cb` field of the
+contexts it had handed to every module.
+
+**D-C6** is a program-config sizing defect, not a capacity wall: `ttnn` defaults
+`out_block_h`/`out_block_w` to `per_core_M`/`per_core_N`, so the concat-32 prefill's circular
+buffers grow with the whole per-core tile count. `dense_matmul_output_blocks` takes the largest
+divisor that fits a budget sitting between the largest currently-qualified config (1 343 488 B)
+and the measured ceiling (1 499 136 B), so no qualified program config moves. The
+byte-identical overflow on "two different geometries" was never a coincidence: both models have
+64 heads, 8 KV heads and head_dim 128, so both resolve `local_qkv_size = 1280`.
+
+**The Llama L1 address clash is not the global circular buffer**, and two comments in this
+repository say it is. A probe with a production-size global CB resident placed `ttnn.embedding`
+cleanly at both models' prefill row widths, every call a cold compile. That is also why
+`release_global_cb_on_prefill` runs and does not help — the clashing address does not move when
+the buffer is released. The workstream is OPEN and the next attempt should find out what
+actually owns 544832 rather than trying to free the buffer again.
+
+Two facts that cost time and should not be rediscovered: `pytest.ini` caps every test at 300 s,
+and the area-4 cases only fitted inside it at Milestone B because they aborted early; and a
+program-cache hit skips `validate_circular_buffer_region`, so a placement probe has to force a
+cold compile or it measures nothing.
+
+**D-C11 is the largest finding of the attempt, and it was invisible until the four placement
+defects above were fixed.** `GalaxyColumnUserSelector` gathers each column's 32 user rows with a
+one-hot matmul and the surrounding code calls that an exact row copy. It is not one at ttnn's
+default math fidelity: driving a known tensor through the selector changed **4 300 324 of
+4 915 200** values, maximum absolute error 0.875 — seven ulp at a decode-logit magnitude of 15,
+where bfloat16's ulp is 0.125. A one-hot matmul multiplies by 1.0 and sums zeros, so the only
+thing that can move a value is the mantissa truncation in the default fidelity. At `HiFi4` the
+same comparison changes **0** values. The fix is `exact_gather_compute_kernel_config()`,
+deliberately **without** `fp32_dest_acc_en` — that halves the destination register file and caps
+the subblock product at 4, which the qualified `out_subblock_w` of 5 and 6 exceed
+(`TT_FATAL @ matmul_device_operation.cpp:567`). HiFi4 alone is what the probe qualified.
+
+It was found by bisection and the three negative results are kept, because each one is a thing
+nobody has to re-test: it is not tie-breaking (the disagreeing slots' top-2 gaps were 0.125 to
+0.5 and `disagreed-but-tied = 0`), not the `_place_for_topk` reshard this job added, and not the
+mesh-row order of the candidate list.
+
+**D-C12 is open and unexplained.** The second `GalaxyDirectRunner` in one process samples
+float32 bit patterns as token ids — `1098241487` is `0x41748F4F`, about 15.3 as a float, which
+is a decode-logit magnitude — so the readback is landing on memory that holds logits. Note the
+shape: "the second runner in one process" is also how `release_global_cb_on_prefill`'s comment
+describes the Llama address clash. Two symptoms at one seam.
+
+**Llama area 4 has now been measured for the first time, and its greedy claim passes 32/32.**
+Every Milestone B attempt died at D-C5 before reaching the sampler. Since the selector, the
+sampler, the program configs and the partition are shared code and identical between the models,
+Llama's 32/32 against Qwen's 31/32 means the Qwen residual is not in the shared path — it is
+something about Qwen's logits or its vocabulary padding, which is a far smaller search space
+than the sampling stack.
