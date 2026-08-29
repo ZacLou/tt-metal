@@ -523,6 +523,29 @@ def worker_matmul_rectangle() -> ttnn.CoreRangeSet:
     return dense_matmul_worker_rectangle(worker_cores().bounding_box().grid_size().y)
 
 
+def exact_gather_compute_kernel_config() -> Any:
+    """Return the compute kernel config that makes a one-hot matmul a *copy*.
+
+    `ttnn.matmul` with no `compute_kernel_config` takes the default math
+    fidelity, which truncates the bfloat16 mantissa of its inputs. That is fine
+    for a projection and wrong for a gather: multiplying by one and getting a
+    different number back is not a gather at all.
+
+    Measured on `(8, 4)` over a 32 x 153600 bfloat16 tensor of decode-logit
+    magnitudes, through `GalaxyColumnUserSelector`:
+
+    | fidelity | values changed | max abs delta |
+    | --- | --- | --- |
+    | default | 4 300 324 / 4 915 200 | 0.875 |
+    | HiFi4 + fp32 dest acc | **0 / 4 915 200** | **0.0** |
+
+    A bfloat16 ulp at magnitude 15 is 0.125, so the default's error is several
+    ulps and flips an argmax. That is Milestone C finding **D-C11**.
+    """
+
+    return compute_kernel_config(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+
+
 def column_user_selector_program_config(users_per_column: int, padded_local_vocab: int) -> Any:
     """Return the worker-confined program config for the column user selector.
 

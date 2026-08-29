@@ -31,6 +31,7 @@ from models.common.models.galaxy.recipes import (
     GalaxyDecodePlacements,
     GalaxyDenseGeometry,
     column_user_selector_program_config,
+    exact_gather_compute_kernel_config,
 )
 from models.common.modules.attention.attention_2d import Attention2DLowLevelCallables, PrefillRowMode
 
@@ -478,10 +479,23 @@ class GalaxyColumnUserSelector:
       decode is the only mode this selector runs in and a caller who forgets is
       exactly how D-C8 reached silicon.
 
+    **D-C11.** The selection is a matmul, and a matmul is not a copy. With
+    ``compute_kernel_config`` left unset ``ttnn.matmul`` takes its default math
+    fidelity, which truncates the bfloat16 mantissa of its inputs - so the
+    "exact row gather" above was returning every logit changed by up to 0.875.
+    Measured on `(8, 4)` over a 32x153600 bfloat16 tensor of decode-logit
+    magnitudes: **4 300 324 of 4 915 200 values changed, mean |delta| 0.204**, and
+    at ``HiFi4`` with ``fp32_dest_acc_en`` **zero changed**. A bfloat16 ulp at
+    logit magnitude 15 is 0.125, so that corruption is several ulps and it flips
+    an argmax: Qwen's device greedy sampling disagreed with the host argmax in
+    4 of 32 slots, by gaps of 0.125 to 0.5, and none of those four was a tie.
+    The default is therefore the exact one; a caller may still inject a cheaper
+    config, but it has to ask.
+
     Qualified on a Galaxy mesh by
     ``models/common/tests/models/galaxy/test_column_user_selector_wh_galaxy.py``,
     which stages its input in the LM head's own placement under a loaded decode
-    sub-device manager.
+    sub-device manager and checks the gather is bit-exact.
     """
 
     def __init__(
@@ -502,7 +516,10 @@ class GalaxyColumnUserSelector:
         self.users_per_column = users_per_column
         self.dtype = dtype
         self.memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
-        self.compute_kernel_config = compute_kernel_config
+        # Exact by default: see D-C11 above. `None` here is a lossy gather.
+        self.compute_kernel_config = (
+            compute_kernel_config if compute_kernel_config is not None else exact_gather_compute_kernel_config()
+        )
         self.program_config = program_config
         self._selector: Any = None
         self._program_configs: dict[int, Any] = {}

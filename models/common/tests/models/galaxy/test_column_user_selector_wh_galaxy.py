@@ -267,6 +267,57 @@ def test_column_user_selector_accepts_the_lm_head_decode_placement(
 
 @pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [pytest.param(GALAXY_MESH_SHAPE, id="8x4")], indirect=True)
+@torch.no_grad()
+def test_column_user_selection_is_bit_exact(mesh_device: ttnn.MeshDevice):
+    """A one-hot matmul has to be a *copy*, and by default it is not.
+
+    Every case above uses values a `bfloat16` mantissa holds exactly - small
+    integers, or a single peak against a flat floor - so none of them can see
+    what this does: with `compute_kernel_config` unset, `ttnn.matmul` takes its
+    default math fidelity and truncates its inputs' mantissas. Measured over a
+    32 x 153600 tensor of decode-logit magnitudes, the "exact row gather"
+    changed **4 300 324 of 4 915 200 values**, by up to 0.875.
+
+    A `bfloat16` ulp at magnitude 15 is 0.125, so that is several ulps, and it
+    flips an argmax: Qwen's device greedy sampling disagreed with the host
+    argmax in 4 of 32 slots by gaps of 0.125 to 0.5, none of them a tie
+    (finding **D-C11**). Without `exact_gather_compute_kernel_config` as the
+    selector's default this fails on the first assertion.
+    """
+
+    padded_local_vocab = 19200
+    padded_vocab_size = padded_local_vocab * GALAXY_MESH_SHAPE[0]
+    torch.manual_seed(20260829)
+    source = (torch.rand(1, 1, GALAXY_PHYSICAL_BATCH, padded_vocab_size) * 40.0 - 20.0).to(torch.bfloat16)
+    selector = GalaxyColumnUserSelector(mesh_device)
+    staged = selected = None
+    try:
+        staged = _stage_lm_head_decode_output(source, mesh_device, padded_local_vocab)
+        with _loaded_decode_partition(mesh_device):
+            selected = selector(staged)
+            composed = ttnn.to_torch(
+                selected,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 2), mesh_shape=GALAXY_MESH_SHAPE),
+            )
+        got = composed.reshape(-1, padded_vocab_size)[:GALAXY_PHYSICAL_BATCH].to(torch.float32)
+        want = source.reshape(-1, padded_vocab_size).to(torch.float32)
+        delta = (got - want).abs()
+        changed = int((delta > 0).sum())
+        print(
+            f"[selector] gather changed {changed}/{want.numel()} values, max |delta| {float(delta.max())}", flush=True
+        )
+        assert changed == 0, (
+            f"the one-hot selector changed {changed} of {want.numel()} values, by up to "
+            f"{float(delta.max())}; a gather that is not a copy flips an argmax"
+        )
+    finally:
+        deallocate(selected)
+        deallocate(staged)
+        selector.release()
+
+
+@pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param(GALAXY_MESH_SHAPE, id="8x4")], indirect=True)
 @pytest.mark.parametrize("vocab_size,padded_local_vocab", _MODEL_VOCABULARIES)
 @torch.no_grad()
 def test_column_user_selector_feeds_sampling_2d_under_the_decode_partition(
