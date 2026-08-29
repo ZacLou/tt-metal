@@ -38,6 +38,7 @@ from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weigh
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import load_layer_state_dict, load_routed_expert_weights
+from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 
 SP_AXIS, TP_AXIS = 0, 1
 SEQ_LEN = 5120
@@ -142,13 +143,17 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         tp_axis=TP_AXIS,
     )
 
-    token_ids = trace.token_ids(SEQ_LEN)
-    tokens_tt = ttnn.from_torch(
-        token_ids,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 1), mesh_shape=tuple(mesh_device.shape)),
+    # The repo's own placement, not a hand-rolled mapper: tokens shard on the SEQUENCE axis, and
+    # `prepare_prefill_input_tensor` is what produces the [sp_factor, 1, isl_per_chip] uint32
+    # ROW_MAJOR layout the embedding reads. `is_balanced=False` is chunked prefill's block-cyclic
+    # order, which is the order the golden trace's tokens are in too.
+    tokens_tt = prepare_prefill_input_tensor(
+        trace.token_ids(SEQ_LEN)[0].tolist(),
+        mesh_device,
+        tuple(mesh_device.shape)[SP_AXIS],
+        False,
+        tuple(mesh_device.shape),
+        SP_AXIS,
     )
 
     per_layer = {}
