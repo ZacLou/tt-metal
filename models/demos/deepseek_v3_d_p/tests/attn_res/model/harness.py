@@ -51,14 +51,14 @@ TORUS_XY_TRACED = torus_xy_device_params(trace_region_size=23887872)
 
 # `mesh_device` skips a placement asking for more chips than the host has, so a box holding
 # neither shape collects these and skips rather than failing.
+GALAXY_MARK = pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4")
+
 PLACEMENTS = [
     pytest.param((2, 4), FABRIC, id="mesh-2x4"),
-    pytest.param(
-        (8, 4),
-        TORUS_XY,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="torus-xy-8x4",
-    ),
+    # Plain Fabric2D at Galaxy width. Held alongside the torus arm to separate the two variables the
+    # Galaxy changes at once — mesh width and fabric wrap — because they fail differently.
+    pytest.param((8, 4), FABRIC, marks=GALAXY_MARK, id="fabric2d-8x4"),
+    pytest.param((8, 4), TORUS_XY, marks=GALAXY_MARK, id="torus-xy-8x4"),
 ]
 
 

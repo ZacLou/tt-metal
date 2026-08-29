@@ -26,6 +26,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -48,12 +49,22 @@ SP_AXIS = 0
 
 FABRIC_2D = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
 
-# Every test derives its shape from the fixture's mesh. 2x4 is what the model runs, and a
-# mesh narrower than the box it opens on is a submesh, which fabric does not come up on.
+# Every test derives its shape from the fixture's mesh. A mesh narrower than the box it opens on is
+# a submesh, which fabric does not come up on — which is also why the 2x4 arms do not run on a
+# Blackhole Galaxy at all, and why the Galaxy arms below exist rather than being redundant width.
 #
-# The fabric is chosen once per program run, before the mesh opens, so the op runs under
-# whichever one the enclosing transformer picked, and the transformer picks FABRIC_2D.
-MESH_ARMS = [pytest.param((2, 4), FABRIC_2D, id="fabric2d-mesh-2x4")]
+# The fabric is chosen once per program run, before the mesh opens, so the op runs under whichever
+# one the enclosing transformer picked. Kimi-K3's transformer picks FABRIC_2D_TORUS_XY, which wraps
+# both mesh axes and makes the tensor-axis exchange a ring rather than a line — a different
+# collective on the axis this op is built around. Both Galaxy arms are kept so the two variables the
+# Galaxy changes at once, mesh width and fabric wrap, can be told apart.
+GALAXY_MARK = pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4")
+
+MESH_ARMS = [
+    pytest.param((2, 4), FABRIC_2D, id="fabric2d-mesh-2x4"),
+    pytest.param((8, 4), FABRIC_2D, marks=GALAXY_MARK, id="fabric2d-mesh-8x4"),
+    pytest.param((8, 4), torus_xy_device_params(), marks=GALAXY_MARK, id="torus-xy-8x4"),
+]
 
 
 def _oracle(partial, running_sum, shift, mass, query):
