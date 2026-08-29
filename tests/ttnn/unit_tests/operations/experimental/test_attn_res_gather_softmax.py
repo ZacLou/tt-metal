@@ -26,6 +26,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -63,7 +64,15 @@ GALAXY_MARK = pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="me
 MESH_ARMS = [
     pytest.param((2, 4), FABRIC_2D, id="fabric2d-mesh-2x4"),
     pytest.param((8, 4), FABRIC_2D, marks=GALAXY_MARK, id="fabric2d-mesh-8x4"),
-    pytest.param((8, 4), torus_xy_device_params(), marks=GALAXY_MARK, id="torus-xy-8x4"),
+    # Opened at Kimi-K3's own payload, not `get_max_payload_size()`: every model test in that
+    # package passes `Config.FABRIC_PAYLOAD_SIZE`, and an op that writes to the fabric directly sees
+    # the difference.
+    pytest.param(
+        (8, 4),
+        torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+        marks=GALAXY_MARK,
+        id="torus-xy-8x4",
+    ),
 ]
 
 

@@ -20,6 +20,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import EPS
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
@@ -46,8 +47,15 @@ FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
 # the only placement a Blackhole Galaxy can open at all — a sub-mesh request there does not skip,
 # it dies in `Fabric Router Sync` after ten seconds — so without this arm AttnRes has no coverage
 # whatsoever on the box Kimi-K3 runs on.
-TORUS_XY = torus_xy_device_params()
-TORUS_XY_TRACED = torus_xy_device_params(trace_region_size=23887872)
+# `fabric_payload_size` is not a detail. Left unset, `torus_xy_device_params` opens the fabric at
+# `get_max_payload_size()`; every model test in this package passes its own
+# `Config.FABRIC_PAYLOAD_SIZE` instead, and Kimi-K3's is 7168 (`kimi_k3_config.py`, kept in sync with
+# the migration code). Opening at a different payload than the model does is a different fabric, and
+# the op writes to it directly.
+TORUS_XY = torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE)
+TORUS_XY_TRACED = torus_xy_device_params(
+    fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, trace_region_size=23887872
+)
 
 # `mesh_device` skips a placement asking for more chips than the host has, so a box holding
 # neither shape collects these and skips rather than failing.
