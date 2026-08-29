@@ -88,6 +88,13 @@ class TtPrefillBlock(LightweightModule):
         cannot know to look for the latent-projection cache files, and would report a cache that is
         missing them as complete. Left optional so existing callers are unaffected.
 
+        The same applies to gated MLA. ``ttMLA.weight_names`` only lists ``g_proj`` when
+        ``has_output_gate``, so without ``model_cfg`` a Kimi-K3 MLA cache that is missing its output
+        gate reports COMPLETE, and the layer then loads the ``torch.empty`` placeholder
+        ``_convert_and_cache_weights`` hands ``as_tensor`` on a cache hit. The result is a model that
+        runs and is wrong. Reading the flag off ``model_cfg`` keeps every non-gated model's existing
+        cache valid, since only K3 sets ``USE_OUTPUT_GATE``.
+
         routed_expert_weights_dtype: dtype the routed experts were/will be BUILT at.
         as_tensor stamps it into the tensorbin filename, so the completeness check must pin the
         same value it will later request -- otherwise a stale cache at another dtype reports
@@ -97,7 +104,11 @@ class TtPrefillBlock(LightweightModule):
 
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.attn_norm"):
             return False
-        if not ttMLA.check_cache_complete(cache_path, f"{prefix}.mla"):
+        if not ttMLA.check_cache_complete(
+            cache_path,
+            f"{prefix}.mla",
+            has_output_gate=bool(getattr(model_cfg, "USE_OUTPUT_GATE", False)),
+        ):
             return False
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.ffn_norm"):
             return False
