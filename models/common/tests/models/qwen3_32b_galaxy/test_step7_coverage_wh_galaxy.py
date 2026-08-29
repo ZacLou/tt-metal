@@ -43,6 +43,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.models.galaxy.collectives import compose_galaxy_sampled_tokens
 from models.common.models.galaxy.direct_runner import GalaxyDirectRunner, GalaxySamplingPolicy
 from models.common.models.galaxy.kv_contract import GalaxyPagedAttentionConfig
 from models.common.models.qwen3_32b_galaxy.hf_adaptor import DEFAULT_HF_MODEL, from_pretrained
@@ -608,9 +609,26 @@ def test_qwen_per_slot_heterogeneous_sampling_controls(mesh_device: ttnn.MeshDev
                 seed=[20260827 + slot for slot in range(GALAXY_PHYSICAL_BATCH)],
                 slot_ids=list(range(GALAXY_PHYSICAL_BATCH)),
             )
-            from models.common.auto_compose import to_torch_auto_compose
-
-            chosen = to_torch_auto_compose(sampled).reshape(-1)[:GALAXY_PHYSICAL_BATCH].to(torch.int64)
+            # Not `to_torch_auto_compose`: that is defect D-C9, and this case is
+            # where it bites hardest. The sampled tokens carry the labels of the
+            # all-gather that fed them, so auto-composing stacks the eight
+            # identical mesh rows and drops the four distinct mesh columns, and
+            # the `[:32]` slice turns that into column 0's eight users repeated
+            # four times with no error raised. Slot 8 is the first user of mesh
+            # column 1 - the first index at which the repeat becomes visible -
+            # which is why both models failed this claim at slot 8 and nowhere
+            # earlier. Measured at this commit by
+            # `test_..._with_an_explicit_token_composition`
+            # (`tttv2_milestone_c_evidence/defects/logs/d11_q_explicit_token_composition.log`):
+            #
+            #   greedy, auto-composed:  [265, 2631, 1916, 220, 17, 15, 17, 17,
+            #                            265, 2631, 1916, 220, 17, 15, 17, 17, ...]
+            #   greedy agrees with host argmax: explicit 31/32, auto 7/32
+            #
+            # The claim and its assertions below are unchanged; only the readback is.
+            chosen = compose_galaxy_sampled_tokens(sampled, mesh_device=mesh_device, users=GALAXY_PHYSICAL_BATCH).to(
+                torch.int64
+            )
 
         for slot in greedy_slots:
             assert int(chosen[slot]) == int(expected[slot]), f"greedy slot {slot} did not take the host argmax"
