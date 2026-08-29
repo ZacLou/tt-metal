@@ -1,0 +1,17 @@
+cd /proj_sw/user_dev/ctr-apbernal/tt-metal
+export TT_METAL_HOME=/proj_sw/user_dev/ctr-apbernal/tt-metal
+export PYTHONPATH=/proj_sw/user_dev/ctr-apbernal/tt-metal
+export HF_HOME=/localdev/ctr-apbernal/hf_data
+# --- from tttv2_milestone_c_runs/envs/llama.sh ---
+# TTTv1 Llama-3.3-70B on WH Galaxy.
+# text_demo.py:1060 builds the Meta tiktoken Tokenizer unconditionally from
+# TOKENIZER_PATH + "/tokenizer.model", so HF_MODEL (a repo id) cannot work.
+# LLAMA_DIR must point at a directory that holds BOTH config.json (so the
+# checkpoint is detected as HuggingFace and the safetensors load) AND a real
+# tokenizer.model file. The HF snapshot on this host satisfies both.
+export LLAMA_DIR=/localdev/ctr-apbernal/hf_data/hub/models--meta-llama--Llama-3.3-70B-Instruct/snapshots/6f6073b423013f6a7d4d9f39144961bfbfbc386b
+# The snapshot's own TG/ cache is not writable by this account, so pin the
+# converted-weight cache somewhere we own. Same leaf as the HF_MODEL default.
+export TT_CACHE_PATH=/proj_sw/user_dev/ctr-apbernal/tt-metal/model_cache/meta-llama/Llama-3.3-70B-Instruct/TG
+# --- command ---
+timeout --signal=TERM --kill-after=180 5400 python -m pytest -v -rA --color=no -p no:cacheprovider --timeout=5200 'models/demos/llama3_70b_galaxy/demo/text_demo.py::test_demo_text[wormhole_b0-mesh_device0-device_params0-10-performance-batch-32]'

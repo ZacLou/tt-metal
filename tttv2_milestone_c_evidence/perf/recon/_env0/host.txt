@@ -1,0 +1,13 @@
+### date -u
+Sat Aug 29 08:31:02 UTC 2026
+### hostname
+wh-glx6u-05-special-ctr-apbernal-for-reservation-119144
+### uname -a
+Linux wh-glx6u-05-special-ctr-apbernal-for-reservation-119144 6.8.0-83-generic #83~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Tue Sep  9 18:19:47 UTC 2 x86_64 x86_64 x86_64 GNU/Linux
+### git rev-parse HEAD
+6af44349413ca6ce2c0d98f5b26dd2898dc1f067
+### git status --porcelain (tracked)
+### tt-smi --version
+5.2.0
+### tt-smi -v
+5.2.0

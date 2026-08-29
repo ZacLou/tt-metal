@@ -1,0 +1,18 @@
+cd /proj_sw/user_dev/ctr-apbernal/tt-metal
+export TT_METAL_HOME=/proj_sw/user_dev/ctr-apbernal/tt-metal
+export PYTHONPATH=/proj_sw/user_dev/ctr-apbernal/tt-metal
+export HF_HOME=/localdev/ctr-apbernal/hf_data
+# --- from tttv2_milestone_c_runs/envs/qwen.sh ---
+# TTTv1 Qwen3-32B on WH Galaxy.
+# text_qwen_demo.py:684 uses AutoTokenizer.from_pretrained(model_args.TOKENIZER_PATH),
+# so a HuggingFace repo id works and HF_MODEL is the supported selector here — unlike
+# text_demo.py, which needs a Meta-style LLAMA_DIR (see envs/llama.sh).
+export HF_MODEL=Qwen/Qwen3-32B
+# Keep the ~100 GB converted-weight cache OFF the shared /proj_sw weka mount. That
+# filesystem sits at 97%, is shared, and returned ENOSPC (-28) mid-write at
+# 2026-08-29T10:25:04Z, killing qwen_b32_run1_cold outright. /localdev is local disk
+# with 1.9 TB free. Under HF_MODEL, model_config.py:527 appends the device name, so
+# this path becomes .../Qwen3-32B/TG.
+export TT_CACHE_PATH=/localdev/ctr-apbernal/tt_cache/Qwen/Qwen3-32B
+# --- command ---
+timeout --signal=TERM --kill-after=180 5400 python -m pytest -v -rA --color=no -p no:cacheprovider --timeout=5200 'models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py::test_qwen_demo_text[wormhole_b0-mesh_device0-device_params0-10-performance-batch-32]'

@@ -1,0 +1,11 @@
+cd /proj_sw/user_dev/ctr-apbernal/tt-metal
+export TT_METAL_HOME=/proj_sw/user_dev/ctr-apbernal/tt-metal
+export PYTHONPATH=/proj_sw/user_dev/ctr-apbernal/tt-metal
+export HF_HOME=/localdev/ctr-apbernal/hf_data
+# --- from tttv2_milestone_c_runs/envs/qwen.sh ---
+# TTTv1 Qwen3-32B on WH Galaxy.
+# text_qwen_demo.py:684 uses AutoTokenizer.from_pretrained(TOKENIZER_PATH), so a
+# HuggingFace repo id works and HF_MODEL is the supported selector here.
+export HF_MODEL=Qwen/Qwen3-32B
+# --- command ---
+timeout --signal=TERM --kill-after=180 7200 python -m pytest -v -rA --color=no -p no:cacheprovider --timeout=7000 'models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py::test_qwen_demo_text[wormhole_b0-mesh_device0-device_params0-10-performance-batch-32]'

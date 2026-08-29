@@ -1,0 +1,6 @@
+cd /proj_sw/user_dev/ctr-apbernal/tt-metal
+export TT_METAL_HOME=/proj_sw/user_dev/ctr-apbernal/tt-metal
+export PYTHONPATH=/proj_sw/user_dev/ctr-apbernal/tt-metal
+export HF_HOME=/localdev/ctr-apbernal/hf_data
+export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct
+timeout --signal=TERM --kill-after=180 7200 python -m pytest -v -rA --color=no -p no:cacheprovider --timeout=7000 'models/demos/llama3_70b_galaxy/demo/text_demo.py::test_demo_text[wormhole_b0-mesh_device0-device_params0-10-performance-batch-32]'

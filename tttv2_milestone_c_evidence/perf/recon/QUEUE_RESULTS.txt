@@ -1,0 +1,8 @@
+llama_b32_run1_cold rc=1 wall_s=2056
+llama_b32_run2_llamadir rc=1 wall_s=119
+llama_b32_run3_metackpt rc=0 wall_s=2519
+qwen_b32_run2_cold_localcache rc=0 wall_s=1546
+llama_b32_run4 rc=0 wall_s=1104
+qwen_b32_run3 rc=0 wall_s=531
+llama_b32_run5 rc=0 wall_s=1036
+qwen_b32_run4 rc=0 wall_s=576
