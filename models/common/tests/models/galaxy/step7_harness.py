@@ -309,13 +309,19 @@ def patch_compose(monkeypatch: Any, rows_factory) -> None:
         "compose_galaxy_logits",
         lambda tensor, **_: rows_factory(tensor),
     )
-    # The runner has *two* readback paths and this helper fakes both. The logits go
-    # through `compose_galaxy_logits`; the device-sampled token ids still go through
-    # `to_torch_auto_compose`, which is correct for them - `Sampling2D`'s output
-    # placement is set by a mapper, not produced by a matmul, so its declared
-    # topology is trustworthy. Patching only the first left the sampling tests
-    # reaching a real `tensor_topology()` on a `SimpleNamespace`.
-    monkeypatch.setattr(direct_runner_module, "to_torch_auto_compose", rows_factory)
+    monkeypatch.setattr(
+        direct_runner_module,
+        "compose_galaxy_sampled_tokens",
+        lambda tensor, **_: rows_factory(tensor),
+    )
+    # The runner has *two* readback paths and this helper fakes both. The logits
+    # go through `compose_galaxy_logits`; the device-sampled token ids go through
+    # `compose_galaxy_sampled_tokens`, which also builds a real
+    # `ConcatMesh2dToTensor` and so also cannot take a `MagicMock` mesh. It used
+    # to be `to_torch_auto_compose` here, on the argument that `Sampling2D`'s
+    # output placement is set by a mapper and its declared topology is therefore
+    # trustworthy; silicon said otherwise (finding D-C9), and the runner no
+    # longer calls it.
 
 
 __all__ = [

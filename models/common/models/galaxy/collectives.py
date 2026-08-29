@@ -30,6 +30,7 @@ from models.common.models.galaxy.recipes import (
     GALAXY_USERS_PER_COLUMN,
     GalaxyDecodePlacements,
     GalaxyDenseGeometry,
+    column_user_selector_program_config,
 )
 from models.common.modules.attention.attention_2d import Attention2DLowLevelCallables, PrefillRowMode
 
@@ -378,6 +379,49 @@ def compose_galaxy_logits(tensor: Any, *, mesh_device: Any = None, vocab_size: i
     return flat[:, :vocab_size] if vocab_size is not None else flat
 
 
+def compose_galaxy_sampled_tokens(tensor: Any, *, mesh_device: Any = None, users: int | None = None) -> torch.Tensor:
+    """Compose device-sampled tokens to one flat vector of users, on host.
+
+    The mirror of :func:`compose_galaxy_logits`, and it exists for the same
+    reason. `to_torch_auto_compose` infers its composer from the tensor's own
+    `tensor_topology()`, and an op's output carries its *activation's* labels
+    rather than the distribution its inputs actually have. `ttnn.sampling`'s
+    output inherits from `gathered_values`, an `all_gather` over the sampling
+    axis, so it is labelled as if the mesh **rows** held distinct data - while in
+    fact the eight devices of a mesh column hold identical tokens (they
+    all-gathered the whole vocabulary between them) and the four **columns** hold
+    different users.
+
+    Auto-composing therefore concatenates the eight identical row copies and
+    drops the four distinct column slices. A caller that then slices `[:32]`
+    gets no error at all, just one column's eight users repeated four times.
+    Measured on `(8, 4)` with Qwen3-32B, two fresh processes, byte-identical
+    (`mb-coverage` attempt 4, `a4_q_dc8{,_run2}`)::
+
+        [dc8] greedy tokens: [265, 2631, 1916, 220, 17, 15, 17, 17,
+                              265, 2631, 1916, 220, 17, 15, 17, 17,
+                              265, 2631, 1916, 220, 17, 15, 17, 17,
+                              265, 2631, 1916, 220, 17, 15, 17, 17]
+        [dc8] greedy agrees with host argmax in 7/32 slots
+
+    That is Milestone B finding **D-C9**, and it is a readback defect: the eight
+    users it does surface were right. Composing by distribution - the four
+    columns concatenated on the user axis, then mesh row 0 - returns all 32.
+    """
+
+    device = mesh_device or tensor.device()
+    user_axis = len(tuple(tensor.shape)) - 1
+    composed = ttnn.to_torch(
+        tensor,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(device, dims=(0, user_axis), mesh_shape=GALAXY_MESH_SHAPE),
+    )
+    # dims=(0, user_axis) is (mesh-row-target, mesh-column-target): the eight
+    # identical rows stack on the free leading axis and the four columns
+    # concatenate on the user axis. Mesh row 0 is the authoritative copy.
+    flat = composed.reshape(composed.shape[0], -1)[0]
+    return flat[:users] if users is not None else flat
+
+
 class GalaxyColumnUserSelector:
     """Select each mesh column's user slice from a column-replicated tensor.
 
@@ -399,10 +443,45 @@ class GalaxyColumnUserSelector:
     - output ``[1, 1, 8, local_vocab]``, which is exactly the layout the
       Milestone A ``Sampling2D`` hardware qualification staged by hand.
 
-    **Unqualified.** This composition has never run on a Galaxy mesh. Qualify it
-    with the focused selector test before trusting a device sampling path built
-    on it; the alternative is composing the logits to host and calling
-    ``Sampling2D.sample_host``.
+    **Two things the matmul needs that the caller does not supply**, both
+    measured on silicon in Milestone B at three fresh processes on both models:
+
+    - **D-C5.** ``LMHead2D.decode_forward`` returns its output under
+      ``lm_head_output_memcfg``, which the shared recipe resolves to
+      ``width_sharded_memory_config(padded_local_vocab, ring)`` - WIDTH_SHARDED
+      for both models. Every multi-core matmul program config that could take
+      this shape requires ``in1`` INTERLEAVED::
+
+          TT_FATAL ... Input B memory layout must be INTERLEAVED,
+                       got: TensorMemoryLayout::WIDTH_SHARDED
+
+      so ``__call__`` stages a sharded input to DRAM first. It uses
+      ``sharded_to_interleaved`` and not ``to_memory_config`` for the reason
+      :func:`_relocate_sharded` documents: the former runs on its input's own
+      ``shard_spec.grid``, which is inside the loaded decode sub-device, while a
+      grid-and-width-changing ``to_memory_config`` resolves to
+      ``reshard_program_factory_generic`` over the full compute grid.
+    - **D-C8.** With ``in1`` interleaved the *same line* then aborts under the
+      loaded decode sub-device manager::
+
+          TT_FATAL @ program.cpp:2205: num_intersections == num_cores
+          Kernel group cores do not match sub device cores for programmable
+          core type TENSIX
+
+      because an auto-selected program config resolves its grid from the tensors
+      and the **full compute grid**, not from the loaded sub-device. So the
+      selector resolves - and caches - a worker-confined program config from the
+      width it is handed, with
+      :func:`~models.common.models.galaxy.recipes.column_user_selector_program_config`.
+      A caller with a different partition may inject its own through
+      ``program_config``; the default is the qualified Galaxy decode one, because
+      decode is the only mode this selector runs in and a caller who forgets is
+      exactly how D-C8 reached silicon.
+
+    Qualified on a Galaxy mesh by
+    ``models/common/tests/models/galaxy/test_column_user_selector_wh_galaxy.py``,
+    which stages its input in the LM head's own placement under a loaded decode
+    sub-device manager.
     """
 
     def __init__(
@@ -414,6 +493,7 @@ class GalaxyColumnUserSelector:
         dtype: Any = ttnn.bfloat16,
         memory_config: Any = None,
         compute_kernel_config: Any = None,
+        program_config: Any = None,
     ):
         if max_batch_size != GALAXY_PHYSICAL_BATCH or users_per_column * GALAXY_COLUMNS != max_batch_size:
             raise ValueError("the Galaxy column user selector requires batch 32 as 8 users per column")
@@ -423,7 +503,9 @@ class GalaxyColumnUserSelector:
         self.dtype = dtype
         self.memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
         self.compute_kernel_config = compute_kernel_config
+        self.program_config = program_config
         self._selector: Any = None
+        self._program_configs: dict[int, Any] = {}
 
     def selector(self) -> Any:
         if self._selector is None:
@@ -438,21 +520,43 @@ class GalaxyColumnUserSelector:
             )
         return self._selector
 
+    def resolved_program_config(self, padded_local_vocab: int) -> Any:
+        """Return the worker-confined program config for one logits width."""
+
+        if self.program_config is not None:
+            return self.program_config
+        cached = self._program_configs.get(padded_local_vocab)
+        if cached is None:
+            cached = column_user_selector_program_config(self.users_per_column, padded_local_vocab)
+            self._program_configs[padded_local_vocab] = cached
+        return cached
+
     def __call__(self, tensor: Any) -> Any:
         shape = tuple(int(value) for value in tensor.shape)
         if len(shape) != 4 or shape[-2] != self.max_batch_size:
             raise ValueError(f"column user selection expects [1, 1, {self.max_batch_size}, W], got {shape}")
-        return ttnn.matmul(
-            self.selector(),
-            tensor,
-            memory_config=self.memory_config,
-            dtype=self.dtype,
-            compute_kernel_config=self.compute_kernel_config,
+        staged = (
+            ttnn.sharded_to_interleaved(tensor, ttnn.DRAM_MEMORY_CONFIG)
+            if tensor.memory_config().is_sharded()
+            else tensor
         )
+        try:
+            return ttnn.matmul(
+                self.selector(),
+                staged,
+                memory_config=self.memory_config,
+                dtype=self.dtype,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=self.resolved_program_config(shape[-1]),
+            )
+        finally:
+            if staged is not tensor:
+                deallocate_if_allocated(staged)
 
     def release(self) -> None:
         deallocate_if_allocated(self._selector)
         self._selector = None
+        self._program_configs.clear()
 
 
 def galaxy_runtime_tensor_factory(

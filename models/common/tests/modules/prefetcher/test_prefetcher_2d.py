@@ -536,6 +536,43 @@ def test_releasing_the_global_cb_on_prefill_recreates_it_on_the_next_decode(reso
     owner.cleanup()
 
 
+def test_cleanup_takes_the_global_cb_back_out_of_every_context_it_handed_out(resources):
+    """Cleanup must break the references it gave away, not just its own.
+
+    A `Prefetcher2DContext` is captured by *value* at module construction -
+    `MLP2DConfig.decode_prefetch_context` holds the context object and reads
+    `getattr(context, "global_cb", None)` at call time - so dropping
+    `self._contexts` leaves every already-built module holding a context whose
+    `global_cb` is still the live buffer. There is no `deallocate` on a
+    `global_circular_buffer`; its L1 is freed by the C++ destructor, so one
+    surviving Python reference keeps ~774 kB per sender/receiver core allocated
+    for the life of the process.
+
+    That is Milestone B finding **D-C7**: after a model was closed, deleted and
+    `gc.collect()`-ed, 923 776 of every 1 393 472 B L1 bank was still allocated
+    and the second model in the process could not create its own buffer:
+
+        TT_FATAL @ bank_manager.cpp:462 Out of Memory: Not enough space to
+        allocate 55444480 B L1 buffer across 70 banks, where each bank needs to
+        store 792064 B ... (allocated: 923776 B, free: 469696 B)
+
+    Without the loop in `cleanup()` this test fails on the `is None` assertions
+    with the buffer still bound to both contexts.
+    """
+
+    owner = initialized_owner(resources, expected_weight_count=1, defer_global_cb=True)
+    owner.register_weight("weight", FakeTensor(owner.config.mesh_device, 101, 128))
+    prefill, decode = owner.seal()
+    owner.activate("decode")
+    assert decode.global_cb == resources.created_cbs[0]
+
+    owner.cleanup()
+
+    assert decode.global_cb is None, "the sealed decode context still holds the global circular buffer"
+    assert prefill.global_cb is None
+    assert owner._global_cb is None
+
+
 def test_release_without_defer_is_rejected(expect_error):
     with expect_error(ValueError, "requires defer_global_cb"):
         make_config(defer_global_cb=False, release_global_cb_on_prefill=True)

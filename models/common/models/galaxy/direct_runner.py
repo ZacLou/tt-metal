@@ -38,8 +38,11 @@ from typing import Any, Callable, Iterable, Sequence
 import torch
 
 import ttnn
-from models.common.auto_compose import to_torch_auto_compose
-from models.common.models.galaxy.collectives import compose_galaxy_logits, deallocate_if_allocated
+from models.common.models.galaxy.collectives import (
+    compose_galaxy_logits,
+    compose_galaxy_sampled_tokens,
+    deallocate_if_allocated,
+)
 from models.common.models.galaxy.recipes import GALAXY_MESH_SHAPE
 from models.common.modules.lazy_weight import LazyWeight
 
@@ -532,7 +535,15 @@ class GalaxyDirectRunner:
                 seed=policy.seed,
                 forced_argmax=policy.greedy,
             )
-            composed = to_torch_auto_compose(sampled).reshape(-1)[: self.max_batch_size]
+            # Not `to_torch_auto_compose`: the sampled tokens carry the labels of
+            # the all-gather that fed them, so auto-composing returns one mesh
+            # column's eight users repeated four times and a `[:32]` slice hides
+            # it. That is finding D-C9, and `compose_galaxy_sampled_tokens`
+            # carries the measurement. `_compose_rows` refuses auto-compose for
+            # the same reason, sixty lines up.
+            composed = compose_galaxy_sampled_tokens(sampled, mesh_device=self.mesh_device, users=self.max_batch_size)
+            if composed.shape[0] != self.max_batch_size:
+                raise ValueError(f"composed {composed.shape[0]} sampled tokens, expected {self.max_batch_size}")
             return composed.to(torch.int64)
         finally:
             _deallocate_all((sampled, device_logits))

@@ -33,6 +33,25 @@ class _HostMeshMapper:
     mesh_shape: tuple[int, int]
 
 
+def _subgrid(grid: Any, start_core: Any, count: int) -> Any:
+    """Return the first `count` cores of `grid`, or `None` if that is not possible.
+
+    `ttnn.num_cores_to_corerangeset_in_subcoregrids` is a positional-only
+    binding over real `CoreCoord`/`CoreRangeSet` objects, so it cannot be handed
+    the placeholder grids the config tests use. Returning `None` there keeps
+    those tests exercising the surrounding logic, and on hardware a real grid is
+    always present.
+    """
+
+    if grid is None:
+        return None
+    try:
+        start = start_core or grid.bounding_box().start
+        return ttnn.num_cores_to_corerangeset_in_subcoregrids(start, count, grid, True)
+    except (TypeError, AttributeError):
+        return None
+
+
 @dataclass(frozen=True)
 class Sampling2DCall:
     """Normalized, immutable values for one sampling invocation."""
@@ -290,6 +309,64 @@ class Sampling2D(LightweightModule):
         self._invalid_vocab_mask = _materialize(cfg.invalid_vocab_mask) if cfg.invalid_vocab_mask is not None else None
         self._device_buffers_loaded = True
 
+    def _sampling_core_grid(self):
+        """Return the `ttnn.sampling` core grid, or `None` for the whole device.
+
+        `ttnn.sampling` documents that a supplied grid "must supply at least
+        ``num_users`` cores", so this takes exactly `users_per_shard` of
+        `sub_core_grids` from `start_core` - the construction the production 1D
+        sampler makes for the same op. Given none, the op takes the whole
+        compute grid, which under a loaded sub-device manager is
+        `TT_FATAL @ program.cpp:2205 Kernel group cores do not match sub device
+        cores`.
+        """
+
+        return _subgrid(self.config.sub_core_grids, self.config.start_core, self.config.users_per_shard)
+
+    def _place_for_topk(self, logits):
+        """Return `logits` in a placement `ttnn.topk` can reduce in a sub-device.
+
+        Identity unless the input is interleaved *and* carries implicit tile
+        padding on the user axis, which is exactly the case whose padding fill
+        `ttnn.topk` would place on the whole compute grid. The shard is a width
+        shard over as many cores of `sub_core_grid_topk` as divide the width in
+        whole tiles - a width-sharded L1 shard must be a whole number of tiles
+        wide, and the two Galaxy vocabularies do not share a divisor:
+
+            TT_FATAL ... Physical shard shape (32, 537) must be tile {32, 32} sized!
+
+        so the count is searched for rather than named, the way
+        `recipes.lm_head_reduce_core_count` searches for the LM head reduction's.
+        """
+
+        cfg = self.config
+        if cfg.sub_core_grid_topk is None or logits.memory_config().is_sharded():
+            return logits
+        logical = tuple(int(value) for value in logits.shape)
+        tile = ttnn.TILE_SIZE
+        height_padded = bool(logical[-2] % tile)
+        width = logical[-1]
+        if not height_padded or width % tile:
+            return logits
+        tiles = width // tile
+        available = cfg.sub_core_grid_topk.num_cores()
+        count = next((value for value in range(min(available, tiles), 0, -1) if not tiles % value), 0)
+        if count == 0:
+            return logits
+        cores = _subgrid(cfg.sub_core_grid_topk, cfg.start_core, count)
+        if cores is None:
+            return logits
+        return ttnn.interleaved_to_sharded(
+            logits,
+            ttnn.create_sharded_memory_config(
+                shape=(tile, width // count),
+                core_grid=cores,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            ),
+        )
+
     def decode_forward(
         self,
         logits,
@@ -343,12 +420,30 @@ class Sampling2D(LightweightModule):
                         sub_core_grids=cfg.sub_core_grids,
                     )
                 )
+            # `ttnn.topk` fills its input's implicit tile padding before it
+            # reduces, and `fill_implicit_tile_padding` takes no sub-core grid:
+            # the *interleaved* fill_pad factory resolves its cores from
+            # `device->compute_with_storage_grid_size()`, while the *sharded*
+            # one uses `shard_spec.grid`. Decode logits arrive with
+            # `users_per_shard` logical rows in a 32-row tile, so the fill
+            # always fires, and under a loaded sub-device manager the
+            # interleaved placement aborts before the reduction runs:
+            #
+            #     TT_FATAL @ program.cpp:2205: num_intersections == num_cores
+            #     Kernel group cores do not match sub device cores
+            #
+            # so a padded input is width-sharded onto `sub_core_grid_topk`
+            # first. The explicit `memory_config` is part of the same fix: with
+            # none, `ttnn.topk` inherits the input's, and it rejects a sharded
+            # output (`topk_device_operation.cpp:149`).
+            topk_input = own(self._place_for_topk(sampled_logits))
             local_values, local_indices = ttnn.topk(
-                sampled_logits,
+                topk_input,
                 k=cfg.max_top_k,
                 dim=-1,
                 indices_tensor=self._local_indices,
                 sub_core_grids=cfg.sub_core_grid_topk,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             own(local_values)
             own(local_indices)
@@ -375,13 +470,18 @@ class Sampling2D(LightweightModule):
             gathered_indices = own(ttnn.typecast(gathered_indices, dtype=ttnn.int32, sub_core_grids=cfg.sub_core_grids))
             global_indices = own(ttnn.add(self._index_offsets, gathered_indices, dtype=ttnn.int32))
             global_indices = own(ttnn.untilize(global_indices, use_multicore=True, sub_core_grids=cfg.sub_core_grids))
-            ttnn.manual_seed(seeds=self._seeds, user_ids=self._user_ids)
+            # `sub_core_grids` for the same reason `topk` needs a placement: with
+            # none the seed program takes the whole compute grid, which under a
+            # loaded sub-device manager is `TT_FATAL @ program.cpp:2205 Kernel
+            # group cores do not match sub device cores`.
+            ttnn.manual_seed(seeds=self._seeds, user_ids=self._user_ids, sub_core_grids=cfg.sub_core_grids)
             result = ttnn.sampling(
                 gathered_values,
                 global_indices,
                 k=self._top_k,
                 p=self._top_p,
                 temp=self._temperature,
+                sub_core_grids=self._sampling_core_grid(),
                 output_tensor=tt_out_tok,
             )
             owned[:] = [tensor for tensor in owned if tensor is not result]

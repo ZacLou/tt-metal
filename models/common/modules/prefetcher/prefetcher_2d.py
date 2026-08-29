@@ -172,8 +172,7 @@ class Prefetcher2DResourceOwner(Protocol):
     """Structural owner API consumed by model-level resource collaborators."""
 
     @property
-    def mesh_device(self) -> Any:
-        ...
+    def mesh_device(self) -> Any: ...
 
     def borrow_context(
         self,
@@ -183,11 +182,9 @@ class Prefetcher2DResourceOwner(Protocol):
         worker_sub_device_id: Any,
         stall_group: tuple[Any, ...],
         local_l1_size: int,
-    ) -> Prefetcher2DContext:
-        ...
+    ) -> Prefetcher2DContext: ...
 
-    def activate(self, mode: PrefetcherMode) -> Prefetcher2DContext:
-        ...
+    def activate(self, mode: PrefetcherMode) -> Prefetcher2DContext: ...
 
 
 class Prefetcher2D:
@@ -545,6 +542,22 @@ class Prefetcher2D:
                 attempt(lambda resource=resource: self._deallocate(resource))
                 seen.add(id(resource))
         self._weight_address_metadata = None
+        # Every context this owner handed out has to give the buffer back too.
+        # Module configs capture the *context object* at construction
+        # (`MLP2DConfig.decode_prefetch_context`), so clearing `self._contexts`
+        # below drops this owner's map and leaves the modules holding a context
+        # whose `global_cb` is still the live buffer. There is no `deallocate` on
+        # a `global_circular_buffer`: its ~774 kB of L1 per sender/receiver core
+        # is held by the C++ object and freed by its destructor, so *every*
+        # Python reference has to go before the L1 comes back. Measured on
+        # `(8, 4)`: with the last reference dropped the allocator does return it
+        # and a second buffer of the same size can be created
+        # (`tttv2_milestone_c_evidence/defects/logs/c4_dc7_probe2.log`), which is
+        # what made a surviving reference the explanation for D-C7 - the second
+        # model in a process finding 923 776 of 1 393 472 B per bank still
+        # allocated after the first was closed, collected, and cleaned up.
+        for context in self._contexts.values():
+            object.__setattr__(context, "global_cb", None)
         self._global_cb = None
 
         for mode in ("decode", "prefill"):
