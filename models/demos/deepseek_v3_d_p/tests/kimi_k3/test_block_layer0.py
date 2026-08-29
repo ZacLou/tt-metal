@@ -49,10 +49,11 @@ SP_AXIS, TP_AXIS = 0, 1
 # the prefill chunk size. The two coincide, so a chunk is the minimum unit of work.
 SEQ_LEN = 5120
 
-# bf16 activations through a 5120-step recurrence and two matmul stacks. The MLA output bar in this
-# package is 0.98 and the teacher-forced block bar is 0.98; KDA's own device tests hold 0.999 at
-# small shapes, so this sits between them and will be tightened once the first number is in.
-BLOCK_PCC = 0.98
+# Measured 0.99994 on both Galaxy fabrics at 5120 tokens with real layer-0 weights. Set well below
+# that but far above the package's 0.98 block bar: this layer is a 5120-step bf16 recurrence
+# followed by two matmul stacks, and it still lands in the fourth nine, so 0.98 would let a real
+# regression through unnoticed.
+BLOCK_PCC = 0.999
 
 GALAXY_MARK = pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4")
 
@@ -164,9 +165,17 @@ def test_layer0_plain_residual_matches_torch(mesh_device, device_params, tmp_pat
 
         residual = PlainResidualStream(_shard(mesh_device, hidden))
         block.forward(residual, K3AttnContext())
+        # The inverse of `_shard`, and the dims are NOT interchangeable: `ConcatMesh2dToTensor`
+        # takes them in mesh-axis order, so the sequence axis names dim 2 and the tensor axis dim 3,
+        # exactly as `_shard` split them. Swapping the two composes a tensor of the right shape out
+        # of the wrong pieces and reads as PCC 0.03 rather than as an error.
+        compose_dims = [0, 0]
+        compose_dims[SP_AXIS], compose_dims[TP_AXIS] = 2, 3
         got = ttnn.to_torch(
             residual.finish(),
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 2), mesh_shape=tuple(mesh_device.shape)),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, dims=tuple(compose_dims), mesh_shape=tuple(mesh_device.shape)
+            ),
         ).reshape(-1, KimiK3Config.EMB_SIZE)[:SEQ_LEN]
     finally:
         if states is not None:
