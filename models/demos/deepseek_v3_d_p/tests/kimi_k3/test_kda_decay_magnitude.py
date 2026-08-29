@@ -34,8 +34,15 @@ output to fp32 changes the result by 4e-4, and fp32 for the affine summary by 1e
 (HiFi4 is marginally worse), chunk grouping (identical at 20/10/5/4, and 20 local chunks never
 reaches `grouped_scan_min_chunks` anyway), sequence length (already wrong at one chunk per rank),
 the state cache (bit-identical alone and after layer 0) and the weight loader (the torch reference
-reads the same dict). The two ops that can be scored against their own oracles are both correct —
-see `test_prepare_chunk_recurrence_gate_range.py` and `test_recurrent_chunk_scan_magnitudes.py`.
+reads the same dict).
+
+ROOT CAUSE, found afterwards and fixed: `prepare_chunk_recurrence` computed `t_inv` — the inverse of
+the delta rule's UT transform — with a doubling product whose intermediates are the explicit powers
+N^2..N^16. At Kimi-K3's decay magnitudes ||N|| reaches 17, so those intermediates reach O(1e2) while
+the inverse is bounded by 1, and the cancellation costs more digits than the hardware carries. It
+scored 0.99508 as a whole tensor, which is why nothing caught it: `t_inv` is `I + strictly-lower`, so
+PCC is dominated by the diagonal. Its strictly-lower part alone scored 0.935. See
+`test_kda_prepare_vs_scan.py` for the attribution and the kernel's `invert_horner` for the fix.
 """
 
 from pathlib import Path

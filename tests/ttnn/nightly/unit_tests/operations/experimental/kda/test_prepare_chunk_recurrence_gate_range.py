@@ -19,6 +19,13 @@ So this drives the op with the model's real tensors at the one layer where the o
 which is exactly the layer that fails end-to-end: layer 1 scores ~0 against its own torch reference
 on device while layer 0 scores 0.99993. Each of the seven outputs is scored separately, so a single
 wrong one names the stage.
+
+Read the `t_inv` row carefully. It scored 0.99508 before the `invert_horner` fix, which looks like a
+pass and is not one: `t_inv` is `I + strictly-lower`, so whole-tensor PCC is dominated by the
+identity diagonal and stays near 1 while the off-diagonals — the entire content of the UT transform
+— are wrong. Scored on its strictly-lower part alone it was 0.935, and substituting it for the torch
+protocol took the recurrence from 1.0 to 0.0014. Any future threshold on this output should be set
+on the strictly-lower part, not the whole tile.
 """
 
 from __future__ import annotations
