@@ -25,6 +25,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext
 from models.demos.deepseek_v3_d_p.tt.kv_ack import zero_pad_and_ack
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
@@ -55,7 +56,7 @@ class TtKimiK3Block(LightweightModule):
         sp_axis: int = 0,
         tp_axis: int = 1,
         is_balanced: bool = False,
-        gate_fallback_mode=None,
+        gate_fallback_mode=None,  # defaults to K3's own mode below
         weight_cache_path=None,
         kv_only: bool = False,
         dispatch_buffer_capacity_factor: int = 2,
@@ -112,6 +113,10 @@ class TtKimiK3Block(LightweightModule):
         )
 
         if self.is_moe:
+            # Kimi-K3 runs the device FP32 gate: one expert group, so there is no grouped-topk
+            # fallback to prefer, and `KimiK3Adapter.default_gate_mode` names it. Defaulted here
+            # rather than left None, which reaches TtMoEGatePrefill as a mode it cannot read.
+            gate_mode = gate_fallback_mode if gate_fallback_mode is not None else GateComputeMode.DEVICE_FP32
             self.ffn = TtPrefillBlock._build_moe(
                 mesh_device=mesh_device,
                 model_cfg=model_cfg,
@@ -122,7 +127,7 @@ class TtKimiK3Block(LightweightModule):
                 emb_dim=emb_dim,
                 num_links=num_links,
                 topology=topology,
-                gate_fallback_mode=gate_fallback_mode,
+                gate_fallback_mode=gate_mode,
                 routed_expert_activations_dtype=routed_expert_activations_dtype,
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
                 shared_expert_activations_dtype=shared_expert_activations_dtype,

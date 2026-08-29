@@ -39,6 +39,7 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import load_layer_state_dict, load_routed_expert_weights
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 
 SP_AXIS, TP_AXIS = 0, 1
 SEQ_LEN = 5120
@@ -48,7 +49,10 @@ SEQ_LEN = 5120
 # deeper rungs will say where it has to relax.
 LAYER_PCC = 0.99
 
-DEPTHS = [1, 2]
+# 1 and 2 are cheap-ish; 5 is the first rung with a full-attention layer (layer 3) and so the first
+# that needs a KV cache at all. 12 and 24 follow the same shape and are gated on a built TTNN weight
+# cache rather than a per-run conversion.
+DEPTHS = [1, 2, 5]
 
 PLACEMENTS = [
     pytest.param(
@@ -141,7 +145,22 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         residual_factory=residual_factory,
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
+        max_seq_len=SEQ_LEN,
     )
+
+    # One KV slot per FULL-ATTENTION layer, not per layer. Depths 1 and 2 hold none — layers 0 and 1
+    # are both KDA — so there is nothing to allocate and `kvpe_cache=None` is the honest argument.
+    kvpe = None
+    if model.schedule.num_mla_layers:
+        kvpe = allocate_mla_kvpe_cache(
+            mesh_device=mesh_device,
+            hf_config=config,
+            max_seq_len=SEQ_LEN,
+            mesh_shape=tuple(mesh_device.shape),
+            sp_axis=SP_AXIS,
+            num_layers=model.schedule.num_mla_layers,
+            num_users=1,
+        )
 
     # The repo's own placement, not a hand-rolled mapper: tokens shard on the SEQUENCE axis, and
     # `prepare_prefill_input_tensor` is what produces the [sp_factor, 1, isl_per_chip] uint32
@@ -162,7 +181,10 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         per_layer[local_idx] = _compose(mesh_device, hidden)
 
     try:
-        model.forward(tokens_tt, layer_tap=tap)
+        # No rope tensors: K3 is NoPE, so `ttMLA` binds `_apply_rope_none` at construction and the
+        # rope dict is only ever indexed inside the two rotating paths. Passing None is correct
+        # rather than lazy.
+        model.forward(tokens_tt, kvpe_cache=kvpe, layer_tap=tap)
     finally:
         if model.kda_states is not None:
             model.kda_states.deallocate()
