@@ -1528,6 +1528,19 @@ def run_chunked_transformer_updated(
         # check_pcc would compare the warm pass's (correct) KV. Fail instead of reporting that.
         assert trace_controller.num_segments > 0, "use_trace captured 0 segments — nothing to replay"
 
+        # Capture cost chunk 0 two EXTRA forwards (the warm/compile pass and the recorded pass).
+        # For a KV cache that is idempotent -- same positions, same tokens, same values. For a
+        # RECURRENT carry it is not: every forward advances it, so by the measured loop the carry
+        # has absorbed chunk 0 three times instead of once, and the error rides into every later
+        # chunk. Dense models never see this; Kimi-K3's KDA carries are the first recurrence here.
+        # Zero them so the replay starts from the same state the untraced path starts from.
+        kda_states = getattr(transformer, "kda_states", None)
+        if kda_states is not None:
+            for slot in range(kda_states.num_slots):
+                kda_states.reset(slot)
+            ttnn.synchronize_device(mesh_device)
+            logger.info(f"[trace] reset {kda_states.num_slots} KDA carry slot(s) after capture")
+
     profiler.start("tt_forward")
     for it in range(num_iters):
         iter_start = time.time()
