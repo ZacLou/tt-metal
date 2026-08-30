@@ -1,22 +1,82 @@
 # `c-exec-llama` — completion handoff (attempt 1)
 
-**Last updated:** 2026-08-29T23:56Z — IN FLIGHT
+**Last updated:** 2026-08-30T09:40Z — **RECONCILED POST-RUN.** The attempt's own last update was
+2026-08-29T23:56Z, three and a quarter hours before its work actually finished.
 **Base commit:** `67a208db961`. **Branch:** `apbernal/tttv2_wh_glx_2d_modules_milestone_c`.
-**Job window:** started ~22:50Z, driver PID 7812.
+**Job window:** started ~22:50Z, driver PID 7812. The agent exited 2026-08-30T00:02:48Z; the
+queue it left behind drained at **2026-08-30T03:11:06Z**.
 
 **Finish marker: not written. Blocked marker: not written.**
 
-## Status
+---
 
-| # | Coverage item (brief) | State |
+## Post-run reconciliation — added 2026-08-30 by the operator, not by the attempt
+
+**Read this before the rest of the document.** This attempt queued 51 full-model runs into a
+detached `chain.sh` and then exited, so its own status table below was written while almost all of
+its evidence was still unmeasured. The queue ran to completion regardless. Everything from
+`## Inherited state` onward is the agent's account, unedited and correct as of 23:56Z; where it
+says IN FLIGHT, the table here supersedes it.
+
+The source is `tttv2_milestone_c_evidence/exec_llama/RESULTS.md`, machine-written run by run, which
+is **three hours newer than the account that summarises it**. Every row below is three fresh
+processes unless it says otherwise.
+
+| # | Coverage item (brief) | Reconciled state |
 | --- | --- | --- |
-| 1 | eager prefill 128/512/2048 vs `GalaxyDirectRunner`, PCC ≥ 0.99 | **observed at 128** (1 layer, PCC 0.99941), run 1 of 3 |
-| 2 | eager decode, batch 1 and batch 32 | IN FLIGHT (one-layer shakeout) |
-| 3 | paged KV: late capacity, bind/unbind, per-layer metadata, KV PCC | IN FLIGHT (one-layer shakeout) |
-| 4 | prefix-cached and chunked prefill | IN FLIGHT; expected BLOCKED (Llama L1 clash, c-defects) |
-| 5 | program compilation and `WarmupCoordinator` | IN FLIGHT (one-layer shakeout) |
-| 6 | three startup/serve/cleanup cycles in one process | IN FLIGHT; at risk (same clash) |
-| 7 | teacher-forced top-1 ≥ 91% / top-5 ≥ 99% | NOT STARTED (needs all 80 layers) |
+| 1 | eager prefill 128/512/2048 vs `GalaxyDirectRunner`, PCC ≥ 0.99 | **128 ✅ 3/3 · 2048 ✅ 3/3, all at PCC 1.0** · **512 only 2/3** — `f_exec512_r3` died on a cluster-open error, not on the model |
+| 2 | eager decode, batch 1 and batch 32 | **b32 ✅ 3/3 at PCC 1.0** · **b1 only 2/3** — `f_decode1_r3` was SIGTERMed mid-run by the driver |
+| 3 | paged KV: late capacity, bind/unbind, per-layer metadata, KV PCC | **✅ 3/3.** First and last layer, K and V, all PCC 1.0 |
+| 4 | prefix-cached and chunked prefill | **chunked ✅ 3/3** · **prefix ❌ 3/3 failed**, and NOT on the clash — see D-C13 below |
+| 5 | program compilation and `WarmupCoordinator` | **❌ 3/3 failed in BOTH orders.** `decode_first` on the clash, as predicted; `prefill_first` on D-C13, which was not predicted |
+| 6 | three startup/serve/cleanup cycles in one process | **❌ 3/3 failed** on the Llama L1 clash, deterministic (`TT_THROW` at 542016) |
+| 7 | teacher-forced top-1 ≥ 91% / top-5 ≥ 99% | **✅ 3/3: top-1 97.07%, top-5 99.22%**, byte-identical across all three. Gate met with margin |
+
+**So four of seven items are qualified, two are one clean run short of qualified, and one is
+blocked.** The attempt's own table called five of the seven IN FLIGHT and item 7 NOT STARTED.
+
+### The two runs that are missing are the driver's fault, not the model's
+
+Both were destroyed by the driver fighting a queue it could not see (the full account is in
+`run_milestone_c_jobs.sh`, which has since been changed so it cannot happen again):
+
+- `f_decode1_r3` — `rc=143`, SIGTERM from the driver's straggler `pkill` at 00:17:51Z;
+- `f_exec512_r3` — `1 error in 10.12s`, `Query mappings failed on device 16` inside
+  `create_ethernet_map`. That is `tt-smi -glx_reset` landing on a live test at 00:33:39Z;
+- `j1_clash_owner_l1` — `rc=137`, SIGKILL. This was the probe meant to identify the owner of the
+  clashing L1 buffer, and it is the single most valuable run that was lost.
+
+Items 1 and 2 need **one re-run each**, not a re-measurement of the set.
+
+### D-C13 — new, and it is not the address clash
+
+Three fresh processes, byte-identical, and it fails **prefix-cached prefill and prefill-first
+warmup**, which is the warmup order the gate is defined on:
+
+```text
+ValueError: chunk_start must be non-negative and aligned to chunk_alignment
+models/common/modules/attention/attention_2d.py:860
+```
+
+This matters for how item 5 reads: the attempt expected `prefill_first` to be the order that
+*works* and `decode_first` to be the one that clashes. In the event both fail, for two unrelated
+reasons. It is host-side, raised before any device work, and it lives in shared Galaxy code — so it
+belongs to `c-defects`, not to an executor job.
+
+### Two more failures in shared code, also for `c-defects`
+
+- `ValueError: page_table width cannot address the required KV capacity`
+  (`attention_2d.py:714`), 3/3, on shrinking the physical KV pool
+  (`test_executor_paged_kv_shrinks_to_a_smaller_physical_pool`);
+- `f_ref2048` — `test_reference_prefill_and_decode` at 2048 returns **non-finite decode logits**.
+  Note the path: that is `GalaxyDirectRunner`, the *reference*, not the new executor. The executor
+  passed 3/3 at the same length.
+
+### What did NOT change on reconciliation
+
+The one-layer shakeout's worst result, `i4_pagedkv_l1`'s **KV first-layer K PCC 0.907**, is closed:
+at 80 layers with the qualified rotary slice (`5f2356e6db2`) it is **1.0 on all three runs**. The
+0.907 was the rotary gather, exactly as §23:38Z suspected. No open question remains there.
 
 ## Inherited state that shapes this attempt
 
