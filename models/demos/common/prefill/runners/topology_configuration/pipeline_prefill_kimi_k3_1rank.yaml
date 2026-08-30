@@ -19,11 +19,18 @@ global_env:
   # user, so this is the cheapest way to buy back DRAM: 48 layers OOMed at 2 users on a 34.2 GB/chip
   # Galaxy, dying at layer 44.
   PREFILL_NUM_USERS: "1"
-  # The MoE dispatch buffers are allocated during model construction and scale with this. The
-  # runner's default is 8; TtPrefillBlock's own default is 2. At 8 they account for roughly 11 GB of
-  # the 34.2 GB/chip, which is what puts 48 layers over the edge — the weights themselves are only
-  # ~517 MB/chip/layer. Lower capacity risks dropping tokens under expert imbalance, so this is a
-  # knob to justify per-model rather than minimise blindly.
+  # NOT a memory lever, despite appearances. The dispatch buffers are the per-chunk OUTPUT of
+  # ttnn.prefill_dispatch, not a construction-time allocation: compute_constants passes
+  # max_dispatch_buffer_token_size as an integer for program-config sizing only. At cf=8,
+  # chunk 5120, SP=8 the transient is ~159 MiB, not gigabytes — which is why a 48-layer build
+  # OOMed byte-identically at cf=8 and cf=2, both times during weight loading and before this
+  # takes effect. Kept at 2 as a deliberate choice, not a workaround; lowering it risks
+  # dropping tokens under expert imbalance.
+  #
+  # The real per-layer cost is ~717 MiB/chip, of which ~496 MiB is the routed experts (already
+  # bfloat4_b) and ~170 MiB the bfloat16 KDA input projection. The gap against the ~517 MB/chip
+  # implied by dividing the on-disk tensorbins by 32 is not overhead: every non-expert weight is
+  # TP-sharded but SP-REPLICATED, so that division undercounts them 8x.
   PREFILL_CAPACITY_FACTOR: "2"
   PREFILL_H2D_SERVICE_ID: "ds_prefill"
   PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"

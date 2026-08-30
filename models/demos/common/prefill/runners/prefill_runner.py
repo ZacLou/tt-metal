@@ -727,8 +727,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # activation; Kimi-K3 adds one per AttnRes block completed before the boundary, because the
     # receiving rank's reads score against snapshots produced upstream. Evaluated at BOTH edges of
     # this rank's slice: what it receives, and what it sends on.
-    d2d_in_planes = ADAPTER.pipeline_activation_planes(first_layer_idx)
-    d2d_out_planes = ADAPTER.pipeline_activation_planes(first_layer_idx + num_my_layers)
+    # Read off the runtime's own config rather than recomputing the split: this is the range the
+    # MODEL was actually built with, so the socket cannot end up sized for a different one.
+    d2d_in_planes = ADAPTER.pipeline_activation_planes(runtime.config.first_layer_idx)
+    d2d_out_planes = ADAPTER.pipeline_activation_planes(runtime.config.first_layer_idx + runtime.config.num_layers)
 
     ttnn.distributed_context_barrier()  # warm-up: all ranks finish compile before chunks flow
 
