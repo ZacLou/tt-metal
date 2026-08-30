@@ -260,6 +260,27 @@ class TtKimiK3Transformer(LightweightModule):
                 cache_name_prefix="norm",
             )
 
+    def set_trace_controller(self, controller):
+        """Attach (or clear with None) a SubDeviceTraceController on every layer.
+
+        Required by `TtPrefillRuntime._prepare_trace`, which calls this unconditionally when
+        PREFILL_USE_TRACE=1; without it the runner dies with AttributeError during compile().
+
+        Kimi-K3 is trace-eligible for the reason `TtPrefillTransformer.set_trace_controller` gives:
+        its attention is KDA or dense MLA, never a sparse/DSA indexer. The KDA carries are already
+        address-stable (`KdaStateCache` commits with `ttnn.copy` into persistent buffers), which is
+        what a capture requires.
+        """
+        for layer in self.layers:
+            layer.set_trace_controller(controller)
+
+    def release_sub_device_managers(self):
+        """Remove every MoE-created overlap sub-device manager before closing the mesh device.
+        Leaving them registered at mesh close has been observed to segfault teardown. Idempotent."""
+        self.mesh_device.clear_loaded_sub_device_manager()
+        for layer in self.layers:
+            layer.release_sub_device_managers()
+
     def reset_streams(self, slot: int = 0) -> None:
         """Zero the KDA carries for a new request. Call outside any captured region."""
         if self.kda_states is not None:

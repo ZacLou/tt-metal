@@ -160,6 +160,27 @@ class TtKimiK3Block(LightweightModule):
                 hidden_dim=config.intermediate_size,
             )
 
+    def set_trace_controller(self, controller):
+        """Attach (or clear with None) a SubDeviceTraceController, so a ttnn trace captured over
+        forward() is split at this block's shared-expert/dispatch sub-device boundaries.
+
+        `forward` already reads `self._trace_controller` for the migration-ack site; without this
+        setter it stayed unset and `TtPrefillRuntime._prepare_trace` failed outright on the model.
+
+        No indexer guard here, unlike `TtPrefillBlock`: Kimi-K3's attention is KDA or dense MLA, and
+        neither carries an indexer. See the note in kimi_k3/attention.py.
+        """
+        self._trace_controller = controller
+        ffn = getattr(self, "ffn", None)
+        if ffn is not None and hasattr(ffn, "set_trace_controller"):
+            ffn.set_trace_controller(controller)
+
+    def release_sub_device_managers(self):
+        """Drop this block's MoE overlap sub-device manager before mesh close (no-op for a dense FFN)."""
+        ffn = getattr(self, "ffn", None)
+        if ffn is not None and hasattr(ffn, "release_sub_device_manager"):
+            ffn.release_sub_device_manager()
+
     def forward(
         self,
         residual,
