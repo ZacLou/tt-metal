@@ -29,6 +29,8 @@ leaves it, the sequence axis communicates nothing, and each read all-reduces
 a rank boundary.
 """
 
+import os
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
@@ -68,7 +70,26 @@ ONE_PASS_SQUARES_MAX_WIDTH = 177 * ttnn.TILE_SIZE
 # 12.5, C=16 buys 50.5, C=32 buys 96.0. The sealed set starts at one snapshot and
 # grows a snapshot a block, so the first blocks of a walk cross below the crossover
 # and an ungated fold would be a straight loss on them.
-FOLD_MIN_CANDIDATES = 4
+# Folding transposes the statistics to `[1, 1, N, C]`, where C lands in the last dim and
+# tile-pads to 32 -- a CONSTANT padded shape for any C <= 32. Unfolded, C sits in dim 1 and
+# every seal presents a new shape, which makes `ttnn.all_reduce` allocate a fresh set of
+# global semaphores it never reclaims (8 x 64 B per seal, measured). Those land at the top
+# of L1 and march down into the region MLA needs for its static CBs (#54876). Folding from
+# the first seal keeps one shape for the whole walk, so the semaphores are allocated once.
+# Overridable to measure that claim; 4 is what shipped.
+# 1, not 4. The fold now pads the candidate axis to a tile, so the collective sees one shape at
+# every depth and allocates its semaphores once instead of per seal. That only holds if the
+# fold runs from the FIRST seal -- gated at 4, depths 1..3 still took the unfolded path and
+# still leaked. Folding at low C was previously not worth two permutes ("below a few
+# candidates the padding is the payload"); with the leak in view it is, and the bytes moved
+# are identical either way (a 1-wide last dim tile-pads to 32 regardless).
+# Stays at 4. Folding from the first seal would give ONE shape at every depth and stop the
+# leak entirely, but it is not numerically free at low C: the fold reassociates the
+# collective's partial sums, and measured at C=1 that drops the read from PCC 0.9999948 to
+# 0.9998423 -- through the op's own 0.9999 gate. At C>=4 the reassociation is already what
+# shipped and the padding below is exact (C=8 reproduces 0.9999812 either way), so the
+# constant-shape win is taken there and depths 1..3 keep the arithmetic they had.
+FOLD_MIN_CANDIDATES = int(os.environ.get("ATTN_RES_FOLD_MIN_CANDIDATES", 4))
 
 
 class TtAttnRes(LightweightModule):
@@ -305,6 +326,20 @@ class TtAttnRes(LightweightModule):
             )
 
         folded = ttnn.permute(wide, [0, 3, 2, 1])
+        # Pad the candidate axis to a fixed width before the collective, so every sealed depth
+        # presents ONE shape to `all_reduce`. It allocates global semaphores per shape (its
+        # rs/ag_global_semaphores arrive as nullopt) and never reclaims them, so a walk whose C
+        # grows by one per seal leaks 8 x 64 B of L1 per seal -- at the top of L1, marching down
+        # into the region a later MLA layer needs for its static circular buffers (#54876).
+        #
+        # Free in bytes: a 1-wide last dim already tile-pads to 32, so the collective was billing
+        # for 32 columns and using C of them. This fills the columns that were already paid for.
+        # Sum-reduction over the added zeros contributes nothing.
+        candidates = folded.shape[-1]
+        if candidates < ttnn.TILE_SIZE:
+            padded = ttnn.pad(folded, [(0, 0), (0, 0), (0, 0), (0, ttnn.TILE_SIZE - candidates)], value=0.0)
+            ttnn.deallocate(folded)
+            folded = padded
         crossed = ttnn.all_reduce(
             folded,
             cluster_axis=self.tp_axis,
@@ -312,6 +347,11 @@ class TtAttnRes(LightweightModule):
             topology=self.topology[self.tp_axis],
         )
         ttnn.deallocate(folded)
+        if crossed.shape[-1] != candidates:
+            shape = crossed.shape
+            trimmed = ttnn.slice(crossed, [0, 0, 0, 0], [shape[0], shape[1], shape[2], candidates])
+            ttnn.deallocate(crossed)
+            crossed = trimmed
         unfolded = ttnn.permute(crossed, [0, 3, 2, 1])
         ttnn.deallocate(crossed)
         return unfolded
