@@ -213,3 +213,30 @@ def test_bw_concat_helper_allocated_grads_honour_memory_config(input_shapes, dev
     for i, required in enumerate(are_required_outputs):
         if required:
             assert result[i].memory_config() == ttnn.DRAM_MEMORY_CONFIG
+
+
+@pytest.mark.parametrize("input_shapes", ((torch.Size([1, 1, 32, 32])),))
+@pytest.mark.parametrize("op", ["add", "sub", "div", "mul"])
+def test_bw_scalar_overload_grads_honour_memory_config(input_shapes, device, op):
+    """The tensor-scalar overloads allocate their own gradient and must honour memory_config.
+
+    add_bw and sub_bw scalar previously ignored output_mem_config outright (it was
+    commented out in the signature); div_bw and mul_bw scalar took it for the compute but
+    allocated with a bare empty_like. Existing scalar coverage passes no memory_config, so
+    inherited and requested never diverged.
+
+    Inputs must be in L1 with DRAM requested: with DRAM inputs the two coincide and the
+    defect is unobservable.
+    """
+    _, input_tensor = data_gen_with_range(input_shapes, 1, 100, device, True)
+    _, grad_tensor = data_gen_with_range(input_shapes, -50, 50, device)
+
+    input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
+    grad_tensor = ttnn.to_memory_config(grad_tensor, ttnn.L1_MEMORY_CONFIG)
+
+    fn = {"add": ttnn.add_bw, "sub": ttnn.sub_bw, "div": ttnn.div_bw, "mul": ttnn.mul_bw}[op]
+    result = fn(grad_tensor, input_tensor, 2.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    assert (
+        result[0].memory_config() == ttnn.DRAM_MEMORY_CONFIG
+    ), f"{op}_bw scalar overload was requested in DRAM but landed in {result[0].memory_config()}"
