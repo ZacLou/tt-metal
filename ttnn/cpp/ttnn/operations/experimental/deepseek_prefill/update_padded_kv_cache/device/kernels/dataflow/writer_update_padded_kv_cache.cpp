@@ -7,6 +7,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/paged_kv_utils.hpp"
 
 // CB -> cache writer for the per-chip-offset kv-cache update op.
 //
@@ -20,10 +21,11 @@
 //     override_runtime_arguments). Kept out of the program hash the same way.
 // `layer_idx`, `num_layers` and `cluster_axis` stay in the hash (structural) in both paths.
 //
-// Compile args: [0]=cb_id_out, [1]=has_metadata, [2]=cb_id_meta, [3]=tile_height, [4..]=cache
-// accessor, then (metadata path only) ONE metadata accessor (the two 1-element tensors share an
-// identical layout, so the same accessor serves both reads). tile_height divides kv tokens into the
-// page-row unit (TILE_HEIGHT for TILE, 1 for ROW_MAJOR), so one kernel handles both layouts.
+// Compile args: [0]=cb_id_out, [1]=has_metadata, [2]=cb_id_meta, [3]=tile_height, then the cache and
+// page-table accessors, six paged-cache configuration values, and (metadata path only) one metadata
+// accessor. The two 1-element metadata tensors share an identical layout, so the same accessor serves
+// both reads. tile_height divides KV tokens into the page-row unit (TILE_HEIGHT for TILE, 1 for
+// ROW_MAJOR), so one kernel handles both layouts.
 //
 // The body lives in a template on `HasMeta` so the `if constexpr` below actually DISCARDS (does not
 // instantiate) the unused branch — `kernel_main` is not a template, so an `if constexpr` there would
@@ -34,6 +36,7 @@ static void run_writer() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_pages = get_arg_val<uint32_t>(1);
     const uint32_t core_blocks_written = get_arg_val<uint32_t>(2);
+    const uint32_t page_bundle_indices_addr = get_arg_val<uint32_t>(3);
 
     // Common runtime args (same for all cores on this chip). Indices 0-7 are structural; index 8 (and
     // 9, scalar path) carry the per-request values resolved below.
@@ -49,6 +52,14 @@ static void run_writer() {
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
     constexpr uint32_t tile_height = get_compile_time_arg_val(3);
     constexpr auto cache_args = TensorAccessorArgs<4>();
+    constexpr auto page_bundle_args = TensorAccessorArgs<cache_args.next_compile_time_args_offset()>();
+    constexpr uint32_t paged_ct_base = page_bundle_args.next_compile_time_args_offset();
+    constexpr bool has_paged_cache = get_compile_time_arg_val(paged_ct_base) != 0;
+    constexpr uint32_t page_table_cb = get_compile_time_arg_val(paged_ct_base + 1);
+    constexpr uint32_t page_size_rows = get_compile_time_arg_val(paged_ct_base + 2);
+    constexpr uint32_t page_num_layers = get_compile_time_arg_val(paged_ct_base + 3);
+    constexpr uint32_t page_layer_idx = get_compile_time_arg_val(paged_ct_base + 4);
+    constexpr uint32_t page_bundle_count = get_compile_time_arg_val(paged_ct_base + 5);
 
     Noc noc;
 
@@ -69,7 +80,7 @@ static void run_writer() {
         // *dependent* template-id: `if constexpr` only skips instantiation of the discarded branch's
         // template-parameter-dependent constructs, so the scalar program (no metadata accessor) must
         // not name a fixed out-of-range offset here.
-        constexpr uint32_t kMetaArgsOffset = HasMeta ? cache_args.next_compile_time_args_offset() : 0;
+        constexpr uint32_t kMetaArgsOffset = HasMeta ? paged_ct_base + 6 : 0;
         constexpr auto meta_args = TensorAccessorArgs<kMetaArgsOffset>();
         const uint32_t slot_idx_addr = get_common_arg_val<uint32_t>(8);
         const uint32_t kv_actual_global_addr = get_common_arg_val<uint32_t>(9);
@@ -128,12 +139,38 @@ static void run_writer() {
     // `cache_args` and `noc` are declared above (shared with the optional metadata read).
     const auto s = TensorAccessor(cache_args, dst_addr);
 
-    const uint32_t end_id = start_id + num_pages;
-    for (uint32_t i = start_id; i < end_id; ++i) {
-        cb.wait_front(onepage);
-        noc.async_write(cb, s, page_bytes, {}, {.page_id = i});
-        noc.async_writes_flushed();
-        cb.pop_front(onepage);
+    if constexpr (has_paged_cache) {
+        CircularBuffer table_cb(page_table_cb);
+        const uint32_t page_table_l1 = table_cb.get_write_ptr();
+        const uint32_t table_bytes = page_bundle_count * sizeof(uint16_t);
+        const auto table_reader = TensorAccessor(page_bundle_args, page_bundle_indices_addr);
+        noc.async_read(table_reader, CoreLocalMem<uint16_t>(page_table_l1), table_bytes, {.page_id = 0}, {});
+        noc.async_read_barrier();
+        invalidate_l1_cache();
+
+        const PagedKVAccessor<decltype(s)> paged_cache{
+            s, page_table_l1, page_size_rows, page_num_layers, 1, page_layer_idx};
+        for (uint32_t p = 0; p < num_pages; ++p) {
+            const uint32_t input_page = core_blocks_written * Wt + p;
+            const uint32_t input_block = input_page / Wt;
+            const uint32_t dim_page = input_page % Wt;
+            const uint32_t logical_row = update_idxt + input_block % input_Ht;
+            const auto cursor = paged_cache.cursor(logical_row);
+            const uint64_t dst_noc_addr =
+                paged_cache.get_shard_row_noc_addr(cursor, (cursor.row_in_bundle * Wt + dim_page) * page_bytes);
+            cb.wait_front(onepage);
+            noc_async_write(cb.get_read_ptr(), dst_noc_addr, page_bytes);
+            noc_async_writes_flushed();
+            cb.pop_front(onepage);
+        }
+    } else {
+        const uint32_t end_id = start_id + num_pages;
+        for (uint32_t i = start_id; i < end_id; ++i) {
+            cb.wait_front(onepage);
+            noc.async_write(cb, s, page_bytes, {}, {.page_id = i});
+            noc.async_writes_flushed();
+            cb.pop_front(onepage);
+        }
     }
     noc.async_write_barrier();
 }
