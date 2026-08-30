@@ -18,15 +18,19 @@ swaps in a walk. Nothing in the layer loop changes between them, which is the po
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable, Optional
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
+from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
+from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX, load_attn_res_weights
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, build_attention
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.block import TtKimiK3Block
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_state import KdaStateCache
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import PlainResidualStream
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import mark_layer_cached
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
@@ -35,6 +39,34 @@ from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbe
 
 class TtKimiK3Transformer(LightweightModule):
     """A slice of Kimi-K3's layers, plus the tail when this rank holds it."""
+
+    @staticmethod
+    def check_cache_complete(
+        cache_path,
+        num_layers: int,
+        experts_per_chip: int = 8,
+        first_k_dense: int = 1,
+        first_layer_idx: int = 0,
+        is_first_rank: bool = True,
+        is_last_rank: bool = True,
+        kv_only_last_layer: bool = False,
+        model_cfg: type | None = None,
+        routed_expert_weights_dtype=None,
+    ) -> bool:
+        """Whether this rank's whole slice is on disk, in the signature the runtime calls.
+
+        Deliberately conservative: it answers from the per-layer completion markers the cache
+        generator writes, and a marker goes down only after that layer was built end to end from real
+        weights. Composing each component's own `check_cache_complete` is the tempting alternative
+        and the wrong one — those are easy to get subtly wrong, and being wrong here is not a failure
+        but a silently wrong model, because `ttnn.as_tensor` writes whatever tensor it is handed when
+        a file is absent and `TtDistributedRmsNorm` hands it `torch.empty` (#54841).
+        """
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import layer_is_cached
+
+        if cache_path is None:
+            return False
+        return all(layer_is_cached(Path(cache_path), first_layer_idx + i) for i in range(num_layers))
 
     def __init__(
         self,
@@ -77,7 +109,44 @@ class TtKimiK3Transformer(LightweightModule):
         self.is_first_rank = is_first_rank
         self.is_last_rank = is_last_rank
         self.kv_only_last_layer = kv_only_last_layer
-        self._residual_factory = residual_factory or PlainResidualStream
+        # AttnRes is the model, not an option. Defaulting to a plain running sum would run, produce
+        # 0.447 against the golden where AttnRes gives 0.99985, and issue none of the 2N reads — so it
+        # would also under-report performance. `PlainResidualStream` exists for bisecting an AttnRes
+        # bug from a KDA/MoE one and must be asked for explicitly.
+        self._attn_res = None
+        if residual_factory is None:
+            self._attn_res = TtAttnRes(
+                mesh_device,
+                hidden_size=model_cfg.EMB_SIZE,
+                eps=model_cfg.RMS_NORM_EPS,
+                tp_axis=tp_axis,
+                weights=load_attn_res_weights(
+                    mesh_device,
+                    state_dict.get("attn_res_weights"),
+                    weight_cache_path,
+                    num_layers=num_layers,
+                    tensor_parallel_axis=tp_axis,
+                    prefix=state_dict.get("attn_res_prefix", CHECKPOINT_PREFIX),
+                ),
+            )
+            attn_res = self._attn_res
+
+            def residual_factory(hidden, _n=num_layers):
+                # A fresh walk per forward: AttnRes state is per token — every reduction is over the
+                # hidden dimension and the token axis is a free batch axis — so there is nothing to
+                # carry between chunks, unlike the KDA recurrence.
+                return TtAttnResResidual(
+                    TtAttnResWalk(
+                        attn_res,
+                        hidden,
+                        list(attn_res.weights.pre),
+                        list(attn_res.weights.post),
+                        attn_res.weights.output,
+                        _n,
+                    )
+                )
+
+        self._residual_factory = residual_factory
 
         if kv_only_last_layer:
             # Rejects a KDA last layer, which would compute a recurrence and write nothing.

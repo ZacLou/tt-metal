@@ -105,6 +105,13 @@ class TtPrefillRuntime:
     IDs / sampled tokens.
     """
 
+    # The transformer this runtime drives. Overridden by a model whose stack is not
+    # `TtPrefillTransformer` — Kimi-K3's blocks are their own class because only 24 of its 93 layers
+    # write a KV slab and its residual is block-structured, so it cannot reuse the shared block. The
+    # seam is a class attribute rather than a constructor argument so every existing caller is
+    # unaffected and the subclass states its choice once.
+    MODEL_CLS = TtPrefillTransformer
+
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -173,7 +180,7 @@ class TtPrefillRuntime:
         if self.config.weight_cache_path:
             num_devices = self.config.mesh_shape[0] * self.config.mesh_shape[1]
             experts_per_chip = model_cfg.NUM_ROUTED_EXPERTS // num_devices
-            if TtPrefillTransformer.check_cache_complete(
+            if self.MODEL_CLS.check_cache_complete(
                 self.config.weight_cache_path,
                 self.config.num_layers,
                 experts_per_chip,
@@ -209,7 +216,7 @@ class TtPrefillRuntime:
                     f"TTNN weight cache not complete at {self.config.weight_cache_path}; "
                     f"it will be rebuilt from the supplied weights."
                 )
-        self.model = TtPrefillTransformer(
+        self.model = self.MODEL_CLS(
             mesh_device=self.mesh_device,
             config=self.hf_config,
             model_cfg=model_cfg,

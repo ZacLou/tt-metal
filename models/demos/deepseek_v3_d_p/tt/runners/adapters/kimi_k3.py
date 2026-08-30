@@ -32,6 +32,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
+from loguru import logger
+
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.mla import MLAPrefillAdapter
 
@@ -47,7 +49,6 @@ class KimiK3Adapter(MLAPrefillAdapter):
 
     # Single expert group + device gate: route routing-all-gather semaphores to L1_SMALL. Inherited
     # from the Kimi family; inert for the MLA-only tests but correct if a runtime is ever built.
-    l1_small_size = 512
     routing_use_l1_small_for_semaphores = True
 
     # --- test metadata ---
@@ -59,10 +60,22 @@ class KimiK3Adapter(MLAPrefillAdapter):
     ref_cache_env = "TT_KIMI_K3_PREFILL_HOST_REF_CACHE"
     mla_ref_cache_env = "KIMI_K3_MLA_REF_CACHE"
     ttnn_cache_env = "TT_KIMI_K3_PREFILL_TTNN_CACHE"
+    # 1152 (the AttnRes suite's own value) fails `inter_block`'s statistics collective once the
+    # sealed set has two blocks, which first happens at depth 24; 24576 (this package's usual value)
+    # then starves MLA chunked attention of circular buffers as soon as there is a second chunk to
+    # attend over. 4096 clears both. See tenstorrent/tt-metal#54834.
+    l1_small_size = 4096
+    # `weight_cache_path` appends `{name}_{arch}_{N}dev/{sp}x{tp}`, so this is the root only. The
+    # cache generator writes `<root>/kimi_k3_bh_32dev/<checkpoint-id>/mesh8x4.tpaxis1`, keyed by
+    # checkpoint so a different one cannot silently load another's tensors; `8x4` is a symlink onto
+    # that, which is what makes the layout match every other model here.
+    ttnn_cache_default = "/mnt/models/deepseek-prefill-cache/kimi-k3-ttnn-cache"
     # Loading the staged checkpoint wholesale needs an MXFP4 -> bf16 dequantizer that does not exist
     # yet, so the full-transformer fixtures stay skipped. The MoE gate is exempt: it is unquantized and read
     # through a prefix-filtered safe_open.
-    supports_pretrained = False
+    # The dequantized export stores routed experts as plain bf16, so no MXFP4 dequantizer is
+    # needed; the loader accepts both `language_model.model.` and `model.` key roots.
+    supports_pretrained = True
     # MLA alone is loadable: quantization_config.ignore covers self_attn, so those weights are bf16.
     # The first full-attention layer, not 0 -- layers 0-2 are KDA and hold no MLA tensors.
     pretrained_mla_layer = KimiK3Config.mla_layer_ids()[0]
@@ -155,8 +168,50 @@ class KimiK3Adapter(MLAPrefillAdapter):
         block = KimiK3Config.ATTN_RES_BLOCK_SIZE
         return {boundary for boundary in range(0, num_layers + 1, block)}
 
-    def build_runtime(self, **kwargs):
-        raise NotImplementedError(
-            "Kimi-K3 has no prefill runtime: 69 of its 93 layers are KDA linear-attention layers "
-            "with no TT implementation. This adapter is MLA-test-only."
+    def build_runtime(self, *, mesh_device, hf_config, params):
+        """Construct the Kimi-K3 stack and return its runtime.
+
+        Mirrors `MLAPrefillAdapter.build_runtime` — the runtime is stateless with respect to the KV
+        cache, which the engine allocates and passes in — but drives `TtKimiK3Runtime`, whose
+        `MODEL_CLS` is `TtKimiK3Transformer`. The transformer builds its own AttnRes walk from the
+        weight cache; nothing here needs to supply a residual factory, and supplying a plain one
+        would silently cost both accuracy and the 2N read sites that dominate its cost.
+        """
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
+        from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+        from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+        from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntimeConfig
+
+        topology = per_axis_topology()
+        logger.info(f"Kimi-K3 per-axis CCL topology (sp, tp) = {topology}")
+
+        runtime_config = TtPrefillRuntimeConfig(
+            num_layers=params.num_layers,
+            max_seq_len=params.max_seq_len,
+            mesh_shape=params.mesh_shape,
+            chunk_size=params.chunk_size,
+            num_users=params.num_users,
+            sp_axis=params.sp_axis,
+            tp_axis=params.tp_axis,
+            num_links=params.num_links,
+            topology=topology,
+            capacity_factor=params.capacity_factor,
+            gate_fallback_mode=GateComputeMode[params.gate_mode_name],
+            weight_cache_path=params.weight_cache_path,
+            model_cfg=self.model_config,
+            first_layer_idx=params.first_layer_idx,
+            is_first_rank=params.is_first_rank,
+            is_last_rank=params.is_last_rank,
+            kv_only_last_layer=params.kv_only_last_layer,
+            dflash_enabled=params.dflash_enabled,
+            routing_use_l1_small_for_semaphores=self.routing_use_l1_small_for_semaphores,
+            sparse_kv_cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
+            use_trace=params.use_trace,
+            overlap_shared_expert_with_dispatch=params.overlap_shared_expert_with_dispatch,
+        )
+        return TtKimiK3Runtime(
+            mesh_device=mesh_device,
+            hf_config=hf_config,
+            state_dict={},
+            config=runtime_config,
         )
