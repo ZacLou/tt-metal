@@ -10,10 +10,21 @@ global_env:
   PREFILL_FABRIC_MODE: "2d"
   PREFILL_MANIFEST: "models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi_k3.json"
   PREFILL_MODEL: "kimi_k3"
-  # 48 = four complete 12-layer AttnRes blocks. A split inside a block would leave a rank whose
+  # 36 = three complete 12-layer AttnRes blocks. 48 OOMs on one Galaxy (34.2 GB/chip, ~739 MiB per
+  # layer), which is why the smoke test is shallower than a real rank.. A split inside a block would leave a rank whose
   # sealed set is incomplete.
   PREFILL_NUM_LAYERS: "48"
   PREFILL_MAX_SEQ_LEN: "56320"
+  # Single user. The default is 2, and both the KV ring and the MoE dispatch buffers are sized per
+  # user, so this is the cheapest way to buy back DRAM: 48 layers OOMed at 2 users on a 34.2 GB/chip
+  # Galaxy, dying at layer 44.
+  PREFILL_NUM_USERS: "1"
+  # The MoE dispatch buffers are allocated during model construction and scale with this. The
+  # runner's default is 8; TtPrefillBlock's own default is 2. At 8 they account for roughly 11 GB of
+  # the 34.2 GB/chip, which is what puts 48 layers over the edge — the weights themselves are only
+  # ~517 MB/chip/layer. Lower capacity risks dropping tokens under expert imbalance, so this is a
+  # knob to justify per-model rather than minimise blindly.
+  PREFILL_CAPACITY_FACTOR: "2"
   PREFILL_H2D_SERVICE_ID: "ds_prefill"
   PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
   # L1_SMALL is not an env knob: the runner reads ADAPTER.l1_small_size, set to 4096 there.

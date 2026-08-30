@@ -94,9 +94,23 @@ class TtKimiK3Transformer(LightweightModule):
         gate_fallback_mode=None,
         is_balanced: bool = False,
         build_tail: bool = True,
+        # Model-level knobs the shared runtime passes to every transformer. Named here rather than
+        # left to `**block_kwargs`, which would forward them to `TtKimiK3Block` and raise.
+        lm_head_is_column_parallel: bool = False,
+        padding_side: str = "right",
+        sparse_kv_cache_format=None,
         **block_kwargs,
     ):
         super().__init__()
+        # Kimi-K3's MLA cache is dense: `zero_padded_kv_cache` asserts TILE layout, which a sparse
+        # kvpe cache (bf16/fp8 ROW_MAJOR, read natively by sparse_sdpa) does not satisfy. Accepting a
+        # sparse format silently would produce a cache the pad-zero path cannot touch, so refuse it.
+        if sparse_kv_cache_format is not None:
+            raise ValueError(
+                f"Kimi-K3 uses a dense MLA KV cache; got sparse_kv_cache_format={sparse_kv_cache_format!r}"
+            )
+        self.lm_head_is_column_parallel = lm_head_is_column_parallel
+        self.padding_side = padding_side
         self.mesh_device = mesh_device
         # Resolve once, here, rather than letting `None` reach a collective. The MoE's
         # `reduce_scatter_minimal_async` validates `topology == Ring or Linear` and a None is a
@@ -254,18 +268,23 @@ class TtKimiK3Transformer(LightweightModule):
     def forward(
         self,
         token_ids,
-        *,
-        rope_tensors=None,
         kvpe_cache=None,
-        cache_user_id: int = 0,
-        actual_start: Optional[int] = None,
-        actual_end: Optional[int] = None,
         actual_isl: Optional[int] = None,
-        metadata: Optional[tuple] = None,
-        padding_side: str = "right",
+        return_intermediates: bool = False,
+        read_profiler: bool = False,
+        temperature: Optional[float] = None,
         d2h_service=None,
         record_dev=None,
         on_layer_complete=None,
+        on_layer_hidden: Optional[Callable] = None,
+        actual_start: Optional[int] = None,
+        actual_end: Optional[int] = None,
+        cache_user_id: int = 0,
+        index_kv_cache=None,
+        metadata: Optional[tuple] = None,
+        *,
+        rope_tensors=None,
+        padding_side: str = "right",
         layer_tap: Optional[Callable] = None,
     ):
         """Run this rank's layers. Returns the post-norm hidden state, or the raw one mid-pipeline.
@@ -275,6 +294,18 @@ class TtKimiK3Transformer(LightweightModule):
         `decoder_output_layer_i` (pinned by `tests/kimi_k3/test_golden_contract.py`). That makes the
         per-layer PCC curve a tap rather than a separate forward.
         """
+        if on_layer_hidden is not None:
+            # DFlash's per-layer tap. Under AttnRes a tap is a READ SITE, and a site needs its own
+            # folded query in the walk order — so exposing one is a schedule change, not a callback.
+            raise NotImplementedError(
+                "Kimi-K3 does not support on_layer_hidden: under AttnRes every read needs its own "
+                "query and site, so a per-layer tap is a walk-schedule change rather than a hook"
+            )
+        if index_kv_cache is not None:
+            raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
+        if return_intermediates:
+            raise NotImplementedError("Kimi-K3 does not implement return_intermediates")
+
         hidden = ttnn.unsqueeze_to_4D(self.embed(token_ids)) if self.is_first_rank else token_ids
         residual = self._residual_factory(hidden)
 

@@ -267,6 +267,7 @@ DEFAULT_MODEL = "kimi_k2_7"
 
 ADAPTER_PATHS = {
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
+    "kimi_k3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3:KimiK3Adapter",
     # DeepSeek-V3.2-Exp: DSA, still test-only (config + sparse-MLA reference parity; serving not wired).
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",
     # GLM-5.1: sparse-attention (DSA) variant with a full prefill serving runtime (adapters/glm_5_1.py).

@@ -207,7 +207,13 @@ class TtKimiK3Block(LightweightModule):
         if self.kv_only:
             # No FFN and no output. The walk's remaining sites simply go unconsumed; the caller
             # discards the stream rather than taking its model-level read.
-            ttnn.deallocate(attn_out)
+            #
+            # `attn_out` is None here whenever the attention is MLA: a kv_only ttMLA writes its KV
+            # slab and returns nothing, because nothing downstream reads its output. That is the
+            # normal case — the schedule guarantees a kv_only layer is MLA, since a kv_only KDA layer
+            # would run a full recurrence and throw it away.
+            if attn_out is not None:
+                ttnn.deallocate(attn_out)
             residual.release(hidden)
             return
 

@@ -1,0 +1,29 @@
+# Kimi-K3, 2 ranks across 2 Galaxies, 72 of 93 layers (36+36).
+#
+# 72 layers, not 93, and that is a hard limit rather than a choice. A Blackhole Galaxy has
+# 34.2 GB/chip and Kimi-K3 costs ~777 MB/chip/layer of DEVICE allocation against 517 MB/chip/layer of
+# weights on disk — the ~260 MB/layer gap is per-layer overhead, so a rank tops out near 44 layers.
+# 93 over two ranks is 46.5 each and OOMs during weight loading; that was confirmed three times, with
+# byte-identical failures at num_users 2 and 1 and at capacity_factor 8 and 2, because the OOM
+# happens before either takes effect. All 93 layers needs a third rank, which currently has no valid
+# mesh-graph descriptor (no 3-mesh MGD exists in the tree, and a hand-written one fails inter-mesh
+# mapping under every host order and channel count).
+#
+# 36+36 sits well inside the ceiling and lands on AttnRes block boundaries (multiples of 12); a rank
+# starting mid-block would have an incomplete sealed set.
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}
+  - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {}}
+mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_2galaxy_connected_mesh_graph_descriptor.textproto
+global_env:
+  # FABRIC_2D, never a torus: attn_res_gather_softmax deadlocks under Topology::Ring (#54835).
+  PREFILL_FABRIC_MODE: "2d"
+  PREFILL_MANIFEST: "models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi_k3.json"
+  PREFILL_MODEL: "kimi_k3"
+  PREFILL_NUM_LAYERS: "72"
+  PREFILL_NUM_USERS: "1"
+  PREFILL_MAX_SEQ_LEN: "56320"
+  PREFILL_H2D_SERVICE_ID: "ds_prefill"
+  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
+  PREFILL_LAYER_ACK_D2H: "1"
+  LOGURU_LEVEL: "INFO"

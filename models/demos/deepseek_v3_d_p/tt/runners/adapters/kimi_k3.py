@@ -70,6 +70,11 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # checkpoint so a different one cannot silently load another's tensors; `8x4` is a symlink onto
     # that, which is what makes the layout match every other model here.
     ttnn_cache_default = "/mnt/models/deepseek-prefill-cache/kimi-k3-ttnn-cache"
+    # The runner prints this and the producer reads it only when PCC checking is on. Kimi-K3 has no
+    # full-depth golden — the 1M trace records decoder_output for layers 0..24 of 93 — so a runner
+    # run cannot check end-to-end accuracy and must not pretend to. It is named here because the
+    # runner reads the attribute unconditionally at config-print time.
+    prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/k3_vllm_code_debug_1M"
     # Loading the staged checkpoint wholesale needs an MXFP4 -> bf16 dequantizer that does not exist
     # yet, so the full-transformer fixtures stay skipped. The MoE gate is exempt: it is unquantized and read
     # through a prefix-filtered safe_open.
@@ -167,6 +172,19 @@ class KimiK3Adapter(MLAPrefillAdapter):
         """
         block = KimiK3Config.ATTN_RES_BLOCK_SIZE
         return {boundary for boundary in range(0, num_layers + 1, block)}
+
+    def load_hf_config(self):
+        """The Kimi-K3 config, hand-built rather than loaded through `AutoConfig`.
+
+        Kimi-K3's `model_type` is `kimi_linear`, and the checkpoint's remote code
+        (`modeling_kimi_linear.py`) raises `ImportError` at module import without `fla-core`, which
+        is not installed here — `AutoConfig(trust_remote_code=True)` therefore fails before it can
+        return anything. `kimi_k3_hf_config` carries the same attributes the MLA and MoE paths read.
+        `max_seq` is a placeholder; the runner overwrites `max_seq_len` on the result.
+        """
+        from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_hf_config
+
+        return kimi_k3_hf_config()
 
     def build_runtime(self, *, mesh_device, hf_config, params):
         """Construct the Kimi-K3 stack and return its runtime.
