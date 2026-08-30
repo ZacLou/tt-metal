@@ -64,6 +64,11 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # sealed set has two blocks, which first happens at depth 24; 24576 (this package's usual value)
     # then starves MLA chunked attention of circular buffers as soon as there is a second chunk to
     # attend over. 4096 clears both. See tenstorrent/tt-metal#54834.
+    # Kimi-K3 is NoPE: the KV cache's second half carries no rotation, so scoring it against the
+    # golden must NOT re-base to the device's Meta interleave. With the RoPE default the nope half
+    # still reads ~0.999 while the pe half collapses to ~0.02 -- a broken comparison that looks
+    # exactly like a broken model.
+    kv_pe_interleave = False
     l1_small_size = 4096
     # `weight_cache_path` appends `{name}_{arch}_{N}dev/{sp}x{tp}`, so this is the root only. The
     # cache generator writes `<root>/kimi_k3_bh_32dev/<checkpoint-id>/mesh8x4.tpaxis1`, keyed by
@@ -172,6 +177,44 @@ class KimiK3Adapter(MLAPrefillAdapter):
         """
         block = KimiK3Config.ATTN_RES_BLOCK_SIZE
         return {boundary for boundary in range(0, num_layers + 1, block)}
+
+    @property
+    def transformer_cls(self):
+        """The model class the shared chunked-prefill harness should build.
+
+        `run_chunked_transformer_updated` constructs a transformer directly rather than going
+        through a runtime, so the `MODEL_CLS` seam on `TtKimiK3Runtime` does not reach it. Kimi-K3
+        cannot use `TtPrefillTransformer`: its schedule is hybrid (only 24 of 93 layers are MLA), it
+        carries KDA recurrent state, and its residual is a block-structured AttnRes walk.
+        """
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
+
+        return TtKimiK3Transformer
+
+    def num_kv_cache_layers(self, num_layers: int) -> int:
+        """How many KV slabs `num_layers` of this model actually need.
+
+        Dense models answer `num_layers`. Kimi-K3 writes a slab only on full-attention layers, so a
+        24-layer slice needs 6, not 24 — the same assumption that makes `build_kv_chunk_table`
+        reject the model outright (#54892).
+        """
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
+
+        return KimiK3LayerSchedule.build(KimiK3Config, 0, num_layers).num_mla_layers
+
+    def kv_slot_layer_ids(self, num_layers: int):
+        """Cache slot -> GLOBAL layer index, for scoring KV against a golden keyed by layer.
+
+        A hybrid model's slot is not its layer: 24 layers occupy 6 slots holding 3/7/11/15/19/23.
+        Taking the head of `mla_layer_ids` is the tempting shortcut and is wrong for any rank that
+        does not start at layer 0 (#54843); this derives the mapping from the schedule instead.
+        """
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
+
+        schedule = KimiK3LayerSchedule.build(KimiK3Config, 0, num_layers)
+        return [
+            schedule.global_index(local) for local, slot in enumerate(schedule.kv_slot_of_local) if slot is not None
+        ]
 
     def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
         """The live stream, plus one plane per AttnRes snapshot sealed before this boundary.
