@@ -25,6 +25,30 @@ implementation shakeout, ~120 s each, and they are **not** the gate.
 | 6 | three startup / serving / cleanup cycles in one process, nothing retained | *(pending)* | | |
 | 7 | teacher-forced accuracy: top-1 ≥ 91%, top-5 ≥ 99% at prefill 512 / decode 511 | *(pending)* | | |
 
+## How to read the run names, and what was frozen
+
+`i*` and `j*` are one-layer runs (`LLAMA33_70B_GALAXY_TEST_LAYERS=1`) — bring-up and probes.
+`f_*` are the gate runs, on all 80 layers of the real checkpoint. `_r1`/`_r2`/`_r3` are the three
+fresh processes a claim needs.
+
+**The code was frozen before the gate campaign started**, so the three runs of a claim are three
+runs of one implementation and not of three:
+
+```text
+commit 13a255e17396ddab286bcc9815bee9e2d7821e63
+25e9f0f9a464…  models/common/models/llama33_70b_galaxy/executor.py
+07c2f15482f5…  models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py
+```
+
+(`tttv2_milestone_c_runs/c-exec-llama/frozen_code.sha256`. Both files last changed in
+`5f2356e6db2` and `cec1ac5d203`, before the first `f_*` run.)
+
+**One caveat on the reference files.** `reference/llama_prefill<length>_layers<n>.pt` is keyed by
+prompt length and layer count, not by the model's registered recipe set. The one-layer references
+were taken under the earlier `(128, 512, 2048)` set and the full-model ones under
+`(128, 1024, 2048)`; the 128-token numerics are unaffected, but a future change to the registered
+set should either bump the file name or delete the directory.
+
 ## Gates that are already met
 
 | gate | result | log |
