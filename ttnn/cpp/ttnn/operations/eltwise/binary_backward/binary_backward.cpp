@@ -174,12 +174,10 @@ std::vector<std::optional<Tensor>> add_bw(
     const Tensor& grad_tensor,
     const Tensor& input_tensor,
     float /*alpha*/,
-    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<MemoryConfig>& /*output_mem_config*/,
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
-    if (!input_grad.has_value()) {
-        input_grad = ttnn::empty_like(input_tensor, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
-    }
+    input_grad = input_grad.value_or(ttnn::empty_like(input_tensor));
     ttnn::assign(grad_tensor, input_grad.value());
     result.emplace_back(input_grad);
     return result;
@@ -229,15 +227,12 @@ std::vector<std::optional<Tensor>> sub_bw(
     const Tensor& grad_tensor,
     const Tensor& input_tensor,
     float /*alpha*/,
-    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<MemoryConfig>& /*output_mem_config*/,
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
     result.emplace_back(
-        input_grad.has_value()
-            ? ttnn::assign(grad_tensor, input_grad.value())
-            : ttnn::assign(
-                  grad_tensor,
-                  ttnn::empty_like(input_tensor, std::nullopt, std::nullopt, std::nullopt, output_mem_config)));
+        input_grad.has_value() ? ttnn::assign(grad_tensor, input_grad.value())
+                               : ttnn::assign(grad_tensor, ttnn::empty_like(input_tensor)));
     return result;
 }
 
@@ -549,7 +544,10 @@ std::vector<std::optional<Tensor>> concat_bw(
             input_tensor_a_arg.logical_shape()[2],
             input_tensor_a_arg.logical_shape()[3]};
         ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
-        ttnn::slice(grad_tensor_arg, start_index, end_index, step, memory_config, input_grad);
+        // The preallocated output governs placement here (slice.cpp:123 prefers
+        // optional_output_tensor's config), and input_grad is always set by the helper above,
+        // so passing memory_config would be inert.
+        ttnn::slice(grad_tensor_arg, start_index, end_index, step, std::nullopt, input_grad);
         grad_tensor[0] = input_grad;
     }
 
@@ -570,7 +568,7 @@ std::vector<std::optional<Tensor>> concat_bw(
             grad_tensor_arg.logical_shape()[2],
             grad_tensor_arg.logical_shape()[3]};
         ttsl::SmallVector<uint32_t> step_2 = {1, 1, 1, 1};
-        ttnn::slice(grad_tensor_arg, start_index_2, end_index_2, step_2, memory_config, other_grad);
+        ttnn::slice(grad_tensor_arg, start_index_2, end_index_2, step_2, std::nullopt, other_grad);
         grad_tensor[1] = other_grad;
     }
 
@@ -670,9 +668,7 @@ std::vector<std::optional<Tensor>> div_bw(
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
     std::vector<std::optional<Tensor>> result;
-    if (!input_grad.has_value()) {
-        input_grad = ttnn::empty_like(input_tensor, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
-    }
+    input_grad = input_grad.value_or(ttnn::empty_like(input_tensor));
 
     if (rounding_mode == std::nullopt) {
         float t_inf = std::numeric_limits<float>::infinity();
@@ -825,7 +821,7 @@ std::vector<std::optional<Tensor>> mul_bw(
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
     if (!input_grad.has_value()) {
-        input_grad = ttnn::empty_like(grad_tensor_arg, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
+        input_grad = ttnn::empty_like(grad_tensor_arg);
     }
     ttnn::multiply(grad_tensor_arg, scalar, std::nullopt, output_mem_config, input_grad);
     result.push_back(input_grad);
