@@ -18,6 +18,7 @@ swaps in a walk. Nothing in the layer loop changes between them, which is the po
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -146,6 +147,14 @@ class TtKimiK3Transformer(LightweightModule):
                 hidden_size=model_cfg.EMB_SIZE,
                 eps=model_cfg.RMS_NORM_EPS,
                 tp_axis=tp_axis,
+                # The statistics fold engages at FOLD_MIN_CANDIDATES (4) sealed snapshots and swaps
+                # the collective for a permute/composite-all_reduce pair. A pipelined rank reaches
+                # that depth on its FIRST layer (it inherits `first_layer_idx // 12` snapshots),
+                # where a single-rank run of the same width never would — 36 layers tops out at 3.
+                # Exposed so the fold can be taken out of the picture when diagnosing an L1
+                # placement failure at depth 4+, which is otherwise indistinguishable from one
+                # caused by the sealed set's own size.
+                fold_stats=os.environ.get("PREFILL_ATTN_RES_FOLD_STATS", "1") == "1",
                 weights=load_attn_res_weights(
                     mesh_device,
                     state_dict.get("attn_res_weights"),

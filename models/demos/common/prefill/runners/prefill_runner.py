@@ -149,7 +149,13 @@ SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
 # Some models (e.g. Kimi: single expert group, device gate) route the MoE routing all-gather's global
 # semaphores to L1_SMALL so they don't pin the main-L1 floor and clash with the next layer's MLA static
 # CBs, which needs the mesh opened with an L1_SMALL region. The adapter owns both knobs.
-_L1_SMALL_SIZE = ADAPTER.l1_small_size
+# The adapter owns this, because it is a per-model bisection rather than a preference: on Kimi-K3
+# AttnRes wants L1_SMALL large (its inter-block statistics collective needs more per bank the deeper
+# the sealed set) while MLA's chunked attention wants it small (its static CBs must fit in what is
+# left), and the two are only jointly satisfiable in a narrow band -- see #54834. The env override
+# exists so that band can be re-bisected against a new sealed-set depth without a code edit, since
+# every attempt costs a full model build.
+_L1_SMALL_SIZE = int(os.environ.get("PREFILL_L1_SMALL_SIZE", ADAPTER.l1_small_size))
 # Capture each rank's per-chunk forward as a (segmented) ttnn trace and replay it every chunk instead of
 # re-dispatching op-by-op. Needs the mesh opened with a trace region; the segmented capture (sub-device
 # swaps + per-layer acks) is handled by SubDeviceTraceController inside the runtime.
