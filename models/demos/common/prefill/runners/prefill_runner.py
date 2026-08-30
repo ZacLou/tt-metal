@@ -275,7 +275,15 @@ def _socket_next(h2d_service) -> tuple:
     return tt_tokens, {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}, tt_metadata
 
 
-def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_size: int, hidden_size: int):
+def build_d2d_pipeline_endpoints(
+    mesh_device,
+    rank: int,
+    num_ranks: int,
+    chunk_size: int,
+    hidden_size: int,
+    inbound_planes: int = 1,
+    outbound_planes: int = 1,
+):
     """Stand up this rank's persistent D2D endpoints for the pipeline: an inbound receiver from rank-1
     (every rank but the first) and an outbound sender to rank+1 (every rank but the last). Returns
     (inbound_receiver_or_None, outbound_sender_or_None).
@@ -284,15 +292,20 @@ def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_s
     point-to-point between the two boundary ranks (no world barrier), and each MeshSocket ctor blocks
     until its peer's matching ctor. Doing inbound first chains the bring-up: rank 0's sender unblocks
     rank 1's receiver, which frees rank 1 to build its sender for rank 2's receiver, and so on — no
-    deadlock. Both sides pass the identical worker-core grid and global spec."""
-    global_spec = activation_global_spec(chunk_size, hidden_size)
+    deadlock. Both sides pass the identical worker-core grid and global spec.
 
-    def _common():
+    Inbound and outbound get SEPARATE specs, because a model whose boundary payload grows with depth
+    (Kimi-K3 carries one AttnRes snapshot per completed block) sends more planes than it received. The
+    two must still agree ACROSS a boundary — this rank's outbound_planes is the next rank's
+    inbound_planes — or the sender/receiver fingerprint rendezvous rejects the pair.
+    """
+
+    def _common(planes):
         # Fresh mapper per call: create_sender/create_receiver take the mapper by std::unique_ptr and
         # MOVE it, so a middle rank (builds BOTH a receiver and a sender) must not reuse one — the
         # second create would get a consumed/null mapper and fail overload resolution.
         return dict(
-            global_spec=global_spec,
+            global_spec=activation_global_spec(chunk_size, hidden_size, planes),
             mapper=ttnn.create_mesh_mapper(mesh_device, D2D_MAPPER_CONFIG),
             fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
             sender_worker_cores=SYNC_WORKER_CORES,
@@ -307,17 +320,18 @@ def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_s
     if rank > 0:
         logger.info(f"[pp rank {rank}] [d2d] creating inbound receiver from rank {rank - 1}")
         inbound = ttnn.D2DStreamService.create_receiver(
-            receiver_mesh=mesh_device, sender_rank=rank - 1, receiver_rank=rank, **_common()
+            receiver_mesh=mesh_device, sender_rank=rank - 1, receiver_rank=rank, **_common(inbound_planes)
         )
     outbound = None
     if rank < num_ranks - 1:
         logger.info(f"[pp rank {rank}] [d2d] creating outbound sender to rank {rank + 1}")
         outbound = ttnn.D2DStreamService.create_sender(
-            sender_mesh=mesh_device, sender_rank=rank, receiver_rank=rank + 1, **_common()
+            sender_mesh=mesh_device, sender_rank=rank, receiver_rank=rank + 1, **_common(outbound_planes)
         )
     logger.info(
-        f"[pp rank {rank}] [d2d] endpoints up (inbound={'yes' if inbound else 'no'} "
-        f"outbound={'yes' if outbound else 'no'}, workers={SYNC_WORKER_CORES}, fifo={D2D_FIFO_SIZE_BYTES}B)"
+        f"[pp rank {rank}] [d2d] endpoints up (inbound={'yes' if inbound else 'no'}/{inbound_planes}p "
+        f"outbound={'yes' if outbound else 'no'}/{outbound_planes}p, workers={SYNC_WORKER_CORES}, "
+        f"fifo={D2D_FIFO_SIZE_BYTES}B)"
     )
     return inbound, outbound
 
@@ -375,17 +389,18 @@ def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict, *, deall
     )
 
 
-def _forward_shutdown(d2d_out, rank: int, hidden_size: int) -> None:
+def _forward_shutdown(d2d_out, rank: int, hidden_size: int, planes: int = 1) -> None:
     """Forward the shutdown sentinel to the downstream rank so it unblocks in its own recv, then release
     the outbound link so the transfer ships (mirroring _compute_and_send's tail). The activation content
     is irrelevant — the downstream discards it once it sees the sentinel — but outbound_socket_service_sync
     requires the input's per-shard spec to equal the sender backing's, so build the dummy exactly like a
-    real activation: the [1, 1, CHUNK_SIZE, hidden_size] bf16 TILE spec sharded by D2D_MAPPER_CONFIG."""
+    real activation: the [1, planes, CHUNK_SIZE, hidden_size] bf16 TILE spec sharded by
+    D2D_MAPPER_CONFIG. `planes` must match this rank's OUTBOUND spec, not its inbound one."""
     import torch
 
     dev = d2d_out.get_backing_tensor().device()
     dummy = ttnn.from_torch(
-        torch.zeros(1, 1, CHUNK_SIZE, hidden_size),
+        torch.zeros(1, planes, CHUNK_SIZE, hidden_size),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=dev,
@@ -472,6 +487,7 @@ def run_request_loop(
     num_ranks: int,
     *,
     hidden_size: int,
+    outbound_planes: int = 1,
     h2d_service=None,
     d2d_in=None,
     d2d_out=None,
@@ -505,7 +521,7 @@ def run_request_loop(
             ttnn.deallocate(inp)
             ttnn.deallocate(metadata_device)
             if d2d_out is not None:
-                _forward_shutdown(d2d_out, rank, hidden_size)
+                _forward_shutdown(d2d_out, rank, hidden_size, outbound_planes)
             break
         t = _compute_and_send(
             runtime, kv_caches, rank, c, inp, meta, d2d_out, d2h_service=d2h_service, record_dev=metadata_device
@@ -707,6 +723,12 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # DFlash packs the drafter's FC partial alongside the hidden (concat on the feature dim), so the D2D
     # activation is 2H wide when enabled; the non-dflash path (every other model) stays H.
     d2d_activation_width = hf_config.hidden_size * (2 if DFLASH_ENABLED else 1)
+    # Planes on dim 1 of the D2D payload. 1 for every model whose boundary state is just the
+    # activation; Kimi-K3 adds one per AttnRes block completed before the boundary, because the
+    # receiving rank's reads score against snapshots produced upstream. Evaluated at BOTH edges of
+    # this rank's slice: what it receives, and what it sends on.
+    d2d_in_planes = ADAPTER.pipeline_activation_planes(first_layer_idx)
+    d2d_out_planes = ADAPTER.pipeline_activation_planes(first_layer_idx + num_my_layers)
 
     ttnn.distributed_context_barrier()  # warm-up: all ranks finish compile before chunks flow
 
@@ -735,7 +757,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     d2d_in = d2d_out = None
     if num_ranks > 1:
         mesh_device.clear_loaded_sub_device_manager()
-        d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, d2d_activation_width)
+        d2d_in, d2d_out = build_d2d_pipeline_endpoints(
+            mesh_device, rank, num_ranks, CHUNK_SIZE, d2d_activation_width, d2d_in_planes, d2d_out_planes
+        )
         # The chained D2D socket rendezvous finishes at staggered times per rank. Without this barrier
         # a rank can reach the loop's first fabric-link lease while an upstream/downstream rank is still
         # in rendezvous, deadlocking the lease handshake before any chunk flows.
@@ -1144,6 +1168,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             rank,
             num_ranks,
             hidden_size=d2d_activation_width,
+            outbound_planes=d2d_out_planes,
             h2d_service=h2d_service,
             d2d_in=d2d_in,
             d2d_out=d2d_out,

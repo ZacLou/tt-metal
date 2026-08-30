@@ -24,7 +24,7 @@ from typing import Callable, Optional
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
-from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
+from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX, load_attn_res_weights
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, build_attention
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.block import TtKimiK3Block
@@ -120,8 +120,20 @@ class TtKimiK3Transformer(LightweightModule):
         self.topology = topology
         self.schedule = KimiK3LayerSchedule.build(model_cfg, first_layer_idx, num_layers)
         self.first_layer_idx = first_layer_idx
+        self.num_layers = num_layers
         self.is_first_rank = is_first_rank
         self.is_last_rank = is_last_rank
+        # A rank boundary has to land on an AttnRes block edge. Off one, three things break at
+        # once: local layer 0 fires a seal the architecture does not have there and suppresses
+        # the real one; the boundary lands inside a read group, so the sealed set alone no
+        # longer carries the handoff; and the plane count stops being a function of the
+        # boundary. `KimiK3Adapter.layer_split_boundaries` already constrains this — repeated
+        # here so a direct user of the module cannot route around the adapter.
+        if not is_first_rank and first_layer_idx % BLOCK_SIZE != 0:
+            raise ValueError(
+                f"a non-first rank must start on an AttnRes block boundary (a multiple of "
+                f"{BLOCK_SIZE}); got first_layer_idx={first_layer_idx}"
+            )
         self.kv_only_last_layer = kv_only_last_layer
         # AttnRes is the model, not an option. Defaulting to a plain running sum would run, produce
         # 0.447 against the golden where AttnRes gives 0.99985, and issue none of the 2N reads — so it
@@ -139,16 +151,24 @@ class TtKimiK3Transformer(LightweightModule):
                     state_dict.get("attn_res_weights"),
                     weight_cache_path,
                     num_layers=num_layers,
+                    # The cache and the checkpoint are keyed by GLOBAL layer index, and this
+                    # rank holds a window into that range. Without the offset a rank starting
+                    # at 36 loads layers 0..35's queries — and every name it asks for exists,
+                    # so the completeness check passes and every read is silently mis-scored.
+                    first_layer_idx=first_layer_idx,
                     tensor_parallel_axis=tp_axis,
                     prefix=state_dict.get("attn_res_prefix", CHECKPOINT_PREFIX),
                 ),
             )
             attn_res = self._attn_res
 
-            def residual_factory(hidden, _n=num_layers):
+            def residual_factory(hidden, block_residual=None, _n=num_layers):
                 # A fresh walk per forward: AttnRes state is per token — every reduction is over the
                 # hidden dimension and the token axis is a free batch axis — so there is nothing to
                 # carry between chunks, unlike the KDA recurrence.
+                #
+                # `block_residual` is the one thing that DOES cross, and it crosses ranks rather
+                # than chunks: the sealed set produced by layers this rank does not hold.
                 return TtAttnResResidual(
                     TtAttnResWalk(
                         attn_res,
@@ -157,6 +177,7 @@ class TtKimiK3Transformer(LightweightModule):
                         list(attn_res.weights.post),
                         attn_res.weights.output,
                         _n,
+                        inherited_block_residual=block_residual,
                     )
                 )
 
@@ -281,6 +302,58 @@ class TtKimiK3Transformer(LightweightModule):
         for layer in self.layers:
             layer.release_sub_device_managers()
 
+    @property
+    def inbound_planes(self) -> int:
+        """Planes this rank receives: one live stream plus the snapshots sealed before it.
+
+        A seal fires every `BLOCK_SIZE` layers starting at layer 0, so a boundary at layer F
+        has `F // BLOCK_SIZE` snapshots behind it. A function of the boundary alone, which is
+        what keeps the transfer a static shape and therefore trace-capturable.
+        """
+        return 1 + self.first_layer_idx // BLOCK_SIZE
+
+    @property
+    def outbound_planes(self) -> int:
+        """Planes this rank sends on — the same count evaluated at the far edge of its slice."""
+        return 1 + (self.first_layer_idx + self.num_layers) // BLOCK_SIZE
+
+    def _pack_handoff(self, live, sealed):
+        """Fuse the live stream and the sealed set into the one tensor the D2D socket carries.
+
+        `[1,1,N,d]` and `[1,k,N,d]` concatenate on dim 1 into `[1,k+1,N,d]`: plane 0 is the
+        live stream at a constant offset, planes `1..k` the sealed set in seal order. The mesh
+        mapper shards dims 2 and 3, so dim 1 only widens the per-chip shard and the global
+        tensor still means what it says.
+
+        Both inputs are owned here (`handoff` transferred them) and are freed once copied.
+        """
+        packed = live if sealed is None else ttnn.concat([live, sealed], dim=1)
+        if sealed is not None:
+            ttnn.deallocate(live)
+            ttnn.deallocate(sealed)
+        assert packed.shape[1] == self.outbound_planes, (
+            f"handoff packed {packed.shape[1]} planes, but this rank's outbound spec is "
+            f"{self.outbound_planes}; the socket would reject it far from here"
+        )
+        return packed
+
+    def _unpack_handoff(self, packed):
+        """Split the received tensor into `(live_stream, sealed_set)`.
+
+        Slices rather than aliases, deliberately. `TtAttnResStream` takes ownership of what it
+        is given and frees it on the first read — and under trace the received tensor is the
+        address-stable `_trace_input`, so handing it over directly frees a buffer the capture
+        baked in and corrupts every chunk after the first. `packed` stays the runtime's.
+        """
+        planes, tokens, width = packed.shape[1], packed.shape[2], packed.shape[3]
+        assert planes == self.inbound_planes, (
+            f"received {planes} planes, expected {self.inbound_planes} for a rank starting at "
+            f"layer {self.first_layer_idx}"
+        )
+        live = ttnn.slice(packed, [0, 0, 0, 0], [1, 1, tokens, width])
+        sealed = ttnn.slice(packed, [0, 1, 0, 0], [1, planes, tokens, width]) if planes > 1 else None
+        return live, sealed
+
     def reset_streams(self, slot: int = 0) -> None:
         """Zero the KDA carries for a new request. Call outside any captured region."""
         if self.kda_states is not None:
@@ -327,8 +400,19 @@ class TtKimiK3Transformer(LightweightModule):
         if return_intermediates:
             raise NotImplementedError("Kimi-K3 does not implement return_intermediates")
 
-        hidden = ttnn.unsqueeze_to_4D(self.embed(token_ids)) if self.is_first_rank else token_ids
-        residual = self._residual_factory(hidden)
+        if self.is_first_rank:
+            hidden, inherited = ttnn.unsqueeze_to_4D(self.embed(token_ids)), None
+        else:
+            hidden, inherited = self._unpack_handoff(token_ids)
+        residual = self._residual_factory(hidden, inherited)
+        # The regression guard for the bug this handoff exists to fix: a rank that starts with
+        # nothing sealed silently believes it is the start of the model and reads every layer
+        # against an empty set. Host metadata only (`block_residual.shape[1]`), so it is safe
+        # inside a trace capture.
+        assert residual.num_sealed == self.inbound_planes - 1, (
+            f"rank starting at layer {self.first_layer_idx} opened with {residual.num_sealed} sealed "
+            f"snapshots, expected {self.inbound_planes - 1}"
+        )
 
         for local_idx, layer in enumerate(self.layers):
             ctx = K3AttnContext(
@@ -356,6 +440,11 @@ class TtKimiK3Transformer(LightweightModule):
             # Nothing downstream reads the output; the walk's remaining sites go unconsumed.
             residual.discard()
             return None
+
+        if not self.is_last_rank:
+            # `finish` would spend `q_out`, and the stack has exactly one of those — it belongs
+            # to the last rank. Hand the live stream and the sealed set on instead.
+            return self._pack_handoff(*residual.handoff())
 
         hidden = residual.finish()
         return self.norm(hidden) if self.norm is not None else hidden

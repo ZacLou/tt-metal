@@ -146,7 +146,8 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
         ),
     )
 
-    def residual_factory(hidden):
+    def residual_factory(hidden, block_residual=None):
+        # Single-rank test: nothing is inherited, so the second argument is always None.
         # A fresh walk per chunk. AttnRes state is per token — every reduction is over the hidden
         # dimension — so there is nothing to carry, and `finish()` frees the stream each time.
         return TtAttnResResidual(

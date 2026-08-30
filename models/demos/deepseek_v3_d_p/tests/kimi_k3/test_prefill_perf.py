@@ -91,7 +91,8 @@ def test_prefill_cost(mesh_device, device_params, num_layers, num_chunks):
         ),
     )
 
-    def residual_factory(hidden):
+    def residual_factory(hidden, block_residual=None):
+        # Single-rank test: nothing is inherited, so the second argument is always None.
         return TtAttnResResidual(
             TtAttnResWalk(
                 attn_res,

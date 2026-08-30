@@ -166,7 +166,8 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         ),
     )
 
-    def residual_factory(hidden):
+    def residual_factory(hidden, block_residual=None):
+        # Single-rank tests: nothing is inherited, so the second argument is always None.
         walk = TtAttnResWalk(
             attn_res,
             hidden,

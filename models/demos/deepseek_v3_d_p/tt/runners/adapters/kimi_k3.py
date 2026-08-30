@@ -173,6 +173,16 @@ class KimiK3Adapter(MLAPrefillAdapter):
         block = KimiK3Config.ATTN_RES_BLOCK_SIZE
         return {boundary for boundary in range(0, num_layers + 1, block)}
 
+    def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
+        """The live stream, plus one plane per AttnRes snapshot sealed before this boundary.
+
+        A read scores the live sum against every sealed snapshot, and the snapshots for layers
+        upstream of the boundary are produced on another rank — nothing on this side can recompute
+        them, so they ride the payload. `layer_split_boundaries` keeps `boundary_layer_idx` a
+        multiple of the block size, which is what makes this count exact rather than approximate.
+        """
+        return 1 + boundary_layer_idx // KimiK3Config.ATTN_RES_BLOCK_SIZE
+
     def load_hf_config(self):
         """The Kimi-K3 config, hand-built rather than loaded through `AutoConfig`.
 

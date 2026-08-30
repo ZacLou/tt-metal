@@ -63,6 +63,19 @@ class ResidualStream(Protocol):
         """Abandon the stream with no final read — what a `kv_only` last layer leaves behind."""
         ...
 
+    def handoff(self) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        """End at a pipeline boundary: `(live_sum, sealed_set)`, ownership to the caller.
+
+        The exit for a rank that is not the last. `finish` spends the model-level query, of
+        which the stack has exactly one, so an earlier rank must not call it.
+        """
+        ...
+
+    @property
+    def num_sealed(self) -> int:
+        """How many snapshots the stream would score a read against right now."""
+        ...
+
 
 class PlainResidualStream:
     """One running sum and `ttnn.add` — today's semantics, with nothing added.
@@ -98,6 +111,15 @@ class PlainResidualStream:
 
     def discard(self) -> None:
         ttnn.deallocate(self._hidden)
+
+    def handoff(self) -> tuple[ttnn.Tensor, None]:
+        """One live sum and nothing sealed — the plain arm has no sealed set to carry."""
+        hidden, self._hidden = self._hidden, None
+        return hidden, None
+
+    @property
+    def num_sealed(self) -> int:
+        return 0
 
 
 class TtAttnResResidual:
@@ -142,6 +164,13 @@ class TtAttnResResidual:
 
     def finish(self) -> ttnn.Tensor:
         return self._walk.finish()
+
+    def handoff(self) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        return self._walk.handoff()
+
+    @property
+    def num_sealed(self) -> int:
+        return self._walk.stream.num_sealed
 
     def discard(self) -> None:
         """Free the walk without its model-level read.

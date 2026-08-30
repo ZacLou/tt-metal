@@ -357,10 +357,20 @@ class TtPrefillRuntime:
         partial = ttnn.slice(packed, [0, 0, 0, half], [s0, s1, s2, s3])
         return hidden, partial
 
+    @property
+    def activation_planes(self) -> int:
+        """Planes on dim 1 of the D2D payload this rank RECEIVES.
+
+        1 for every model whose cross-rank state is just the activation. Overridden by a model that
+        also carries per-token state produced upstream; it must agree with the adapter's
+        `pipeline_activation_planes` at this rank's first layer, since that is what sized the socket.
+        """
+        return 1
+
     def make_placeholder_activation(self) -> ttnn.Tensor:
         """Allocate a zero hidden-state activation matching what the D2D socket delivers:
-        [1, 1, chunk_per_chip, emb_dim/tp] — or 2·emb_dim/tp under DFlash, which packs the drafter
-        partial alongside the hidden — TILE_LAYOUT, DRAM, replicated.
+        [1, activation_planes, chunk_per_chip, emb_dim/tp] — or 2·emb_dim/tp under DFlash, which packs
+        the drafter partial alongside the hidden — TILE_LAYOUT, DRAM, replicated.
 
         Stand-in input for a non-first rank until the upstream D2D-socket sync op
         delivers the real activation. The first block's attn_norm reads from this
@@ -372,7 +382,10 @@ class TtPrefillRuntime:
         # 2H-wide tensor and this receive buffer must match. Non-dflash keeps H.
         feature_size = self.hf_config.hidden_size * (2 if self.config.dflash_enabled else 1)
         emb_per_tp = feature_size // self.config.tp_factor
-        zeros = torch.zeros(1, 1, chunk_per_chip, emb_per_tp, dtype=torch.bfloat16)
+        # Dim 1 carries any extra per-token state the model ships across the boundary (DFlash widens
+        # the LAST dim instead, so the two compose). This buffer is what `_prepare_trace` captures as
+        # the address-stable input, so a wrong plane count here is baked into the replay.
+        zeros = torch.zeros(1, self.activation_planes, chunk_per_chip, emb_per_tp, dtype=torch.bfloat16)
         return ttnn.from_torch(
             zeros,
             device=self.mesh_device,

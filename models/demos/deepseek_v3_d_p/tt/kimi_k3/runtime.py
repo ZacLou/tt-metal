@@ -20,12 +20,24 @@ import inspect
 
 from loguru import logger
 
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
 
 class TtKimiK3Runtime(TtPrefillRuntime):
     MODEL_CLS = TtKimiK3Transformer
+
+    @property
+    def activation_planes(self) -> int:
+        """The live stream plus every AttnRes snapshot sealed before this rank's first layer.
+
+        A read scores the live sum against the whole sealed set, and the snapshots for upstream
+        layers exist only on the rank that produced them, so they arrive in the payload. Mirrors
+        `KimiK3Adapter.pipeline_activation_planes`, which sizes the socket — the two are read at the
+        same boundary and disagreeing shows up as a rendezvous failure, not a wrong answer.
+        """
+        return 1 + self.config.first_layer_idx // KimiK3Config.ATTN_RES_BLOCK_SIZE
 
     def prefill_chunk(self, *args, **kwargs):
         """Reset the KDA carries at the start of a request, then defer to the shared runtime.

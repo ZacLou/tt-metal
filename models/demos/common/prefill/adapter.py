@@ -132,6 +132,16 @@ class PrefillModelAdapter(ABC):
     # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
     supports_dflash: bool = False
 
+    def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
+        """Planes on dim 1 of the D2D payload at a rank boundary placed before `boundary_layer_idx`.
+
+        One for every model whose cross-rank state is just the hidden activation. A model that also
+        carries per-token state produced by EARLIER layers overrides this: the receiving rank cannot
+        recompute what it does not hold, and the payload is the only channel. The count must be a
+        function of the boundary alone, so the transfer keeps a static shape and stays trace-capturable.
+        """
+        return 1
+
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says
     # where this model's config / weights live and how to build its runtime. All

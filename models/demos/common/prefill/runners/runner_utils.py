@@ -147,12 +147,17 @@ def build_h2d_service(
     return service
 
 
-def activation_global_spec(chunk_size: int, hidden_size: int) -> ttnn.TensorSpec:
+def activation_global_spec(chunk_size: int, hidden_size: int, planes: int = 1) -> ttnn.TensorSpec:
     """Global spec of the inter-rank hidden state carried over the D2D pipeline socket:
-    [1, 1, chunk_size, hidden_size] bf16 TILE DRAM. The caller's mesh mapper shards it (seq across SP
-    rows, emb across TP cols) to match the embedding output layout the downstream model consumes."""
+    [1, planes, chunk_size, hidden_size] bf16 TILE DRAM. The caller's mesh mapper shards it (seq across
+    SP rows, emb across TP cols) to match the embedding output layout the downstream model consumes.
+
+    `planes` is 1 for a model whose boundary state is just the activation. A model that carries extra
+    per-token state across the boundary widens dim 1 — the mapper shards dims 2 and 3, so extra planes
+    only widen the per-chip shard and the global tensor still means what it says. Kimi-K3 uses this to
+    carry its AttnRes sealed set, which later layers on the receiving rank must read against."""
     return ttnn.TensorSpec(
-        shape=ttnn.Shape([1, 1, chunk_size, hidden_size]),
+        shape=ttnn.Shape([1, planes, chunk_size, hidden_size]),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         buffer_type=ttnn.BufferType.DRAM,
