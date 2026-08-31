@@ -21,7 +21,7 @@ from typing import Any, Callable
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
+from models.common.modules.lazy_weight import LazyWeight, release_device_weights, resolve_lazy_weight
 
 WH_GALAXY_MESH_SHAPE = (8, 4)
 PrefillProgramConfigFactory = Callable[[int], Any]
@@ -225,6 +225,43 @@ class MLP2D(LightweightModule):
             else:
                 raise ValueError(f"mode must be 'decode' or 'prefill', got {selected_mode}")
             self._loaded_weight_modes.add(selected_mode)
+
+    def release(self) -> None:
+        """Deallocate this MLP's device weights; terminal and idempotent.
+
+        `w1`, `w2` and `w3` are the largest DRAM consumers in a Galaxy decoder
+        layer - measured on `(8, 4)` with Llama-3.3-70B, 650 624 B per bank each
+        against 208 896 B for the attention `wqkv` ring copy - and until
+        Milestone C nothing released them at all. `MLP2D` had no `release` and no
+        `close`, and the transformer block's `close()` called only
+        `self.attention.close()`, so a closed model kept every MLP weight for as
+        long as any caller held it.
+
+        Measured, four-layer subset, after `close()`, `del` and `gc.collect()`
+        (`tttv2_milestone_c_evidence/defects/logs/w2_llama_dram_probe_l4.log`):
+        **12 of 12** prefetcher-registered weights still allocated, all of them
+        `layer[i].w1/w2/w3`, 19 931 264 B per DRAM bank in total - which at 80
+        layers is 37 % of the 1 070 773 184 B bank and is what stopped a second
+        Galaxy Llama loading in one process.
+
+        Kept separate from a `close()` because a prefetched weight must not be
+        freed while `Prefetcher2D` can still read it: the model calls this after
+        `Prefetcher2D.cleanup()` has stopped the prefetch.
+        """
+
+        release_device_weights(
+            (
+                self.config.w1,
+                self.config.w2,
+                self.config.w3,
+                self.config.prefill_w1,
+                self.config.prefill_w2,
+                self.config.prefill_w3,
+            )
+        )
+        for name in ("w1", "w2", "w3", "prefill_w1", "prefill_w2", "prefill_w3"):
+            self.__dict__.pop(name, None)
+        self._loaded_weight_modes.clear()
 
     def _all_reduce_tg(
         self,

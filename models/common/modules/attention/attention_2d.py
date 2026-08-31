@@ -12,7 +12,7 @@ from typing import Any, Callable, Mapping
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
+from models.common.modules.lazy_weight import LazyWeight, release_device_weights, resolve_lazy_weight
 from models.common.modules.rmsnorm.rmsnorm_2d import RMSNorm2D, RMSNorm2DConfig, RMSNorm2DGeometry
 
 GALAXY_MESH_SHAPE = (8, 4)
@@ -729,6 +729,54 @@ class Attention2D(LightweightModule):
             self.prefill_wo = self.config.prefill_wo.get_device_weight()
         self.wqkv_bias = self.config.wqkv_bias.get_device_weight() if self.config.wqkv_bias else None
         self._loaded_weight_modes.add(mode)
+
+    def release(self) -> None:
+        """Deallocate this attention's device weights; terminal and idempotent.
+
+        `close()` releases intermediates and runtime tensors, which is everything
+        this module allocates *per request*. The weights outlive that, and until
+        Milestone C nothing released them: a caller still holding the model - a
+        runner bound in an enclosing frame, an executor kept for its metrics -
+        kept every `wqkv`, `wo` and bias on the device after `close()` returned.
+        Every other weight-owning 2D module (`Embedding2D`, `LMHead2D`,
+        `RotarySetup2D`, `Sampling2D`) already had exactly this method; attention
+        and `MLP2D` were the two that did not.
+
+        `prefill_wqkv`/`prefill_wo` alias the decode weights whenever no separate
+        prefill weight was configured (`prefill_wqkv = resolved.prefill_wqkv or
+        wqkv` at config resolution), so the dedupe in `release_device_weights` is
+        load-bearing rather than defensive.
+
+        Kept separate from `close()` because a prefetched weight must not be
+        freed while `Prefetcher2D` can still read it: the model calls this after
+        `Prefetcher2D.cleanup()` has stopped the prefetch.
+        """
+
+        failures: list[BaseException] = []
+        for norm in (self._q_norm, self._k_norm):
+            if norm is None:
+                continue
+            try:
+                norm.release()
+            except BaseException as error:  # noqa: BLE001 - collect, then raise the first
+                failures.append(error)
+        try:
+            release_device_weights(
+                (
+                    self.config.wqkv,
+                    self.config.wo,
+                    self.config.prefill_wqkv,
+                    self.config.prefill_wo,
+                    self.config.wqkv_bias,
+                )
+            )
+        except BaseException as error:  # noqa: BLE001
+            failures.append(error)
+        for name in ("wqkv", "wo", "prefill_wqkv", "prefill_wo", "wqkv_bias"):
+            self.__dict__.pop(name, None)
+        self._loaded_weight_modes.clear()
+        if failures:
+            raise failures[0]
 
     def _require_cache(self) -> KVCacheBinding:
         self._require_open()

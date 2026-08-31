@@ -1366,6 +1366,31 @@ class Llama33_70BTransformerBlock2D(LightweightModule):
     def close(self) -> None:
         self.attention.close()
 
+    def release_weights(self) -> None:
+        """Deallocate this block's device weights; terminal and idempotent.
+
+        Separate from `close()`, and called after `Prefetcher2D.cleanup()` rather
+        than with the rest of the teardown, because the attention decode weights
+        are *registered with the prefetcher*: freeing them while a prefetch can
+        still read them is a use-after-free on the device, and a `TT_FATAL`
+        inside a multi-subdevice program leaves the mesh un-drainable. The model
+        owns that ordering; the modules only own the release.
+        """
+
+        failures: list[BaseException] = []
+        for release in (
+            self.attention.release,
+            self.feed_forward.release,
+            self.attention_norm.release,
+            self.ff_norm.release,
+        ):
+            try:
+                release()
+            except BaseException as error:  # noqa: BLE001 - collect, then raise the first
+                failures.append(error)
+        if failures:
+            raise failures[0]
+
 
 class Llama33_70BGalaxyTransformer2D(LightweightModule):
     """Llama-3.3-70B-Instruct as a full-mesh Galaxy `(8, 4)` tensor model."""
@@ -1710,6 +1735,30 @@ class Llama33_70BGalaxyTransformer2D(LightweightModule):
         if self.config.owns_shared_resources:
             attempt(self.resources.cleanup)
             attempt(self.prefetcher.cleanup)
+            # Weights last, and deliberately inside this branch, after
+            # `prefetcher.cleanup()`. Until Milestone C nothing released them at
+            # all - `close()` returned with every `wqkv`, `wo`, `w1`, `w2` and
+            # `w3` still on the device for as long as any caller held the model,
+            # which is 19 931 264 B per DRAM bank at a four-layer subset and
+            # 398 617 984 B - 37 % of the bank - at 80 layers
+            # (`logs/w2_llama_dram_probe_l4.log`,
+            # `logs/x1_llama_pool4096_only_full.log`, both under
+            # `tttv2_milestone_c_evidence/defects/`).
+            #
+            # The attention decode weights are *registered with the prefetcher*,
+            # so freeing one while a prefetch can still read it is a
+            # use-after-free on the device, and a `TT_FATAL` inside a
+            # multi-subdevice program leaves the mesh un-drainable. This model
+            # knows the prefetch is stopped only when it owns the prefetcher and
+            # has just cleaned it up; a model that *borrows* shared resources
+            # does not control when the prefetch stops, so it does not release.
+            # That leaves a borrowed-resources model's weights resident, which is
+            # a smaller and quieter gap than a use-after-free, and it is recorded
+            # rather than assumed away: `owns_shared_resources` is True for every
+            # model this tree builds.
+            for layer in self.layers:
+                attempt(layer.release_weights)
+            attempt(self.norm.release)
         self._closed = True
         if failures:
             raise failures[0]

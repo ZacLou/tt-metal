@@ -21,7 +21,7 @@ from typing import Any, Callable
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
+from models.common.modules.lazy_weight import LazyWeight, release_device_weights, resolve_lazy_weight
 from models.common.tensor_utils import TILE_SIZE
 
 # =============================================================================
@@ -211,6 +211,21 @@ class RMSNorm2D(LightweightModule):
         self.weight = self.config.weight.get_device_weight()
 
         self._device_weights_loaded = True
+
+    def release(self) -> None:
+        """Deallocate this norm's device weight; terminal and idempotent.
+
+        The weight is small - 384 B per DRAM bank on `(8, 4)` - but there are
+        two per decoder layer plus one final norm, so at 80 layers it is 161
+        allocator blocks. `FreeListOpt::allocate` takes the smallest free block
+        that fits, so blocks that size are what a later large allocation has to
+        step over; leaving them behind is the fragmentation half of the same
+        defect the layer weights are the capacity half of.
+        """
+
+        release_device_weights((self.config.weight,))
+        self.__dict__.pop("weight", None)
+        self._device_weights_loaded = False
 
     def decode_forward(
         self, x: "ttnn.Tensor | LazyWeight", residual: "ttnn.Tensor | LazyWeight | None" = None
