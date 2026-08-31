@@ -1,6 +1,6 @@
 # `c-defects` — completion handoff (attempt 3)
 
-**Last updated:** 2026-08-31T11:59Z — mesh down on board 23; no marker written
+**Last updated:** 2026-08-31T12:02Z — mesh fault characterised (9 boards); no marker written
 **Base commit:** `2b463f17fcd`. **Branch:** `apbernal/tttv2_wh_glx_2d_modules_milestone_c`.
 **Job window:** started 08:17Z, 43200 s.
 
@@ -423,3 +423,38 @@ not by this job and not by the driver.
    says whether the second model's buffer landed on the first's blocks. No probe needed.
 4. **D-C12** — the warm-program-cache sampling defect — is then the highest open item. The bisection
    is one extra readback; see §5.
+
+---
+
+## 12. 12:00Z — the mesh fault, characterised, because "the board should be reset" understates it
+
+`tt-smi` names one board. The kernel driver's own sysfs says nine are out
+(`tttv2_milestone_c_runs/c-defects3/logs/heartbeats_1201Z.log`):
+
+| sysfs node | BDF | `tt_heartbeat` |
+| --- | --- | --- |
+| `tenstorrent!23` | `0000:08:00.0` | **4294967295** — 0xFFFFFFFF, the same all-ones read UMD reports |
+| `tenstorrent!24` … `tenstorrent!31` | `0000:41:00.0` … `0000:48:00.0` | **ERR** — an entire tray of eight, unreadable |
+| the remaining 23 boards | — | ticking normally, 1492–1501, and observed advancing |
+
+So `POST_RESET failed for device 23` is the visible edge of a fault that includes a whole tray whose
+ARC heartbeat cannot be read at all. `ls /sys/class/tenstorrent | wc -l` is still **32**, which is
+exactly the trap the house rules warn about: the node count persists after a board leaves the bus and
+is not evidence.
+
+**Two things follow, and they are different claims.**
+
+First, **D-C14 is a defect worth naming and I have named it.** The driver's re-attempt note is right
+that the test which hangs long enough to be killed is usually the one that left the NOC in that
+state, and I am not treating `m1b` as innocent: it stalled with a device completion outstanding, and
+killing it is what preceded the mesh becoming unaddressable. `D-C14.status` and
+`tttv2_milestone_c_evidence/defects/REPORT.md` carry the reduction and the backtrace.
+
+Second, **the extent of the damage is beyond what a user-space test explains.** A Python-level stall
+and a `SIGTERM` do not plausibly take an eight-board tray's ARC heartbeat off the sysfs interface.
+That is a host-level fault, and no `tt-smi` path reaches it: `-glx_reset_tray` is no longer
+supported, `-r <id>` needs the UMD enumeration the bad board breaks, and `-glx_reset` and its
+variants all route through the POST_RESET that fails.
+
+I stopped retrying at twelve attempts rather than keep spending the window on a signature that has
+not varied once. The evidence a host owner needs is on disk and named above.

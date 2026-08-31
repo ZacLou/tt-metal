@@ -39,7 +39,12 @@ Fix, implemented in commit 32e552bb0b2, HOST-QUALIFIED ONLY:
 
 NOT QUALIFIED ON SILICON. The mesh lost board 23 at 11:10Z and did not come back:
   "Read 0xffffffff over PCIe ID 23: the board should be reset"
-  ten reset attempts, four mechanisms, all "POST_RESET failed for device 23".
+  twelve reset attempts, four mechanisms, all "POST_RESET failed for device 23".
+  The kernel driver's sysfs says the fault is wider than tt-smi reports: tenstorrent!23
+  (0000:08:00.0) reads tt_heartbeat = 4294967295 (0xFFFFFFFF) and tenstorrent!24..31
+  (0000:41..48:00.0) return ERR - an entire tray of eight. The other 23 boards tick
+  normally. See tttv2_milestone_c_runs/c-defects3/logs/heartbeats_1201Z.log. That is a
+  host-level fault and no tt-smi path reaches it.
 
 NEXT STEP: on a healthy mesh, test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is
 _unreachable and its Llama twin, three fresh processes each. If the hang is gone, D-C7's gate
