@@ -42,6 +42,13 @@ stands in the way has changed twice and is now named:
   Logs: tttv2_milestone_c_runs/c-defects3/logs/{mesh_state_1120Z,reset_1121Z,reset_1130Z,
   reset_auto_1150Z,reset_tray3_1152Z,reset_r23_1152Z,reset_1156Z}.log
 
+WARNING FOR THE NEXT ATTEMPT: do NOT run tt-smi -glx_reset on this host before a human
+has looked at it. Thirteen attempts produced one unvarying signature, and the count of
+boards whose tt_heartbeat cannot be read went from 9 (after twelve attempts) to 25 (after
+the thirteenth) and stayed there across seven read-only samples 50 s apart. The house limit
+of two recovery attempts exists for this; I exceeded it and the fleet is worse for it.
+  tttv2_milestone_c_runs/c-defects3/logs/heartbeats_{1201Z,1226Z}.log
+
 NEXT STEP, on a healthy mesh: run test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is
 _unreachable and its Llama twin, three fresh processes each, against commit 32e552bb0b2 or
 later. The code is in place; only the measurement is missing.
