@@ -93,7 +93,13 @@ class TtKimiK3Transformer(LightweightModule):
         max_seq_len: Optional[int] = None,
         is_chunked: bool = False,
         slot_num: int = 1,
-        num_users: int = 1,
+        # Same quantity as `slot_num` -- the number of concurrent cache slots. Two names for one
+        # concept was a live trap: `slot_num` reached MLA's KV slots while `num_users` sized the KDA
+        # carries, and the shared runtime passes only `slot_num`, so a run configured for two users
+        # built a ONE-slot KDA cache and died on the second user's first chunk with
+        # `IndexError: list index out of range` in KdaStateCache.read. Default None means "whatever
+        # slot_num says"; passing both is allowed only if they agree.
+        num_users: Optional[int] = None,
         gate_fallback_mode=None,
         is_balanced: bool = False,
         build_tail: bool = True,
@@ -112,6 +118,14 @@ class TtKimiK3Transformer(LightweightModule):
             raise ValueError(
                 f"Kimi-K3 uses a dense MLA KV cache; got sparse_kv_cache_format={sparse_kv_cache_format!r}"
             )
+        # One number, whichever name the caller used. `slot_num` and `num_users` are the same
+        # quantity and disagreeing on it is not a preference, it is a broken model: MLA would size
+        # its KV slots one way and KDA its carries another, and the mismatch only surfaces on the
+        # second user's first chunk.
+        if num_users is not None and num_users != slot_num and 1 not in (num_users, slot_num):
+            raise ValueError(f"slot_num={slot_num} and num_users={num_users} are the same quantity and must agree")
+        cache_slots = max(slot_num, num_users if num_users is not None else 1)
+        self.num_users = cache_slots
         self.lm_head_is_column_parallel = lm_head_is_column_parallel
         self.padding_side = padding_side
         self.mesh_device = mesh_device
@@ -273,7 +287,7 @@ class TtKimiK3Transformer(LightweightModule):
             mark_layer_cached(weight_cache_path, layer_idx)
 
         if kda_layers:
-            self.kda_states = KdaStateCache(kda_layers, num_slots=num_users)
+            self.kda_states = KdaStateCache(kda_layers, num_slots=cache_slots)
             for layer in self.layers:
                 if not layer.attention.writes_kv:
                     layer.attention.bind_state_cache(self.kda_states)
