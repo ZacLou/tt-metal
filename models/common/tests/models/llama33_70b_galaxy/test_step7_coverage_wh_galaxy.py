@@ -1462,3 +1462,82 @@ def test_llama_device_sampling_claims_with_an_explicit_token_composition(mesh_de
             ), f"per-slot controls: slot {slot} was configured greedy and did not take the host argmax"
     finally:
         _close(handle)
+
+
+# ---------------------------------------------------------------------------
+# Teardown: `close()` is terminal for the weights too
+# ---------------------------------------------------------------------------
+
+
+def _live_dram_bytes_per_bank(mesh_device: ttnn.MeshDevice) -> int:
+    """Bytes per DRAM bank the allocator currently reports as allocated.
+
+    `ttnn.get_memory_view(...).block_table` reports per-bank block sizes - the
+    same units every allocator message uses, so 208 896 B here is the same
+    208 896 B as in "each bank needs to store 208896 B".
+    """
+
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    return sum(int(block["size"]) for block in view.block_table if block.get("allocated") == "yes")
+
+
+@_PARAMS
+@_GALAXY
+@torch.no_grad()
+def test_llama_a_closed_model_returns_its_device_weights(mesh_device: ttnn.MeshDevice):
+    """`close()` is terminal for the weights, with nothing deleted after it.
+
+    This is the direct assertion of the contract that `test_llama_two_paged_pools_
+    agree_and_a_contiguous_cache_is_unreachable` only reaches through a second
+    model. It matters on its own because a serving system holds a closed
+    executor - for its metrics, for a retry, for a log line - and "repeated
+    startup, serving and cleanup without retained TT resources" is a Milestone C
+    gate line. Dropping the last Python reference must not be what returns the
+    device memory.
+
+    Until Milestone C it was. `MLP2D` had no `release` and no `close` at all, and
+    the transformer block's `close()` called only `self.attention.close()`, which
+    releases intermediates and runtime tensors and never weights. Measured on
+    `(8, 4)` with Galaxy Llama-3.3-70B at the full 80-layer shape, after
+    `close()`, `del` **and** `gc.collect()`
+    (`tttv2_milestone_c_evidence/defects/logs/x1_llama_pool4096_only_full.log`):
+
+        398 617 984 B per DRAM bank still allocated, 961 blocks,
+        240 of 240 prefetcher-registered weights still live
+
+    which is 37 % of the 1 070 773 184 B bank. After the fix, the same probe at a
+    four-layer subset reads `residue_after_close=0`, `0 of 12`
+    (`logs/z4_probe_l4_afterfix.log`), so the threshold below is **zero on
+    principle and zero in measurement**, not a tolerance fitted to a result.
+
+    Nothing is deleted and nothing is collected after `close()` - deliberately.
+    `handle` and `runner` are still bound when the assertion runs, because the
+    claim is that `close()` alone is sufficient. A `del` here would test Python's
+    collector instead, and Python's collector was never the thing that was
+    broken.
+    """
+
+    baseline = _live_dram_bytes_per_bank(mesh_device)
+    handle = _load(mesh_device)
+    registered = 0
+    peak = baseline
+    try:
+        with GalaxyDirectRunner(handle.model) as runner:
+            runner.prefill_row(_prompt(128), slot=0)
+            runner.decode_logits([1] * GALAXY_PHYSICAL_BATCH, [128] * GALAXY_PHYSICAL_BATCH)
+            registered = len(handle.model.prefetcher._registered_weights)
+            peak = _live_dram_bytes_per_bank(mesh_device)
+    finally:
+        handle.close()
+
+    residue = _live_dram_bytes_per_bank(mesh_device) - baseline
+    print(
+        f"[close] {registered} registered weights, peak {peak} B per DRAM bank, "
+        f"residue after close {residue} B",
+        flush=True,
+    )
+    assert residue == 0, (
+        f"a closed Galaxy model left {residue} B per DRAM bank allocated out of a peak of "
+        f"{peak} B, with {registered} weights registered with the prefetcher. `close()` is "
+        "documented as terminal; if this fails, some module owns a weight it does not release."
+    )
