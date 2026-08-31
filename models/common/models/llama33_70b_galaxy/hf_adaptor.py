@@ -283,7 +283,10 @@ def from_pretrained(
     use_qk_fused_rotary: bool = True,
     cache_dir: Path | str | None = None,
     load_hf_model: Any = None,
-    release_global_cb_on_prefill: bool = False,
+    # True since 2026-08-30: a prefill after a decode cannot place its circular
+    # buffers while the global CB is resident, so serving needs the release. See
+    # `models/common/models/galaxy/prefetch.py` for the arithmetic.
+    release_global_cb_on_prefill: bool = True,
 ) -> Llama33_70BGalaxyForCausalLM:
     """Load `meta-llama/Llama-3.3-70B-Instruct` onto one WH Galaxy `(8, 4)` mesh.
 
@@ -315,8 +318,10 @@ def from_pretrained(
     # a subset inject a loader that reads only the shards it needs - the tests use
     # `galaxy_checkpoint.load_layer_subset_causal_lm` - and this module stays
     # independent of the test tree rather than importing from it.
-    hf = load_hf_model() if load_hf_model is not None else AutoModelForCausalLM.from_pretrained(
-        hf_model, torch_dtype=torch.bfloat16, **load_kwargs
+    hf = (
+        load_hf_model()
+        if load_hf_model is not None
+        else AutoModelForCausalLM.from_pretrained(hf_model, torch_dtype=torch.bfloat16, **load_kwargs)
     )
     hf.eval()
     try:

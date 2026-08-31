@@ -1748,7 +1748,8 @@ def build_llama33_70b_galaxy_model(
     use_qk_fused_rotary: bool = True,
     cache_path: Path | str | None = None,
     global_cb_size: int | None = GALAXY_GLOBAL_CB_SIZE,
-    release_global_cb_on_prefill: bool = False,
+    # True since 2026-08-30; see `build_galaxy_prefetcher_config`.
+    release_global_cb_on_prefill: bool = True,
     prefetcher_injections: dict[str, Any] | None = None,
 ) -> Llama33_70BGalaxyTransformer2D:
     """Own the complete Galaxy construction order and return the tensor model.

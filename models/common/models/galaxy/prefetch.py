@@ -17,9 +17,61 @@ from typing import Any
 import ttnn
 from models.common.models.galaxy.recipes import prefetch_sender_cores
 from models.common.models.galaxy.resources import GalaxyModePlan, GalaxyResourcesConfig
-from models.common.modules.prefetcher import Prefetcher2D, Prefetcher2DConfig, Prefetcher2DModeConfig
+from models.common.modules.prefetcher import GlobalCBPlacement, Prefetcher2D, Prefetcher2DConfig, Prefetcher2DModeConfig
 
 GALAXY_GLOBAL_CB_SIZE = 728 * 1088
+
+#: L1 per bank held above the global circular buffer while it is created.
+#:
+#: L1 is allocated top-down and a buffer's address never moves, so anything
+#: long-lived allocated while the ~774 kB global CB is resident is stranded below
+#: it for the life of the process - and the prefill embedding's static circular
+#: buffers reach 630080, so one stranded byte down there makes every subsequent
+#: prefill unplaceable. Measured on `(8, 4)` with Llama-3.3-70B: the first decode
+#: strands 32 B at 545760 (`logs/a3_clash_steps_l1.log`), and with this headroom
+#: reserved the only L1 left below 630080 is the global CB itself
+#: (`logs/b1_headroom_only_l1.log`).
+#:
+#: 64 kiB is chosen against a measured need of 32 B plus the 2 kB decode rotary
+#: transformation matrix, and it costs nothing but where the global CB sits: the
+#: buffer simply lands 64 kiB lower in a bank with 1 265 696 B free at that
+#: moment.
+GALAXY_GLOBAL_CB_HEADROOM = 64 * 1024
+
+#: One global-CB placement record per mesh device, for the life of the process.
+#:
+#: The ttnn program cache belongs to the mesh device and outlives any one model,
+#: and two structurally identical Galaxy models hash to the same program-cache
+#: keys - so the second model in a process reuses decode programs compiled for the
+#: first, and those programs carry the first model's global circular buffer
+#: addresses. The buffer therefore has to land on the same L1 blocks for *every*
+#: model in the process, not merely for every recreation within one model. Measured
+#: on `(8, 4)`: with the record held per owner, the second Qwen model's first
+#: decode hung in `FDMeshCommandQueue::wait_for_outstanding_reads` with both
+#: models' weights already resident
+#: (`tttv2_milestone_c_runs/c-defects3/logs/m1b_hang_bt.txt`).
+#:
+#: Keyed by `id(mesh_device)` because a `ttnn.MeshDevice` is a nanobind object and
+#: takes neither weak references nor attributes. A process opens one mesh, and
+#: `forget_galaxy_global_cb_placement` exists for a test that wants a clean one.
+_GLOBAL_CB_PLACEMENTS: dict[int, GlobalCBPlacement] = {}
+
+
+def galaxy_global_cb_placement(mesh_device: Any) -> GlobalCBPlacement:
+    """Return the process-wide global-CB placement record for one mesh device."""
+
+    return _GLOBAL_CB_PLACEMENTS.setdefault(id(mesh_device), GlobalCBPlacement())
+
+
+def forget_galaxy_global_cb_placement(mesh_device: Any) -> None:
+    """Drop a mesh device's placement record, so the next creation sets it afresh.
+
+    Only correct when nothing in the ttnn program cache still refers to the old
+    buffer - in practice, a test that clears the cache or opens a new mesh.
+    """
+
+    _GLOBAL_CB_PLACEMENTS.pop(id(mesh_device), None)
+
 
 _RECEIVER_COLUMN_PAIRS = tuple(((1, y), (2, y)) for y in (9, 0, 4, 5)) + tuple(
     ((5, y), (6, y)) for y in (0, 9, 1, 7, 6, 2, 4, 5)
@@ -114,7 +166,8 @@ def build_galaxy_prefetcher_config(
     global_cb_size: int | None = GALAXY_GLOBAL_CB_SIZE,
     prefetch_num_layers: int = 1,
     defer_global_cb: bool = True,
-    release_global_cb_on_prefill: bool = False,
+    release_global_cb_on_prefill: bool = True,
+    global_cb_headroom: int = GALAXY_GLOBAL_CB_HEADROOM,
 ) -> Prefetcher2DConfig:
     """Resolve the prefetcher policy that matches a Galaxy resource config.
 
@@ -140,10 +193,20 @@ def build_galaxy_prefetcher_config(
         prefetch_num_layers=prefetch_num_layers,
         mesh_shape=resources_config.mesh_shape,
         defer_global_cb=defer_global_cb,
-        # Defaults to False: see the field's docstring. Deferring the allocation is
-        # safe and qualified; releasing and recreating it per mode is not, and it is
-        # opt-in until something re-qualifies the decode path behind it.
+        # Defaults to **True** since 2026-08-30, and the reason is arithmetic
+        # rather than preference. 869 056 B of L1 lie above the 630080 that the
+        # prefill embedding's static circular buffers reach; the model's resident
+        # L1 after a decode is 127 776 B and the global circular buffer is
+        # 792 256 B including its config buffer. 127 776 + 792 256 = 920 032, so
+        # the buffer and a prefill program of this shape cannot coexist under any
+        # allocation order. `defer_global_cb` covers only the first prefill;
+        # without this flag every prefill *after* a decode aborts at
+        # `program.cpp:1763`, which is what blocked Llama's repeated-request gate
+        # and, by construction, blocks serving. Paired with `global_cb_headroom`,
+        # which is what stops the release from being defeated by a buffer
+        # stranded underneath the CB.
         release_global_cb_on_prefill=release_global_cb_on_prefill,
+        global_cb_headroom=global_cb_headroom,
     )
 
 
@@ -154,10 +217,16 @@ def build_galaxy_prefetcher(
     expected_weight_count: int,
     global_cb_size: int | None = GALAXY_GLOBAL_CB_SIZE,
     prefetch_num_layers: int = 1,
-    release_global_cb_on_prefill: bool = False,
+    release_global_cb_on_prefill: bool = True,
+    global_cb_headroom: int = GALAXY_GLOBAL_CB_HEADROOM,
     **injections: Any,
 ) -> Prefetcher2D:
     """Create an initialized, unsealed `Prefetcher2D` for one Galaxy mesh."""
+
+    # Shared across every model this process builds on this mesh: the ttnn program
+    # cache is the mesh device's and it outlives any one model. A caller that
+    # injects its own record keeps it.
+    injections.setdefault("global_cb_placement", galaxy_global_cb_placement(mesh_device))
 
     prefetcher = Prefetcher2D(
         build_galaxy_prefetcher_config(
@@ -167,6 +236,7 @@ def build_galaxy_prefetcher(
             global_cb_size=global_cb_size,
             prefetch_num_layers=prefetch_num_layers,
             release_global_cb_on_prefill=release_global_cb_on_prefill,
+            global_cb_headroom=global_cb_headroom,
         ),
         **injections,
     )

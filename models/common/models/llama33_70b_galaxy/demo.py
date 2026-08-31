@@ -94,12 +94,13 @@ def _load(mesh_device: Any, **overrides: Any):
         from models.common.tests.models.galaxy.galaxy_checkpoint import load_layer_subset_causal_lm
 
         kwargs["load_hf_model"] = lambda: load_layer_subset_causal_lm(hf_model, layer_indices=tuple(range(layers)))
-    # Opt-in only, and off by default: releasing the global circular buffer on
-    # every prefill is the candidate fix for "prefill after a decode" (the second
-    # runner in one process), and it changes the mode-switching of the prefetcher.
+    # Now the model default; the switch is kept so the *old* behaviour can still
+    # be measured. `LLAMA33_70B_GALAXY_RELEASE_GLOBAL_CB=0` turns the release off
+    # and puts a prefill-after-decode back on the L1 address clash.
     # See `Prefetcher2DConfig.release_global_cb_on_prefill`.
-    if os.getenv("LLAMA33_70B_GALAXY_RELEASE_GLOBAL_CB", "").lower() in {"1", "true", "yes"}:
-        kwargs["release_global_cb_on_prefill"] = True
+    switch = os.getenv("LLAMA33_70B_GALAXY_RELEASE_GLOBAL_CB", "")
+    if switch:
+        kwargs["release_global_cb_on_prefill"] = switch.lower() in {"1", "true", "yes"}
     return from_pretrained(mesh_device, **kwargs)
 
 

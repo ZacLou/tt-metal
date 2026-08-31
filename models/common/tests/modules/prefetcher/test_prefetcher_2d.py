@@ -8,7 +8,12 @@ from unittest.mock import MagicMock
 import pytest
 
 import ttnn
-from models.common.modules.prefetcher.prefetcher_2d import Prefetcher2D, Prefetcher2DConfig, Prefetcher2DModeConfig
+from models.common.modules.prefetcher.prefetcher_2d import (
+    GlobalCBPlacement,
+    Prefetcher2D,
+    Prefetcher2DConfig,
+    Prefetcher2DModeConfig,
+)
 
 
 class FakeMesh:
@@ -131,6 +136,7 @@ def make_config(
     global_cb_size=4096,
     defer_global_cb=False,
     release_global_cb_on_prefill=False,
+    global_cb_headroom=0,
 ):
     mesh = FakeMesh() if mesh is None else mesh
     return Prefetcher2DConfig(
@@ -156,6 +162,7 @@ def make_config(
         address_mesh_mapper="address-mapper",
         defer_global_cb=defer_global_cb,
         release_global_cb_on_prefill=release_global_cb_on_prefill,
+        global_cb_headroom=global_cb_headroom,
     )
 
 
@@ -668,3 +675,403 @@ def test_cleanup_takes_the_global_cb_back_out_of_every_context_it_handed_out(res
 def test_release_without_defer_is_rejected(expect_error):
     with expect_error(ValueError, "requires defer_global_cb"):
         make_config(defer_global_cb=False, release_global_cb_on_prefill=True)
+
+
+class ScriptedL1:
+    """A small faithful model of the L1 free list, with one governing rule.
+
+    `FreeListOpt::allocate` takes the **smallest free block that fits**, and L1 is
+    allocated top-down inside the block it picks. Everything the global-CB
+    placement fix depends on follows from that one rule, so the model derives its
+    free blocks from its allocated ones rather than tracking them, and cannot
+    drift out of agreement with itself:
+
+    * a buffer created while something large is resident lands below it, and an
+      allocated address never moves;
+    * a request that fits a **gap** above the low region lands in that gap and
+      does not lower the free top - which is why one reservation was not enough
+      on silicon (`logs/d1_llama_repeat_l1.log`, `logs/d2_qwen_repeat_l1.log`:
+      the buffer came back 32 736 B high on both models);
+    * a global circular buffer is **two** allocations, a `size`-byte data buffer
+      and a 192-byte config page, and by the same rule a small gap anywhere in L1
+      captures the config page - which on silicon put it 850 kB from its own data
+      buffer (`logs/k1_llama_chunked_r1.log`, `logs/k2_llama_chunked_r2.log`).
+
+    Tests build a hole by seeding `blocks` with a block that leaves one.
+    """
+
+    CONFIG_PAGE = 192
+    TOP = 1_000_032
+
+    def __init__(self, *, blocks=None, creation_extra=0):
+        #: allocated blocks, address -> size. One resident block at the very top.
+        self.blocks = dict(blocks) if blocks else {1_000_000: 32}
+        #: bytes the creation allocates *beyond* the data buffer and its config
+        #: page. On silicon this is not constant, which is why a fixed headroom
+        #: cannot pin the buffer (`logs/b4_headroom_release_addr_l1.log`).
+        self.creation_extra = creation_extra
+        self.reads = 0
+        self.reserved = []
+        self.released = []
+
+    def free_blocks(self):
+        """Derive the free blocks: the complement of the allocated ones."""
+
+        free, cursor = [], 0
+        for address in sorted(self.blocks):
+            if address > cursor:
+                free.append((cursor, address - cursor))
+            cursor = address + self.blocks[address]
+        if cursor < self.TOP:
+            free.append((cursor, self.TOP - cursor))
+        return free
+
+    def l1_block_table(self, mesh):
+        del mesh
+        self.reads += 1
+        table = [(address, size, True) for address, size in self.blocks.items()]
+        table.extend((address, size, False) for address, size in self.free_blocks())
+        return tuple(table)
+
+    def _allocate(self, size):
+        candidates = [block for block in self.free_blocks() if block[1] >= size]
+        if not candidates:
+            raise AssertionError(f"the scripted L1 cannot fit {size} bytes")
+        address, extent = min(candidates, key=lambda block: (block[1], block[0]))
+        placed = address + extent - size  # top-down inside the chosen block
+        self.blocks[placed] = size
+        return placed
+
+    def reserve_l1(self, mesh, size):
+        del mesh
+        self.reserved.append(size)
+        return ("reservation", self._allocate(size), size)
+
+    def release(self, resource):
+        self.released.append(resource)
+        if isinstance(resource, tuple) and resource[0] == "reservation":
+            self.blocks.pop(resource[1], None)
+
+    def create_global_cb(self, mesh, mapping, size):
+        del mesh, mapping
+        if self.creation_extra:
+            self._allocate(self.creation_extra)
+        data = self._allocate(size)
+        self._allocate(self.CONFIG_PAGE)
+        return ("global-cb", data, size)
+
+    def release_global_cb(self, cb):
+        """Free the blocks the creation made, as dropping the last handle does."""
+
+        data = cb[1]
+        for address in (data, data - self.CONFIG_PAGE):
+            self.blocks.pop(address, None)
+
+
+class NonLoweringL1(ScriptedL1):
+    """An L1 whose reservations never take anything: the loops must be bounded."""
+
+    def reserve_l1(self, mesh, size):
+        del mesh
+        self.reserved.append(size)
+        return ("reservation", None, size)
+
+
+def _headroom_owner(resources, l1, *, headroom, create_global_cb=None):
+    owner = Prefetcher2D(
+        make_config(
+            expected_weight_count=1,
+            defer_global_cb=True,
+            release_global_cb_on_prefill=True,
+            global_cb_headroom=headroom,
+        ),
+        create_global_cb=create_global_cb or resources.create_global_cb,
+        create_address_metadata=resources.create_metadata,
+        deallocate=l1.release,
+        dram_prefetch_start=resources.start,
+        dram_prefetch_stop=resources.stop,
+        l1_block_table=l1.l1_block_table,
+        reserve_l1=l1.reserve_l1,
+    )
+    owner.initialize()
+    owner.register_weight("weight", FakeTensor(owner.config.mesh_device, 101, 128))
+    owner.seal()
+    return owner
+
+
+def test_the_global_cb_is_created_under_reserved_headroom():
+    """The headroom is taken before the buffer and given back after it.
+
+    L1 is allocated top-down and a buffer's address never moves, so anything
+    long-lived allocated while the ~774 kB global circular buffer is resident is
+    stranded *below* it for the life of the process - and the Galaxy prefill
+    embedding's static circular buffers reach 630080, so one stranded byte down
+    there makes every later prefill unplaceable. Measured on `(8, 4)`:
+    `tttv2_milestone_c_evidence/defects/logs/a3_clash_steps_l1.log` attributes a
+    32-byte block at 545760 to the first decode, and
+    `logs/b1_headroom_only_l1.log` shows it gone once 64 kiB of headroom is
+    reserved first.
+
+    Without the reservation this fails on `reserved == [4096]`.
+    """
+
+    resources = ResourceHarness()
+    l1 = ScriptedL1()
+    owner = _headroom_owner(resources, l1, headroom=4096, create_global_cb=l1.create_global_cb)
+
+    owner.activate("decode")
+
+    assert l1.reserved == [4096], "the headroom was not reserved before the global CB"
+    assert l1.released, "the headroom was never released"
+
+
+def test_a_recreated_global_cb_returns_to_its_first_l1_blocks_over_a_leftover_gap():
+    """The buffer comes back to the same blocks even when a gap would swallow the reservation.
+
+    `release_global_cb_on_prefill` frees the buffer on the way into prefill and
+    `_ensure_global_cb` recreates it on the way back into decode - and decode
+    programs already in the ttnn program cache hold its address. Measured with a
+    *fixed* headroom on `(8, 4)`
+    (`tttv2_milestone_c_evidence/defects/logs/b4_headroom_release_addr_l1.log`):
+    the buffer landed at 447296 and then at 414880, 32 416 B apart, and the decode
+    after the recreation hung with no output for four minutes.
+
+    This models the free list the production path presented on the second
+    creation: a decode block inside the old headroom, leaving a gap of **exactly**
+    the bytes the free top has to come down by. A single reservation of that size
+    lands in the gap and lowers nothing, which is why the buffer came back 32 736 B
+    high on both models (`logs/d1_llama_repeat_l1.log`,
+    `logs/d2_qwen_repeat_l1.log`).
+    """
+
+    resources = ResourceHarness()
+    l1 = ScriptedL1()
+    owner = _headroom_owner(resources, l1, headroom=4096, create_global_cb=l1.create_global_cb)
+
+    owner.activate("decode")
+    first = dict(l1.blocks)
+    cb = owner._global_cb
+    owner.activate("prefill")
+    l1.release_global_cb(cb)
+    # The first decode's own 1024 B, placed so that the leftover gap above it is
+    # exactly the distance the free top now has to travel: 997440 - 995904 = 1536,
+    # and 1000000 - 997440 - 1024 = 1536.
+    l1.blocks[997_440] = 1024
+
+    owner.activate("decode")
+
+    assert dict(l1.blocks) == {**first, 997_440: 1024}, "the recreated buffer moved"
+
+
+def test_a_free_gap_cannot_capture_the_global_cb_config_page():
+    """A 192-byte hole anywhere in L1 would take the config page; it is held first.
+
+    A global circular buffer is two allocations and a cached program holds the
+    address of **both** - `CircularBufferImpl::set_global_circular_buffer`
+    captures ``buffer_address()`` and ``config_address()`` once, and
+    `dispatch.cpp` re-sends the captured pair on every launch. Since
+    `FreeListOpt::allocate` takes the smallest free block that fits, a small hole
+    in the resident region captures the config page and moves it away from its own
+    data buffer. Measured on `(8, 4)`, two fresh processes
+    (`logs/k1_llama_chunked_r1.log`, `logs/k2_llama_chunked_r2.log`): the data
+    buffer came back at 510816 both times while the config page moved from 510624
+    to **1367872**, and the chunked-prefill claim failed on it.
+
+    Without the gap-filling pass the config page lands in the hole and the block
+    set no longer matches.
+    """
+
+    resources = ResourceHarness()
+    l1 = ScriptedL1()
+    owner = _headroom_owner(resources, l1, headroom=4096, create_global_cb=l1.create_global_cb)
+
+    owner.activate("decode")
+    first = dict(l1.blocks)
+    cb = owner._global_cb
+    owner.activate("prefill")
+    l1.release_global_cb(cb)
+    # A 32-byte block at 999776 leaves a 192-byte hole at 999808, exactly the
+    # config page's size, high above where the buffer goes.
+    l1.blocks[999_776] = 32
+
+    owner.activate("decode")
+
+    assert dict(l1.blocks) == {**first, 999_776: 32}, "the config page did not come back where it was"
+    assert 999_808 not in l1.blocks, "the hole was reserved but never given back"
+
+
+def test_a_recreated_global_cb_that_moves_is_reported_rather_than_used(expect_error):
+    """A buffer that cannot be put back where it was is an error, not a silent read.
+
+    Decode programs in the ttnn program cache hold the old address; continuing
+    with a buffer somewhere else reads the wrong L1 and produces no error at all -
+    on silicon it hangs. So the owner checks and raises.
+    """
+
+    resources = ResourceHarness()
+    l1 = ScriptedL1()
+    owner = _headroom_owner(resources, l1, headroom=4096, create_global_cb=l1.create_global_cb)
+    owner.activate("decode")
+    cb = owner._global_cb
+    owner.activate("prefill")
+    l1.release_global_cb(cb)
+    # The next creation costs more than the first did, so the buffer lands lower.
+    l1.creation_extra = 512
+    with expect_error(RuntimeError, "did not land on its original L1 blocks"):
+        owner.activate("decode")
+
+
+def test_a_free_top_that_never_comes_down_is_reported(expect_error):
+    """A reservation loop that cannot reach its target is bounded, not spun on."""
+
+    resources = ResourceHarness()
+    l1 = NonLoweringL1()
+    owner = _headroom_owner(resources, l1, headroom=4096, create_global_cb=l1.create_global_cb)
+    with expect_error(RuntimeError, "could not lower the L1 free top"):
+        owner.activate("decode")
+
+
+def test_a_gap_that_never_fills_is_reported(expect_error):
+    """The gap-filling pass is bounded too, and says which pass gave up."""
+
+    resources = ResourceHarness()
+    l1 = NonLoweringL1(blocks={1_000_000: 32, 999_776: 32})
+    owner = _headroom_owner(resources, l1, headroom=4096, create_global_cb=l1.create_global_cb)
+    with expect_error(RuntimeError, "could not fill the free L1 gaps"):
+        owner.activate("decode")
+
+
+def test_zero_headroom_creates_the_global_cb_exactly_as_before():
+    """The default is byte-for-byte the previous behaviour: no reservation, no query."""
+
+    resources = ResourceHarness()
+    l1 = ScriptedL1()
+    owner = _headroom_owner(resources, l1, headroom=0)
+
+    owner.activate("decode")
+
+    assert l1.reserved == []
+    assert l1.reads == 0, "zero headroom must not even query the allocator"
+    assert len(resources.created_cbs) == 1
+
+
+def test_negative_headroom_is_rejected(expect_error):
+    with expect_error(ValueError, "global_cb_headroom cannot be negative"):
+        make_config(global_cb_headroom=-1)
+
+
+def test_a_shared_placement_record_pins_a_second_owner_to_the_first_ones_blocks():
+    """Two owners on one mesh put the buffer in the same L1 blocks, or it is reported.
+
+    The ttnn program cache belongs to the **mesh device** and outlives any one
+    model, and two structurally identical models hash to the same program-cache
+    keys - so the second model's decode reuses programs compiled for the first,
+    and those programs carry the first model's global circular buffer addresses.
+    Measured on `(8, 4)`: with the record held per owner, the second Qwen model's
+    first decode hung in `FDMeshCommandQueue::wait_for_outstanding_reads` with
+    both models' weights already resident
+    (`tttv2_milestone_c_runs/c-defects3/logs/m1b_hang_bt.txt`).
+
+    Without the shared record the second owner records a fresh free top and the
+    buffer lands wherever the second model's own resident L1 puts it.
+    """
+
+    resources = ResourceHarness()
+    l1 = ScriptedL1()
+    placement = GlobalCBPlacement()
+
+    first = Prefetcher2D(
+        make_config(
+            expected_weight_count=1,
+            defer_global_cb=True,
+            release_global_cb_on_prefill=True,
+            global_cb_headroom=4096,
+        ),
+        create_global_cb=l1.create_global_cb,
+        create_address_metadata=resources.create_metadata,
+        deallocate=l1.release,
+        dram_prefetch_start=resources.start,
+        dram_prefetch_stop=resources.stop,
+        l1_block_table=l1.l1_block_table,
+        reserve_l1=l1.reserve_l1,
+        global_cb_placement=placement,
+    )
+    first.initialize()
+    first.register_weight("weight", FakeTensor(first.config.mesh_device, 101, 128))
+    first.seal()
+    first.activate("decode")
+    cb = first._global_cb
+    blocks = dict(l1.blocks)
+    first.cleanup()
+    l1.release_global_cb(cb)
+
+    assert placement.blocks is not None, "the first owner did not record its placement"
+
+    second = Prefetcher2D(
+        make_config(
+            expected_weight_count=1,
+            defer_global_cb=True,
+            release_global_cb_on_prefill=True,
+            global_cb_headroom=4096,
+        ),
+        create_global_cb=l1.create_global_cb,
+        create_address_metadata=resources.create_metadata,
+        deallocate=l1.release,
+        dram_prefetch_start=resources.start,
+        dram_prefetch_stop=resources.stop,
+        l1_block_table=l1.l1_block_table,
+        reserve_l1=l1.reserve_l1,
+        global_cb_placement=placement,
+    )
+    second.initialize()
+    second.register_weight("weight", FakeTensor(second.config.mesh_device, 101, 128))
+    second.seal()
+    # The second model's resident L1 differs by one block, which is enough to move
+    # the buffer unless the recorded free top is reproduced.
+    l1.blocks[999_936] = 64
+    second.activate("decode")
+
+    assert dict(l1.blocks) == {**blocks, 999_936: 64}, "the second owner's buffer did not land on the first's blocks"
+
+
+def test_an_owner_with_no_shared_record_keeps_its_own():
+    """The default is the previous per-owner behaviour, unchanged."""
+
+    resources = ResourceHarness()
+    l1 = ScriptedL1()
+    owner = _headroom_owner(resources, l1, headroom=4096, create_global_cb=l1.create_global_cb)
+
+    owner.activate("decode")
+
+    assert owner._global_cb_placement.blocks is not None
+    assert (
+        owner._global_cb_placement is not _headroom_owner(resources, ScriptedL1(), headroom=4096)._global_cb_placement
+    )
+
+
+def test_a_gap_that_is_not_a_multiple_of_32_is_taken_as_far_as_it_can_be():
+    """An unaligned gap leaves a sliver, and a sliver cannot hold the config page.
+
+    An L1 reservation is a whole number of 32-byte units, so a 936-byte hole can
+    only be taken 928 bytes deep. That is safe rather than approximate: the 8-byte
+    leftover is smaller than anything the creation allocates, the smallest of which
+    is the 192-byte config page.
+    """
+
+    resources = ResourceHarness()
+    l1 = ScriptedL1()
+    owner = _headroom_owner(resources, l1, headroom=4096, create_global_cb=l1.create_global_cb)
+
+    owner.activate("decode")
+    first = dict(l1.blocks)
+    cb = owner._global_cb
+    owner.activate("prefill")
+    l1.release_global_cb(cb)
+    # A 64-byte block at 999000 leaves a 936-byte hole at 999064, which is 8 bytes
+    # more than a multiple of 32.
+    l1.blocks[999_000] = 64
+
+    owner.activate("decode")
+
+    assert dict(l1.blocks) == {**first, 999_000: 64}, "the unaligned gap captured part of the creation"
+    assert 928 in l1.reserved, "the gap was not taken as far as 32-byte units allow"

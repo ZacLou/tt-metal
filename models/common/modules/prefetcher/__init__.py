@@ -1,4 +1,5 @@
 from models.common.modules.prefetcher.prefetcher_2d import (
+    GlobalCBPlacement,
     Prefetcher2D,
     Prefetcher2DConfig,
     Prefetcher2DContext,
@@ -7,6 +8,7 @@ from models.common.modules.prefetcher.prefetcher_2d import (
 )
 
 __all__ = [
+    "GlobalCBPlacement",
     "Prefetcher2D",
     "Prefetcher2DConfig",
     "Prefetcher2DContext",
