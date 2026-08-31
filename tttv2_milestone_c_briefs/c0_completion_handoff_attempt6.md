@@ -1,9 +1,7 @@
 # `c-defects` — completion handoff (attempt 6)
 
-**Last updated:** 2026-08-31T22:08Z — **D-C7's gate test passes on BOTH models at the fixed
-commit**: Llama 797.78 s, Qwen 445.81 s. A 53-run chain (`q13b` → `q14` → `q12`) is draining behind
-them: runs 2 and 3 of the gate, the full regression set, and the executor clash question re-asked
-at HEAD.
+**Last updated:** 2026-08-31T22:57Z — **D-C7's gate is MET on BOTH models, 3 fresh processes
+each, full 80-layer shape, one commit.** The 43-run regression set (`q14`) is now draining.
 **Base commit:** `faec6e59938`. **Branch:** `apbernal/tttv2_wh_glx_2d_modules_milestone_c`.
 **Job window:** started 20:52Z.
 
@@ -463,3 +461,40 @@ it, and I do not exit before then.
 3. **`q12`, 6 runs** — `test_executor_warmup_and_program_identity[decode_first]` ×3 and
    `test_executor_repeated_startup_and_cleanup` ×3, the pre-fix clash reproductions from
    `c-exec-llama`, re-asked at HEAD for the first time (see §10).
+
+
+## 24. Gate runs as they land
+
+| run | model | result |
+| --- | --- | --- |
+| `z6_llama_two_pools_r1` | Llama | **1 passed**, 797.78 s |
+| `z8_llama_two_pools_r2` | Llama | **1 passed**, 1150.68 s |
+| `z9_llama_two_pools_r3` | Llama | **1 passed**, 820.22 s |
+| `z7_qwen_two_pools_r1` | Qwen | **1 passed**, 445.81 s |
+| `z10_qwen_two_pools_r2` | Qwen | **1 passed**, 437.29 s |
+| `z11_qwen_two_pools_r3` | Qwen | **1 passed**, 272.24 s |
+
+**So D-C7's gate line — "two full models built, used and closed in one process, the second creating
+its global circular buffer; three fresh processes" — is MET on Llama for the first time in this
+milestone**: `z6` 797.78 s, `z8` 1150.68 s, `z9` 820.22 s, all `1 passed`, all at the full 80-layer
+shape, all at `299440bb276`. The same node at `faec6e59938` was `rc=124` three times, on three
+byte-identical DRAM `Out of Memory` aborts at `layer53_wqkv_ring`. **And it is met on Qwen too**: `z7` 445.81 s, `z10` 437.29 s, `z11` 272.24 s, all `1 passed`, at
+the same commit. Qwen passed this case before the change as well (`t1`–`t3`, 411/313/321 s), so on
+that model the result is that the shared-code fix **did not move it** — which is what this brief
+requires of a shared-code fix.
+
+**Six runs, six passes, two models, one commit.** The gate line is closed.
+
+## 25. `q15`, written and not yet launched — 27 runs
+
+The finish condition asks for area 4's five claims "evaluated on silicon at three fresh processes
+each". They are — but across **three different commits**: attempt 3 measured nine of the ten
+claim-verdicts at `d40b2093783`/`32e552bb0b2`, and attempt 6 measured the tenth. `q14` re-measures
+the greedy claim and the seeded-slot claim at `299440bb276`. `q15` re-measures the other three —
+the padded-vocabulary claim, the near-zero-temperature check for Milestone A's D4, and the per-slot
+heterogeneous controls — on **both** models, three fresh processes each, so the whole of area 4
+stands at one commit. It also re-measures the two claims the address clash blocked that are not the
+D-C7 gate (block-level cross-slot isolation, chunked prefill) under the changed `close()`, and asks
+`c-exec-llama`'s third handed-over defect — `test_reference_prefill_and_decode` at 2048 returning
+non-finite decode logits through `GalaxyDirectRunner`, the one of the three that **is** shared code
+— at HEAD for the first time.

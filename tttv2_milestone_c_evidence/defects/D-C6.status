@@ -46,3 +46,29 @@ are reported as failing.
 
 Logs: tttv2_milestone_c_evidence/defects/logs/ - `dc6_{q,l}_concat_len*_run{1,2,3}.log`,
 `c12_q_concat_len128_run1.log` (the first run that ever placed), `concat_tie_probe.log`.
+
+--- c-defects attempt 6, 2026-08-31: re-affirmed DEFERRED, and nothing was re-measured ---
+
+This attempt did not re-open D-C6 and did not re-run the concat-32 sweep. The call above
+stands as attempt 1 made it, with attempt 1's numbers behind it.
+
+What Milestone C therefore does not have, stated once more because the brief requires the
+handoff to say it plainly:
+
+  * batched (concat-32) prefill is NOT qualified on Qwen. Llama passes at 128, 256, 512,
+    1024 and 2048, three fresh processes each; Qwen passes only at 512, fails 3/3 at 128
+    (slots [4, 11]) and 3/3 at 256 (slot [25]), and has never been run at 1024 or 2048.
+  * area 2's real question - do padded rows change an active row's logits at active batch
+    16, 31 and 32 - is therefore answered for Llama and NOT for Qwen.
+  * nothing downstream may be built on concat-32 for Qwen. Milestone C's prefill is
+    sequential per row by the 2026-08-28 scope decision, sequential prefill is qualified on
+    both models, and this changes nothing about that.
+
+The residual is NOT the L1 overflow D-C6 names - that is fixed and concat-32 places on this
+mesh - and it is NOT a bfloat16 tie: the concatenated and sequential logits differ by up to
+1.06, eight ulp at magnitude 15 (logs/concat_tie_probe.log). Whether that is a different
+accumulation order or a real cross-row effect is not established, and no attempt of this job
+has separated them.
+
+Attempt 6's weight-release change (299440bb276) touches teardown only and does not bear on
+any of the above.

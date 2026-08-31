@@ -1,0 +1,42 @@
+# c-defects attempt 6, queue 15 — the rest of area 4, re-measured at the fixed commit.
+#
+# The gate wording is "all five area-4 claims evaluated on silicon, three fresh
+# processes each". They ARE, but across three different commits: attempt 3 measured
+# nine of the ten claim-verdicts at d40b2093783/32e552bb0b2 and attempt 6 measured the
+# tenth. q14 re-measures the greedy claim and the seeded-slot claim at 299440bb276;
+# this queue re-measures the other three, so the whole of area 4 stands at ONE commit
+# on BOTH models. Qwen first because it is a third of the cost per run.
+
+zq1_qwen_padded_vocab_r1|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_no_padded_vocabulary_id_is_ever_sampled|
+zq2_qwen_padded_vocab_r2|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_no_padded_vocabulary_id_is_ever_sampled|
+zq3_qwen_padded_vocab_r3|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_no_padded_vocabulary_id_is_ever_sampled|
+zq4_qwen_near_zero_temp_r1|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_near_zero_temperature_collapses_onto_the_host_argmax|
+zq5_qwen_near_zero_temp_r2|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_near_zero_temperature_collapses_onto_the_host_argmax|
+zq6_qwen_near_zero_temp_r3|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_near_zero_temperature_collapses_onto_the_host_argmax|
+zq7_qwen_per_slot_controls_r1|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_per_slot_heterogeneous_sampling_controls|
+zq8_qwen_per_slot_controls_r2|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_per_slot_heterogeneous_sampling_controls|
+zq9_qwen_per_slot_controls_r3|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_per_slot_heterogeneous_sampling_controls|
+zl1_llama_padded_vocab_r1|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_no_padded_vocabulary_id_is_ever_sampled|
+zl2_llama_padded_vocab_r2|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_no_padded_vocabulary_id_is_ever_sampled|
+zl3_llama_padded_vocab_r3|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_no_padded_vocabulary_id_is_ever_sampled|
+zl4_llama_near_zero_temp_r1|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_near_zero_temperature_collapses_onto_the_host_argmax|
+zl5_llama_near_zero_temp_r2|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_near_zero_temperature_collapses_onto_the_host_argmax|
+zl6_llama_near_zero_temp_r3|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_near_zero_temperature_collapses_onto_the_host_argmax|
+zl7_llama_per_slot_controls_r1|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_per_slot_heterogeneous_sampling_controls|
+zl8_llama_per_slot_controls_r2|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_per_slot_heterogeneous_sampling_controls|
+zl9_llama_per_slot_controls_r3|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_per_slot_heterogeneous_sampling_controls|
+# The two claims the Llama L1 address clash blocked that are NOT the D-C7 gate.
+# Measured 3/3 at attempt 3's commit; re-measured here under the changed close().
+zm1_llama_cross_slot_r1|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_write_for_one_user_never_appears_in_another_users_blocks|
+zm2_llama_cross_slot_r2|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_write_for_one_user_never_appears_in_another_users_blocks|
+zm3_llama_cross_slot_r3|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_write_for_one_user_never_appears_in_another_users_blocks|
+zm4_llama_chunked_prefill_r1|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_chunked_prefill_matches_a_single_uncached_prefill|
+zm5_llama_chunked_prefill_r2|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_chunked_prefill_matches_a_single_uncached_prefill|
+zm6_llama_chunked_prefill_r3|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_chunked_prefill_matches_a_single_uncached_prefill|
+# The third defect c-exec-llama handed over, and the only one of the three that IS
+# shared Galaxy code: test_reference_prefill_and_decode at 2048 returned non-finite
+# DECODE logits through GalaxyDirectRunner, 1 failed in 220 s at 2b463f17fcd. Not in
+# this brief's finish condition; re-asked at HEAD because it is cheap and it is mine.
+zr1_ref2048_r1|1800|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_reference_prefill_and_decode[wormhole_b0-2048-device_params0-mesh_device0]|
+zr2_ref2048_r2|1800|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_reference_prefill_and_decode[wormhole_b0-2048-device_params0-mesh_device0]|
+zr3_ref2048_r3|1800|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_reference_prefill_and_decode[wormhole_b0-2048-device_params0-mesh_device0]|

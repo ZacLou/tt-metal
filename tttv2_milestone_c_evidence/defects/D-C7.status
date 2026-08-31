@@ -1,6 +1,6 @@
-FIXED in mechanism; the brief's gate is met at the full 80-layer shape in one process on
-both models, and the three-fresh-process runs of the committed gate test were IN FLIGHT
-when this file was last written. See the tail for exactly what is owed.
+FIXED. The brief's gate is MET: two full models built, used and closed in one process with
+the second creating its global circular buffer, three fresh processes, on BOTH models, at
+the full 80-layer shape, all at commit 299440bb276.
 
 --- c-defects attempt 6, 2026-08-31 (supersedes the attempt-3 revision below the line) ---
 
@@ -43,10 +43,21 @@ WHERE IT STANDS, measured:
       DRAM residue 0 after each; 0 of 240 registered weights retained either time; zero
       "Out of Memory" lines. Before the fix the same shape died 3/3 at layer53_wqkv_ring.
 
-  The committed gate test itself - test_llama_two_paged_pools_agree_and_a_contiguous_cache
-  _is_unreachable, which additionally asserts the two pools' prefill and decode logits agree
-  at PCC >= 0.99 across all 32 slots - is queued at three fresh processes on both models
-  (q13 z6/z7, q13b z8-z11). Read RESULTS.md for those rows before trusting this line.
+  THE COMMITTED GATE TEST, three fresh processes, both models, commit 299440bb276. It does
+  more than build two models: it asserts the two pools' prefill AND decode logits agree at
+  PCC >= 0.99 across all 32 slots, so the second model computes the same answers as the
+  first through a different block allocation.
+
+      z6_llama_two_pools_r1    1 passed   797.78 s
+      z8_llama_two_pools_r2    1 passed  1150.68 s
+      z9_llama_two_pools_r3    1 passed   820.22 s
+      z7_qwen_two_pools_r1     1 passed   445.81 s
+      z10_qwen_two_pools_r2    1 passed   437.29 s
+      z11_qwen_two_pools_r3    1 passed   272.24 s
+
+  Six runs, six passes. The same Llama node one commit earlier was rc=124 three times
+  (t4/t5/t6), each on a byte-identical DRAM Out of Memory at layer53_wqkv_ring followed by
+  an un-drainable teardown that burned its 3600 s bound.
 
 Prefetcher2D's cleanup contract in models/common/modules/README.md is updated for what is
 now guaranteed.

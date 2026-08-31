@@ -18,6 +18,36 @@ first time in either direction:
     area 1, block-level cross-slot isolation:  i1b/i2b/i3b  453.68 / 352.52 / 280.35 s
     area 3, chunked prefill:                   k1b/k2b/k3b  217.74 / 216.19 / 223.54 s
 
+--- c-defects attempt 6, 2026-08-31: the third blocked claim IS now measured ---
+
+The paragraph below is superseded. `test_<model>_two_paged_pools_agree_and_a_contiguous_cache
+_is_unreachable` - two models in one process - now passes at the full 80-layer shape, three
+fresh processes, on BOTH models, at commit 299440bb276:
+
+    z6_llama_two_pools_r1    1 passed   797.78 s
+    z8_llama_two_pools_r2    1 passed  1150.68 s
+    z9_llama_two_pools_r3    1 passed   820.22 s
+    z7_qwen_two_pools_r1     1 passed   445.81 s
+    z10_qwen_two_pools_r2    1 passed   437.29 s
+    z11_qwen_two_pools_r3    1 passed   272.24 s
+
+D-C14 (the hang the paragraph below names) was fixed at faec6e59938 and is qualified; behind
+it was D-C15, a DRAM retention defect with nothing to do with the clash - close() never
+released the layer weights, 398 617 984 B per bank at 80 layers - fixed at 299440bb276. See
+D-C14.status and D-C15.status.
+
+So all three claims the Llama L1 address clash blocked are measured:
+    area 1, block-level cross-slot isolation   i1b/i2b/i3b   3/3
+    area 3, chunked prefill                    k1b/k2b/k3b   3/3
+    two models in one process                  z6/z8/z9      3/3   (this attempt)
+
+ALSO NOTE, for anyone reading `c-exec-llama`'s account of this defect: that job ran at
+commit 2b463f17fcd and EXITED at 2026-08-30T00:02Z, while the clash fix landed at
+32e552bb0b2 on 2026-08-31 11:32. Its "prefill after a decode" reproduction, its three
+addresses (543488, 542016, 544832) and its conclusion that the clash blocks serving are all
+PRE-FIX measurements. Attempt 6 re-asks them at HEAD (queue q12).
+
+--- superseded paragraph, kept for the record ---
 THE THIRD BLOCKED CLAIM IS NOT MEASURED. `test_qwen_two_paged_pools_agree_and_a_contiguous
 _cache_is_unreachable` (two models in one process) no longer hits the clash and no longer
 hits D-C13's OOM - it now HANGS, at the second model's first decode, on a distinct defect
