@@ -1,0 +1,48 @@
+DEFERRED
+The L1 overflow that D-C6 names is FIXED, and concat-32 prefill now runs end to end on this
+mesh for the first time. What is deferred is the numerical claim behind it on Qwen at the two
+shortest lengths.
+
+FIXED, and qualified: `recipes.dense_matmul_output_blocks` (commit 60823a3888f, c-defects
+attempt 1) re-blocks the 2D multicast matmul's output so its circular buffers stop growing with
+the batch. `ttnn` defaults `out_block_h`/`out_block_w` to `per_core_M`/`per_core_N`, and the
+concat-32 prefill multiplies the row count by 32, so the output circular buffer grew with the
+whole per-core tile count. Modelled against silicon to the byte:
+  concat-32 len128 QKV: resolved per_core=(32,14) in0_block_w=4 -> model 1 671 168 B,
+                        validate_circular_buffer_region said 1 669 312 B
+  concat-32 len256 QKV: resolved per_core=(64,14) in0_block_w=4 -> model 3 112 960 B,
+                        validate_circular_buffer_region said 3 111 104 B
+Every concat length from 128 to 2048 now resolves out_block=(16,14) at 950 272 B, under the
+GALAXY_MATMUL_CB_BUDGET of 1 400 000 B, which sits between the largest currently-qualified
+config (1 343 488 B, Llama's 2048-token `wo`) and the measured ceiling (1 499 136 B) - so every
+shape Milestone B qualified keeps its program config byte for byte.
+
+MEASURED on silicon, three fresh processes each (c-defects attempt 1, RESULTS.md):
+  Llama 128, 256, 512, 1024, 2048   PASS x3 each   concat-32 == sequential argmax in 32/32
+  Qwen  512                          PASS x3
+  Qwen  128                          FAIL x3       slots [4, 11] disagree
+  Qwen  256                          FAIL x3       slot  [25]    disagrees
+  Qwen  1024, 2048                   NOT RUN - `_BATCHED_LENGTHS` stops at 512 and its own
+                                     comment says to extend only once 128-512 pass once.
+All eleven of Milestone B's concat-32 runs, on both models, died on the L1 overflow before any
+row's logits could be inspected, so every number above is new.
+
+WHY DEFERRED, not fixed: the residual is not the overflow and not a tie. `logs/concat_tie_probe.log`
+shows the concatenated and sequential paths' logits differing by up to 1.06 - eight bfloat16 ulp
+at magnitude 15, not one - and 7 of 32 rows have a top-two gap below that, which is the size of
+effect that predicts 2 disagreements at 128, 1 at 256 and 0 at 512. So concat-32 is close to
+sequential prefill but NOT numerically equivalent, and the cause of a 1.06 divergence is not
+established: it is consistent with a different accumulation order and also with a real
+cross-row effect, and this job did not separate them.
+
+WHAT MILESTONE C THEREFORE DOES NOT HAVE: batched (concat-32) prefill is not qualified on
+Qwen. Llama's sweep passes at all five lengths, Qwen's passes only at 512, and Qwen at 1024 and
+2048 has never been run. Nothing downstream may be built on concat-32 for Qwen. Milestone C's
+prefill is sequential per row by the 2026-08-28 scope decision and this changes nothing about
+that: sequential prefill is the accepted fallback and it is qualified on both models.
+
+NOTHING WAS RELAXED. The gate is an exact argmax comparison and it still is; the failing cases
+are reported as failing.
+
+Logs: tttv2_milestone_c_evidence/defects/logs/ - `dc6_{q,l}_concat_len*_run{1,2,3}.log`,
+`c12_q_concat_len128_run1.log` (the first run that ever placed), `concat_tie_probe.log`.

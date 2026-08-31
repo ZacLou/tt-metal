@@ -1,0 +1,35 @@
+MET (the gate as worded), with three claims failing deterministically
+Fixed and committed: d40b2093783 (D-C5, D-C8, D-C10, D-C9), 49a69560329 + 0c6c8bc3e52 (D-C11).
+Composition qualified 3/3 on silicon before D-C11 (logs/c8_selector_run{1,2,3}.log) and 7 passed
+after it (logs/c18_selector_after_dc11.log).
+Device sampling runs end to end on Qwen in the production shape: all five area-4 claims reach
+their assertions, run 1 of 3 (logs/d11_q_*_run1.log). One passes, four fail; nothing relaxed.
+NOT DONE for the finish condition: runs 2 and 3 on Qwen, and all three runs on Llama.
+New defects found behind D-C5/D-C8 and reported: D-C10, D-C11 (both fixed), D-C12 (open).
+
+--- c-defects attempt 3, 2026-08-31 ---
+THE GATE AS WORDED IS MET, and I did not re-measure it: attempt 1's thirty area-4 runs are
+inherited as measured. The finish condition asks that device sampling run end to end on both
+models and that all five area-4 claims be EVALUATED on silicon at three fresh processes each.
+All thirty runs reached their assertions; logs/d11_{q,l}_*_run{1,2,3}.log and logs/dc9fix*.
+
+What the evaluation says, stated plainly rather than as a tick:
+  Qwen   greedy == host argmax          31/32 x3, slot [4] is an exact bfloat16 tie at 15.375
+         no padded id ever sampled      3 passed x3
+         T = 0.02 collapses onto argmax 30/32 x3, slots [4, 21]
+         a seeded slot repeats          fail x3  - D-C12, the warm ttnn program cache
+         per-slot heterogeneous controls pass x3
+  Llama  greedy == host argmax          pass 32/32 x3
+         no padded id ever sampled      3 passed x3
+         T = 0.02 collapses onto argmax 30/32 x3, slots [2, 11]
+         a seeded slot repeats          fail x3  - the L1 address clash, now FIXED, so this
+                                        one is re-runnable and was queued; the mesh went down
+                                        before it ran (l1b/l2b/l3b are dead-mesh artifacts)
+         per-slot heterogeneous controls pass x3
+
+Every residual is bit-deterministic across three fresh processes. NOTHING WAS RELAXED. Two
+residuals have no measurement behind them and are named as open: what a stochastic draw should
+do when the top-two logit gap approaches the bfloat16 floor (Qwen [4, 21], Llama [2, 11]), and
+D-C12, which is the highest open defect in the ledger after D-C14.
+
+D-C2 recorded and NOT changed, per the brief: the sampling seed is per-(request, slot).

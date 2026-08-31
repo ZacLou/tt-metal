@@ -1,0 +1,49 @@
+OPEN - reduced to a cause, fix implemented and host-qualified, NOT on silicon
+
+Two structurally identical Galaxy models in one process must put their global circular
+buffers at the SAME L1 addresses, and nothing made them.
+
+Symptom: the second model's first decode hangs. No output, CPU burning in the profiler and
+completion-queue reader threads, both models' weights already resident.
+  logs/m1b_qwen_two_pools_r1.log                                  rc=143 after 21 min
+  tttv2_milestone_c_runs/c-defects3/logs/m1b_hang_bt.txt          gdb, attached before any
+                                                                  recovery attempt
+    #0  pthread_cond_wait
+    #2  FDMeshCommandQueue::wait_for_outstanding_reads
+    #3  FDMeshCommandQueue::finish_nolock
+    #5  distributed::Synchronize
+    #6  ttnn.synchronize_device
+  1676 "cache hit" lines, and 64 layers x ~13 tensors x 2 models is about that.
+  logs/e1_qwen_two_pools_l1.log (attempt 2)  38 cache hits at a 1-layer subset = 2 x 19, so
+  the SAME point under an earlier version of this code. D-C14 predates the D-C13 fix and was
+  masked by it, because the allocation used to fail first.
+
+Cause, read out of tt_metal rather than inferred:
+  - the ttnn program cache belongs to the MESH DEVICE, not to a model, and outlives close();
+  - it keys on op-and-config hashes, so the second model's decode is a cache HIT on programs
+    compiled for the first;
+  - CircularBufferImpl::set_global_circular_buffer (circular_buffer.cpp:179) captures
+    buffer_address() AND config_address() once; dispatch.cpp:3035 re-sends that captured pair
+    on every launch, and kernels read the remote-CB config from that address at runtime.
+  So a second model whose buffer lands elsewhere is read at the first model's addresses.
+
+Fix, implemented in commit 32e552bb0b2, HOST-QUALIFIED ONLY:
+  GlobalCBPlacement - the free top and the creation's blocks - is a record the owner accepts
+  by injection. An owner given none keeps its own, which is byte-for-byte the previous
+  behaviour. models/common/models/galaxy/prefetch.py holds one per mesh device for the life of
+  the process, because "one process, one mesh, several models" is a model-level fact and not a
+  module one; forget_galaxy_global_cb_placement exists for a test that wants a clean one.
+  test_prefetcher_2d.py 33 passed, including
+  test_a_shared_placement_record_pins_a_second_owner_to_the_first_ones_blocks, which fails
+  without the shared record.
+
+NOT QUALIFIED ON SILICON. The mesh lost board 23 at 11:10Z and did not come back:
+  "Read 0xffffffff over PCIe ID 23: the board should be reset"
+  ten reset attempts, four mechanisms, all "POST_RESET failed for device 23".
+
+NEXT STEP: on a healthy mesh, test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is
+_unreachable and its Llama twin, three fresh processes each. If the hang is gone, D-C7's gate
+and the clash's third blocked claim both close. If it is not, the next thing to measure is
+whether the second model's buffer landed on the recorded blocks - the owner now logs
+"[prefetcher] global circular buffer at L1 blocks [...]" at every creation, so the answer is
+in the log without a probe.

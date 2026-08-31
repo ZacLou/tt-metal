@@ -1,0 +1,20 @@
+# The three claims the address clash blocked (brief section 3), three fresh
+# processes each, plus the seeded-slot claim that aborted at 544832 on all three
+# of attempt 1's runs.
+i1_llama_cross_slot_r1|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_write_for_one_user_never_appears_in_another_users_blocks|
+i2_llama_cross_slot_r2|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_write_for_one_user_never_appears_in_another_users_blocks|
+i3_llama_cross_slot_r3|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_write_for_one_user_never_appears_in_another_users_blocks|
+k1_llama_chunked_r1|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_chunked_prefill_matches_a_single_uncached_prefill|
+k2_llama_chunked_r2|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_chunked_prefill_matches_a_single_uncached_prefill|
+k3_llama_chunked_r3|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_chunked_prefill_matches_a_single_uncached_prefill|
+# D-C7's own gate: two models built, used and closed in one process. Failed 3/3
+# at attempt 1 on D-C13 (fragmentation, largest free block 759488 vs 792064).
+m1_qwen_two_pools_r1|3600|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+m2_qwen_two_pools_r2|3600|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+m3_qwen_two_pools_r3|3600|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+j1_llama_two_pools_r1|3600|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+j2_llama_two_pools_r2|3600|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+j3_llama_two_pools_r3|3600|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+l1_llama_seeded_slot_r1|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs|
+l2_llama_seeded_slot_r2|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs|
+l3_llama_seeded_slot_r3|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs|

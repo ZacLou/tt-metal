@@ -1,0 +1,16 @@
+# READY TO RUN on a healthy mesh, against commit 32e552bb0b2 or later.
+# This is everything c-defects attempt 3 had queued when the mesh lost board 23.
+p3_partition|600|models/common/tests/models/galaxy/test_partition_wh_galaxy.py|
+r3_s7_page_table_placement_wh_galaxy|900|models/common/tests/models/galaxy/test_step7_page_table_placement_wh_galaxy.py|
+# D-C7's gate and the clash's third blocked claim, both behind D-C14.
+m1c_qwen_two_pools_r1|3600|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+m2c_qwen_two_pools_r2|3600|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+m3c_qwen_two_pools_r3|3600|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+j1c_llama_two_pools_r1|3600|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+j2c_llama_two_pools_r2|3600|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+j3c_llama_two_pools_r3|3600|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+# Llama's seeded-slot area-4 claim, which aborted on the clash 3/3 at attempt 1 and is
+# now re-runnable. l1b/l2b/l3b are dead-mesh artifacts, not results.
+l1c_llama_seeded_slot_r1|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs|
+l2c_llama_seeded_slot_r2|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs|
+l3c_llama_seeded_slot_r3|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs|

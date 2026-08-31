@@ -1,0 +1,4 @@
+# Diagnostic: does the SECOND model in a process put its global circular buffer
+# at the same L1 blocks as the first? One layer, so the hang point is ~2 min away
+# rather than ~20. The production owner now logs its placement at every creation.
+d1_two_pools_placement_sub|900|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|QWEN3_32B_GALAXY_TEST_LAYERS=1

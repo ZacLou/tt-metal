@@ -1,0 +1,10 @@
+# The Llama clash gate at the shape it failed in: full 80 layers, no layer subset,
+# three fresh processes. d11_l_repeat_run{1,2,3} failed here 3/3 at 544832.
+g3_llama_repeat_full_r1|1800|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_repeated_requests_and_deterministic_cleanup|
+g4_llama_repeat_full_r2|1800|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_repeated_requests_and_deterministic_cleanup|
+g5_llama_repeat_full_r3|1800|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_repeated_requests_and_deterministic_cleanup|
+# The same gate on Qwen: the change is shared Galaxy code and Qwen passed this
+# test before it, so this is the no-regression half of the claim.
+g6_qwen_repeat_full_r1|1800|models/common/tests/models/qwen3_32b_galaxy/test_full_model_wh_galaxy.py::test_qwen3_32b_galaxy_repeated_requests_and_deterministic_cleanup|
+g7_qwen_repeat_full_r2|1800|models/common/tests/models/qwen3_32b_galaxy/test_full_model_wh_galaxy.py::test_qwen3_32b_galaxy_repeated_requests_and_deterministic_cleanup|
+g8_qwen_repeat_full_r3|1800|models/common/tests/models/qwen3_32b_galaxy/test_full_model_wh_galaxy.py::test_qwen3_32b_galaxy_repeated_requests_and_deterministic_cleanup|

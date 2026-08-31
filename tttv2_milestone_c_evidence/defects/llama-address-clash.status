@@ -1,0 +1,37 @@
+FIXED
+
+Qualified on silicon at the shape it failed in, 2026-08-31 (c-defects attempt 3).
+
+  test_llama33_70b_galaxy_repeated_requests_and_deterministic_cleanup, full 80 layers:
+    n1_llama_repeat_full_r1   1 passed  234.34 s   logs/n1_llama_repeat_full_r1.log
+    n2_llama_repeat_full_r2   1 passed  243.46 s   logs/n2_llama_repeat_full_r2.log
+    n3_llama_repeat_full_r3   1 passed  300.20 s   logs/n3_llama_repeat_full_r3.log
+  against d11_l_repeat_run{1,2,3}, which failed 3/3 at L1 buffer 544832.
+
+  The same node on Qwen, to show the shared change does not move it:
+    n4_qwen_repeat_full_r1    1 passed  312.51 s
+    n5_qwen_repeat_full_r2    1 passed  152.94 s
+    n6_qwen_repeat_full_r3    1 passed  148.35 s
+
+Two of the three claims the clash blocked are now measured, both 3/3 and both for the
+first time in either direction:
+    area 1, block-level cross-slot isolation:  i1b/i2b/i3b  453.68 / 352.52 / 280.35 s
+    area 3, chunked prefill:                   k1b/k2b/k3b  217.74 / 216.19 / 223.54 s
+
+THE THIRD BLOCKED CLAIM IS NOT MEASURED. `test_qwen_two_paged_pools_agree_and_a_contiguous
+_cache_is_unreachable` (two models in one process) no longer hits the clash and no longer
+hits D-C13's OOM - it now HANGS, at the second model's first decode, on a distinct defect
+(D-C14: the ttnn program cache is per mesh device and outlives a model, so two identical
+models share compiled decode programs and therefore the first model's global-CB addresses).
+D-C14's fix is implemented and host-qualified; it is NOT on silicon, because the mesh lost
+board 23 to POST_RESET at 11:10Z and ten reset attempts across four mechanisms did not
+recover it.
+
+Fix: commit 32e552bb0b2. `release_global_cb_on_prefill` is now the default for both Galaxy
+models (forced by arithmetic: 869 056 B of L1 above the prefill CB region end against
+127 776 + 792 256 = 920 032 B needed, so the buffer and a prefill program of this shape
+cannot coexist on any allocation order), plus `global_cb_headroom` and
+`Prefetcher2D._allocate_global_cb`, which holds every free L1 gap above the low region,
+reproduces the free-region top the first creation saw, and raises if the creation's blocks
+move. Tests: test_prefetcher_2d.py 33 passed, 22 before; removing only the gap-filling pass
+fails exactly the two gap cases.

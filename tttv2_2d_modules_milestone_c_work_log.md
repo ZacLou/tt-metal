@@ -210,3 +210,55 @@ smaller than the construction ceiling has to reach the *model*, because `Attenti
 validates against the block count its own metadata declares. And the prefill rotary must use the
 model's qualified slice, not a device gather: the gather left the first layer's K at PCC 0.907 while
 the same request's logits agreed at 0.9994.
+
+## 2026-08-31 — `c-defects` attempt 3: the global circular buffer has an address
+
+**The Llama L1 address clash is fixed**, and it was never one defect. Three earlier accounts read
+the message wrong in the same two ways: `validate_circular_buffer_region` computes one device-wide
+lowest-occupied L1 address *before* it loops over circular-buffer core ranges, so the core range in
+the message names the **circular buffers** and not the clashing buffer; and the allocator's block
+table prints addresses without `offset_bytes_` (105 664 B here) while every allocator message adds
+it. Reconciled, the clashing buffer is **32 bytes** — which is why a filter for live blocks over
+100 kB never found it.
+
+Then the arithmetic removes an option. 869 056 B of L1 lie above the 630080 that the prefill
+embedding's static circular buffers reach; the resident model after a decode is 127 776 B and the
+buffer with its config page is 792 256 B. **920 032 does not fit in 869 056**, so the buffer and a
+prefill program of this shape cannot coexist on any allocation order. `defer_global_cb` covers only
+the first prefill, so `release_global_cb_on_prefill` is *required*, not optional, and is now the
+default for both Galaxy models. A serving system interleaves prefill and decode by construction.
+
+**Everything else follows from one allocator rule: `FreeListOpt::allocate` takes the smallest free
+block that fits.** L1 is top-down and an address never moves, so the first decode strands 32 bytes
+*under* the resident buffer and releasing does not move them — hence `global_cb_headroom`. A
+recreated buffer that lands elsewhere is a wrong-address read, not an error, because
+`CircularBufferImpl::set_global_circular_buffer` captures `buffer_address()` and `config_address()`
+once and `dispatch.cpp` re-sends the captured pair on every launch — on silicon it **hung**. A fixed
+headroom cannot put it back; reproducing the free-region top can, and reserving the missing bytes
+*once* cannot, because the leftover of the previous headroom is a free gap of exactly that size and
+the allocator prefers it: the buffer came back **32 736 B high on both models, to the byte**. And a
+global circular buffer is **two** allocations — the data buffer came back at 510816 in two fresh
+processes while the 192-byte config page moved to **1367872**, 850 kB away, and chunked prefill
+failed on it. So every free gap above the low region is held before the creation, and the check
+compares the blocks the creation *adds* rather than a lowest-address proxy that cannot tell that
+case from a real move.
+
+Measured, full shape, three fresh processes each: Llama repeat-and-cleanup **3/3 pass** where it
+failed 3/3 at 544832; Qwen **3/3 pass**, so the shared change does not move it; block-level
+cross-slot isolation **3/3**; chunked prefill **3/3**. The last two had never been evaluated on
+Llama in either direction.
+
+**A new defect, D-C14, and it is bigger than the coverage item it blocks.** With the clash gone, two
+models in one process get further than ever and then hang at the second model's first decode, in
+`FDMeshCommandQueue::wait_for_outstanding_reads`. The ttnn program cache belongs to the *mesh
+device*, outlives a model, and keys on op-and-config hashes — so two identical Galaxy models share
+compiled decode programs and therefore the first model's buffer addresses. The invariant is per
+**process and mesh**, not per owner. `GlobalCBPlacement` is implemented and host-qualified and is
+**not** on silicon: the mesh lost board 23 to POST_RESET before it could be, and ten reset attempts
+across four mechanisms did not recover it. D-C13 is superseded rather than closed — the allocation
+now succeeds and D-C14 is what stands behind it.
+
+Host gates after the change, three fresh processes each and identical to Milestone B:
+step-7 34/32/37/18/12/29/8, `test_prefetcher_2d.py` **33 passed** (22 before),
+`llm_runtime` **1032 passed / 1 skipped**. Nothing relaxed, no expectation edited, zero changes
+under `models/common/llm_runtime/**` or to any `*_1d.py`.

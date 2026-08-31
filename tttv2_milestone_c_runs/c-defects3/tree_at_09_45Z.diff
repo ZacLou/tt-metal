@@ -1,0 +1,828 @@
+diff --git a/models/common/models/galaxy/prefetch.py b/models/common/models/galaxy/prefetch.py
+index 664d354a4bf..011ad884a3a 100644
+--- a/models/common/models/galaxy/prefetch.py
++++ b/models/common/models/galaxy/prefetch.py
+@@ -21,6 +21,23 @@ from models.common.modules.prefetcher import Prefetcher2D, Prefetcher2DConfig, P
+ 
+ GALAXY_GLOBAL_CB_SIZE = 728 * 1088
+ 
++#: L1 per bank held above the global circular buffer while it is created.
++#:
++#: L1 is allocated top-down and a buffer's address never moves, so anything
++#: long-lived allocated while the ~774 kB global CB is resident is stranded below
++#: it for the life of the process - and the prefill embedding's static circular
++#: buffers reach 630080, so one stranded byte down there makes every subsequent
++#: prefill unplaceable. Measured on `(8, 4)` with Llama-3.3-70B: the first decode
++#: strands 32 B at 545760 (`logs/a3_clash_steps_l1.log`), and with this headroom
++#: reserved the only L1 left below 630080 is the global CB itself
++#: (`logs/b1_headroom_only_l1.log`).
++#:
++#: 64 kiB is chosen against a measured need of 32 B plus the 2 kB decode rotary
++#: transformation matrix, and it costs nothing but where the global CB sits: the
++#: buffer simply lands 64 kiB lower in a bank with 1 265 696 B free at that
++#: moment.
++GALAXY_GLOBAL_CB_HEADROOM = 64 * 1024
++
+ _RECEIVER_COLUMN_PAIRS = tuple(((1, y), (2, y)) for y in (9, 0, 4, 5)) + tuple(
+     ((5, y), (6, y)) for y in (0, 9, 1, 7, 6, 2, 4, 5)
+ )
+@@ -114,7 +131,8 @@ def build_galaxy_prefetcher_config(
+     global_cb_size: int | None = GALAXY_GLOBAL_CB_SIZE,
+     prefetch_num_layers: int = 1,
+     defer_global_cb: bool = True,
+-    release_global_cb_on_prefill: bool = False,
++    release_global_cb_on_prefill: bool = True,
++    global_cb_headroom: int = GALAXY_GLOBAL_CB_HEADROOM,
+ ) -> Prefetcher2DConfig:
+     """Resolve the prefetcher policy that matches a Galaxy resource config.
+ 
+@@ -140,10 +158,20 @@ def build_galaxy_prefetcher_config(
+         prefetch_num_layers=prefetch_num_layers,
+         mesh_shape=resources_config.mesh_shape,
+         defer_global_cb=defer_global_cb,
+-        # Defaults to False: see the field's docstring. Deferring the allocation is
+-        # safe and qualified; releasing and recreating it per mode is not, and it is
+-        # opt-in until something re-qualifies the decode path behind it.
++        # Defaults to **True** since 2026-08-30, and the reason is arithmetic
++        # rather than preference. 869 056 B of L1 lie above the 630080 that the
++        # prefill embedding's static circular buffers reach; the model's resident
++        # L1 after a decode is 127 776 B and the global circular buffer is
++        # 792 256 B including its config buffer. 127 776 + 792 256 = 920 032, so
++        # the buffer and a prefill program of this shape cannot coexist under any
++        # allocation order. `defer_global_cb` covers only the first prefill;
++        # without this flag every prefill *after* a decode aborts at
++        # `program.cpp:1763`, which is what blocked Llama's repeated-request gate
++        # and, by construction, blocks serving. Paired with `global_cb_headroom`,
++        # which is what stops the release from being defeated by a buffer
++        # stranded underneath the CB.
+         release_global_cb_on_prefill=release_global_cb_on_prefill,
++        global_cb_headroom=global_cb_headroom,
+     )
+ 
+ 
+@@ -154,7 +182,8 @@ def build_galaxy_prefetcher(
+     expected_weight_count: int,
+     global_cb_size: int | None = GALAXY_GLOBAL_CB_SIZE,
+     prefetch_num_layers: int = 1,
+-    release_global_cb_on_prefill: bool = False,
++    release_global_cb_on_prefill: bool = True,
++    global_cb_headroom: int = GALAXY_GLOBAL_CB_HEADROOM,
+     **injections: Any,
+ ) -> Prefetcher2D:
+     """Create an initialized, unsealed `Prefetcher2D` for one Galaxy mesh."""
+@@ -167,6 +196,7 @@ def build_galaxy_prefetcher(
+             global_cb_size=global_cb_size,
+             prefetch_num_layers=prefetch_num_layers,
+             release_global_cb_on_prefill=release_global_cb_on_prefill,
++            global_cb_headroom=global_cb_headroom,
+         ),
+         **injections,
+     )
+diff --git a/models/common/models/llama33_70b_galaxy/demo.py b/models/common/models/llama33_70b_galaxy/demo.py
+index 598e613fafc..2fc53bad90c 100644
+--- a/models/common/models/llama33_70b_galaxy/demo.py
++++ b/models/common/models/llama33_70b_galaxy/demo.py
+@@ -94,12 +94,13 @@ def _load(mesh_device: Any, **overrides: Any):
+         from models.common.tests.models.galaxy.galaxy_checkpoint import load_layer_subset_causal_lm
+ 
+         kwargs["load_hf_model"] = lambda: load_layer_subset_causal_lm(hf_model, layer_indices=tuple(range(layers)))
+-    # Opt-in only, and off by default: releasing the global circular buffer on
+-    # every prefill is the candidate fix for "prefill after a decode" (the second
+-    # runner in one process), and it changes the mode-switching of the prefetcher.
++    # Now the model default; the switch is kept so the *old* behaviour can still
++    # be measured. `LLAMA33_70B_GALAXY_RELEASE_GLOBAL_CB=0` turns the release off
++    # and puts a prefill-after-decode back on the L1 address clash.
+     # See `Prefetcher2DConfig.release_global_cb_on_prefill`.
+-    if os.getenv("LLAMA33_70B_GALAXY_RELEASE_GLOBAL_CB", "").lower() in {"1", "true", "yes"}:
+-        kwargs["release_global_cb_on_prefill"] = True
++    switch = os.getenv("LLAMA33_70B_GALAXY_RELEASE_GLOBAL_CB", "")
++    if switch:
++        kwargs["release_global_cb_on_prefill"] = switch.lower() in {"1", "true", "yes"}
+     return from_pretrained(mesh_device, **kwargs)
+ 
+ 
+diff --git a/models/common/models/llama33_70b_galaxy/hf_adaptor.py b/models/common/models/llama33_70b_galaxy/hf_adaptor.py
+index ccadd8ef4c7..2e570db6e4b 100644
+--- a/models/common/models/llama33_70b_galaxy/hf_adaptor.py
++++ b/models/common/models/llama33_70b_galaxy/hf_adaptor.py
+@@ -283,7 +283,10 @@ def from_pretrained(
+     use_qk_fused_rotary: bool = True,
+     cache_dir: Path | str | None = None,
+     load_hf_model: Any = None,
+-    release_global_cb_on_prefill: bool = False,
++    # True since 2026-08-30: a prefill after a decode cannot place its circular
++    # buffers while the global CB is resident, so serving needs the release. See
++    # `models/common/models/galaxy/prefetch.py` for the arithmetic.
++    release_global_cb_on_prefill: bool = True,
+ ) -> Llama33_70BGalaxyForCausalLM:
+     """Load `meta-llama/Llama-3.3-70B-Instruct` onto one WH Galaxy `(8, 4)` mesh.
+ 
+diff --git a/models/common/models/llama33_70b_galaxy/model.py b/models/common/models/llama33_70b_galaxy/model.py
+index 20b72f3767a..afc441df0cf 100644
+--- a/models/common/models/llama33_70b_galaxy/model.py
++++ b/models/common/models/llama33_70b_galaxy/model.py
+@@ -1748,7 +1748,8 @@ def build_llama33_70b_galaxy_model(
+     use_qk_fused_rotary: bool = True,
+     cache_path: Path | str | None = None,
+     global_cb_size: int | None = GALAXY_GLOBAL_CB_SIZE,
+-    release_global_cb_on_prefill: bool = False,
++    # True since 2026-08-30; see `build_galaxy_prefetcher_config`.
++    release_global_cb_on_prefill: bool = True,
+     prefetcher_injections: dict[str, Any] | None = None,
+ ) -> Llama33_70BGalaxyTransformer2D:
+     """Own the complete Galaxy construction order and return the tensor model.
+diff --git a/models/common/modules/README.md b/models/common/modules/README.md
+index 44cdcfffb09..6feb68eee8c 100644
+--- a/models/common/modules/README.md
++++ b/models/common/modules/README.md
+@@ -211,7 +211,7 @@ The 2D tensor-placement contract is explicit in each config: source and padded w
+ 
+ Galaxy collectives are injected from `models/common/models/galaxy`; 2D modules do not extend or specialize the 1D `TT_CCL` owner. The target ownership contract makes `Prefetcher2D` the model-owned resource root for subdevice managers, the global circular buffer, and sealed weight-address registration. Modules borrow immutable prefill/decode contexts, and the executor activates a context at operation boundaries and owns cleanup. Integrated Prefetcher2D/Galaxy-resource ownership is qualified on hardware for the MLP2D consumer shape: the prefill↔decode transition matrix, the failed-transition rollback, and cleanup from either active mode all run on a `(8, 4)` 6U Galaxy with PCC asserted at every step.
+ 
+-Two ownership limits are known and documented. **Cleanup of the global circular buffer is not deterministic from the owner's side:** ttnn exposes no free for one, so its L1 is reclaimed when the last handle dies, and every module holding a `Prefetcher2DContext` holds one — tear consumers down before, or together with, the owner. Milestone B measured this at model scale on silicon and found the second Galaxy model in a process could not create its global CB at all (defect `D-C7`): after a full `close()` *and* an explicit `gc.collect()`, 923 776 of 1 393 472 bytes per L1 bank were still allocated — one whole `GALAXY_GLOBAL_CB_SIZE` (792 064 B) plus 131 712 B, to the byte. **Milestone C found the surviving reference and this paragraph is corrected accordingly.** Dropping the last Python reference *does* return the L1: with no model in the way, a second production-size global CB is refused while the first is alive and created immediately after the first is dropped, so the C++ destructor frees on the last reference (`tttv2_milestone_c_evidence/defects/logs/c4_dc7_probe2.log`). What survived was a reference, not a leak — a `Prefetcher2DContext` is captured **by value** at module construction, so `Prefetcher2D.cleanup()` clearing its own `_contexts` map left every already-built module holding a context whose `global_cb` was still the live buffer. `cleanup()` now nulls the field on every context it handed out. **The ordering rule above is therefore sufficient again, and the one-model-per-process rule is a consequence of that bug rather than of ttnn:** tear the consumers down with the owner and the buffer goes. **The device gate has now run and the allocator confirms it to within 192 bytes:** the same test that aborted at Milestone B with 923 776 B per bank still allocated aborts after the fix with **131 520 B** allocated, so 792 256 B came back against a `GALAXY_GLOBAL_CB_SIZE` of 792 064 B (`tttv2_milestone_c_evidence/defects/logs/d11_q_two_pools_run1.log`; one run of three, the other two queued). Two caveats before relying on it. The second model still cannot create its global circular buffer, for a **new** reason — 1 261 952 B are free but the largest contiguous block is 759 488 B, 32 576 B short of the 792 064 B needed, so the bank is fragmented rather than full (defect `D-C13`). One model per process therefore still holds in practice, but as a placement problem with a number on it rather than an unexplained one. And the separate Llama prefill address clash is **not** this defect and is not fixed by it: Milestone C measured a production-size global CB resident while `ttnn.embedding` places cleanly at both models' prefill row widths, every call a cold compile (`logs/c12_clash_probe_cold.log`), so the L1 buffer at address 544832 belongs to something else and `release_global_cb_on_prefill` cannot move it.
++Two ownership limits are known and documented. **Cleanup of the global circular buffer is not deterministic from the owner's side:** ttnn exposes no free for one, so its L1 is reclaimed when the last handle dies, and every module holding a `Prefetcher2DContext` holds one — tear consumers down before, or together with, the owner. Milestone B measured this at model scale on silicon and found the second Galaxy model in a process could not create its global CB at all (defect `D-C7`): after a full `close()` *and* an explicit `gc.collect()`, 923 776 of 1 393 472 bytes per L1 bank were still allocated — one whole `GALAXY_GLOBAL_CB_SIZE` (792 064 B) plus 131 712 B, to the byte. **Milestone C found the surviving reference and this paragraph is corrected accordingly.** Dropping the last Python reference *does* return the L1: with no model in the way, a second production-size global CB is refused while the first is alive and created immediately after the first is dropped, so the C++ destructor frees on the last reference (`tttv2_milestone_c_evidence/defects/logs/c4_dc7_probe2.log`). What survived was a reference, not a leak — a `Prefetcher2DContext` is captured **by value** at module construction, so `Prefetcher2D.cleanup()` clearing its own `_contexts` map left every already-built module holding a context whose `global_cb` was still the live buffer. `cleanup()` now nulls the field on every context it handed out. **The ordering rule above is therefore sufficient again, and the one-model-per-process rule is a consequence of that bug rather than of ttnn:** tear the consumers down with the owner and the buffer goes. **The device gate has now run and the allocator confirms it to within 192 bytes:** the same test that aborted at Milestone B with 923 776 B per bank still allocated aborts after the fix with **131 520 B** allocated, so 792 256 B came back against a `GALAXY_GLOBAL_CB_SIZE` of 792 064 B (`tttv2_milestone_c_evidence/defects/logs/d11_q_two_pools_run1.log`; one run of three, the other two queued). One caveat remains, with a number on it: the second model still cannot create its global circular buffer, for a **new** reason — 1 261 952 B are free but the largest contiguous block is 759 488 B, 32 576 B short of the 792 064 B needed, so the bank is **fragmented rather than full** (defect `D-C13`, three fresh processes, byte-identical). **The global circular buffer now has a placement contract, and the separate Llama prefill address clash was this defect after all.** The earlier wording here — that the clash belongs to something else and `release_global_cb_on_prefill` cannot move it — is **withdrawn**; it was read off a message that does not say what it appears to say. `validate_circular_buffer_region` computes one device-wide lowest-occupied L1 address *before* it loops over circular-buffer core ranges, so the core range in the message names the **circular buffers**, not the clashing buffer; and the allocator's block table prints addresses without `offset_bytes_` (105 664 B on this part) while every allocator message adds it. With the two reconciled, Milestone C measured the whole placement: the global CB is 792 256 B including its config page and lands at 578752, which is *below* the 630080 that the prefill embedding's static circular buffers reach, and 869 056 B of L1 lie above that line against 127 776 B of resident model plus 792 256 B of buffer — 920 032 B, so **the buffer and a prefill program of this shape cannot coexist on any allocation order.** `defer_global_cb` covers only the first prefill; `release_global_cb_on_prefill` is therefore **required** for a prefill after a decode, which is what serving does by construction, and it is now the default for both Galaxy models. Releasing alone is not sufficient: L1 is allocated top-down and an address never moves, so the first decode forward strands a **32-byte** buffer at 545760 beneath the resident CB and the release does not move it (`logs/a3_clash_steps_l1.log`). `global_cb_headroom` reserves L1 above the buffer while it is created so nothing is stranded under it (`logs/b1_headroom_only_l1.log`: the 32-byte block is gone), and because a *fixed* headroom lets the recreated buffer land 32 416 B lower and the decode after it hangs on the stale address held by cached programs (`logs/b4_headroom_release_addr_l1.log`), `Prefetcher2D._allocate_global_cb` **reproduces the free-region top the first creation saw** — reserving in a loop, since `FreeListOpt` prefers a small exact-size free block and one reservation lands in the gap the previous headroom left — and **raises** if the buffer does not come back on the recorded floor. So the guarantee the owner now makes is: *the global circular buffer is created at the same L1 address every time, or an exception is raised;* a silently moved buffer is a wrong-address read and is never returned.
+ 
+ And **`Attention2D`'s decode projection grid is now compatible with the prefetch subdevice partition** — Milestone A `L3` is **closed on silicon, at a named cost**. Its `(7,1)` QKV grid straddled the sender and worker subdevices; Milestone B confines both attention decode matmuls to the largest worker rectangle anchored at the worker envelope's origin (`dense_matmul_worker_rectangle`, three columns wide on `(8, 4)`), and with `in0_block_w = gcd(k_tiles, 4)` their circular buffers fit (`D-B9`). Qualified against a Hugging Face reference on both models: Llama decode attention output PCC 0.99975, Qwen decode logits 0.99936, three fresh processes each. **Two costs, recorded rather than absorbed:** three worker columns instead of seven, and — because the global circular buffer is received only by the 24 ring cores — the attention weights cannot be prefetched and must be read from DRAM. Registering them with the prefetcher anyway is a *correctness* defect, not a performance one, because the unconsumed entries shift every later consumer (`D-B25a`). Moving the two matmuls to the 24-core `gather_in0` ring recovers both at once, and is Milestone C performance work.
+ 
+diff --git a/models/common/modules/prefetcher/prefetcher_2d.py b/models/common/modules/prefetcher/prefetcher_2d.py
+index 6b4f18ef79a..0d046673577 100644
+--- a/models/common/modules/prefetcher/prefetcher_2d.py
++++ b/models/common/modules/prefetcher/prefetcher_2d.py
+@@ -34,6 +34,105 @@ def _validate_wh_galaxy(mesh_device: Any, mesh_shape: tuple[int, int], architect
+         raise ValueError("mesh device architecture does not match the resolved architecture")
+ 
+ 
++#: Free gaps above the low region are finite, so the reservation loop terminates;
++#: this only bounds a pathological free list rather than expressing a policy.
++_MAX_GLOBAL_CB_RESERVATION_STEPS = 64
++
++
++def _default_l1_block_table(mesh_device: Any) -> tuple[tuple[int, int, bool], ...]:
++    """Return every L1 block as ``(address, size, allocated)``, allocator coordinates.
++
++    `ttnn.get_memory_view` reports each block's address **without** the allocator's
++    ``offset_bytes_``, while every allocator message adds it, so this adds
++    `ttnn.get_allocator_base_address` and returns the numbers the allocator itself
++    would print. Mixing the two coordinate systems is what made three earlier
++    investigations of the Llama L1 address clash unreadable.
++
++    The **whole** table, free blocks included, and for two reasons that the lowest
++    occupied address alone cannot serve:
++
++    * a global circular buffer is **two** allocations, a `size`-byte data buffer
++      and a 192-byte config page, and a cached program holds the address of both
++      (`CircularBufferImpl::set_global_circular_buffer` captures
++      ``buffer_address()`` *and* ``config_address()`` once, and
++      `dispatch.cpp` re-sends the captured pair on every launch). So both have to
++      come back to the same address, and only the whole table can say whether they
++      did;
++    * `FreeListOpt::allocate` takes the **smallest free block that fits**, so a
++      192-byte free gap anywhere in L1 will capture the config page in preference
++      to the region below the data buffer. Measured on `(8, 4)`, two fresh
++      processes (`logs/k1_llama_chunked_r1.log`, `logs/k2_llama_chunked_r2.log`):
++      the data buffer came back at 510816 both times and the config page moved
++      from 510624 to **1367872**.
++    """
++
++    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1)
++    offset = ttnn.get_allocator_base_address(mesh_device, ttnn.BufferType.L1)
++    blocks = tuple(
++        (int(block["address"]) + offset, int(block["size"]), block.get("allocated") == "yes")
++        for block in view.block_table
++    )
++    if not any(allocated for _, _, allocated in blocks):
++        raise RuntimeError("no allocated L1 blocks: the mesh allocator view is empty")
++    return blocks
++
++
++def _allocated(table: tuple[tuple[int, int, bool], ...]) -> frozenset[tuple[int, int]]:
++    """Return the allocated ``(address, size)`` blocks of an L1 block table."""
++
++    return frozenset((address, size) for address, size, allocated in table if allocated)
++
++
++def _lowest_occupied(table: tuple[tuple[int, int, bool], ...]) -> int:
++    """Return the lowest allocated address in an L1 block table."""
++
++    return min(address for address, _, allocated in table if allocated)
++
++
++def _free_gaps_above_the_low_region(table: tuple[tuple[int, int, bool], ...]) -> tuple[tuple[int, int], ...]:
++    """Return the free blocks that are not the contiguous low region, smallest first.
++
++    Every free block other than the lowest-addressed one is a *gap*: a hole in the
++    resident region, left by something freed. `FreeListOpt::allocate` prefers the
++    smallest block that fits, so any such gap will capture an allocation in
++    preference to the low region - which is exactly how the global circular
++    buffer's 192-byte config page ends up 850 kB away from its data buffer.
++    Filling them first is what makes the creation's placement deterministic.
++
++    Sorted ascending by size, because a reservation of exactly a gap's size is how
++    that gap is taken: the allocator's own preference is the mechanism.
++    """
++
++    free = [(address, size) for address, size, allocated in table if not allocated]
++    if not free:
++        return ()
++    low_region = min(free)
++    return tuple(sorted((block for block in free if block != low_region), key=lambda block: block[1]))
++
++
++def _default_reserve_l1(mesh_device: Any, size: int) -> Any:
++    """Hold exactly `size` bytes per L1 bank, as one sharded page on one worker core.
++
++    One buffer and no companion allocation, so the address the global circular
++    buffer lands at afterwards is an exact function of `size`. L1 allocation is
++    lock-step across banks on this part, so a single-core shard reserves the same
++    address range on every core of the mesh.
++    """
++
++    if size % 32:
++        raise ValueError(f"an L1 reservation must be a multiple of 32 bytes, got {size}")
++    elements = size // 2
++    core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))})
++    memory_config = ttnn.MemoryConfig(
++        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
++        ttnn.BufferType.L1,
++        ttnn.ShardSpec(core, [1, elements], ttnn.ShardOrientation.ROW_MAJOR),
++    )
++    return ttnn.allocate_tensor_on_device(
++        ttnn.Shape((1, elements)), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh_device, memory_config
++    )
++
++
+ @dataclass(frozen=True)
+ class Prefetcher2DModeConfig:
+     mode: PrefetcherMode
+@@ -118,6 +217,44 @@ class Prefetcher2DConfig:
+     #: mode-switching of the one module every qualified decode path depends on.
+     #: Requires ``defer_global_cb``, since both describe the same lifetime.
+     release_global_cb_on_prefill: bool = False
++    #: Reserve this many bytes of L1 per bank **above** the global circular
++    #: buffer while it is being created, then release them again.
++    #:
++    #: L1 is allocated top-down, and the global CB is ~774 kB per bank. So with
++    #: the buffer resident, **every** long-lived allocation made afterwards lands
++    #: *below* it and stays there for the life of the process, because a buffer's
++    #: address never moves. Measured on `(8, 4)` with Llama-3.3-70B
++    #: (`tttv2_milestone_c_evidence/defects/logs/a3_clash_steps_l1.log`): the
++    #: first decode strands a 32-byte L1 buffer at **545760**, which is below the
++    #: 630080 that the prefill embedding's static circular buffers reach, so the
++    #: next prefill aborts with
++    #:
++    #:     TT_THROW ... Statically allocated circular buffers in program 100
++    #:     clash with L1 buffers on core range [0-0 - 0-3]. L1 buffer allocated
++    #:     at 545760 and static circular buffer region ends at 630080
++    #:
++    #: and it aborts *even with* ``release_global_cb_on_prefill``, because
++    #: releasing the buffer does not move what was stranded underneath it. Read
++    #: the message carefully: ``validate_circular_buffer_region`` computes one
++    #: device-wide lowest-occupied L1 address before it loops over circular-buffer
++    #: core ranges, so ``[0-0 - 0-3]`` names the *circular buffers*, not the
++    #: clashing buffer.
++    #:
++    #: Reserving headroom first makes the global CB land that much lower and
++    #: leaves a free gap above it. ``FreeListOpt::allocate`` scans free blocks by
++    #: **ascending size class**, so a later small allocation takes the small gap
++    #: in preference to the large low block, and nothing is stranded below the
++    #: buffer. Measured with 65 536 B of headroom on the same reproduction
++    #: (`logs/b1_headroom_only_l1.log`): the only L1 below 630080 afterwards is
++    #: the global CB itself, and the 32-byte block at 545760 is gone.
++    #:
++    #: This value is the headroom for the **first** creation only. Every later
++    #: creation reserves whatever it takes to put the buffer back on the same
++    #: floor - see `Prefetcher2D._allocate_global_cb`, and
++    #: ``release_global_cb_on_prefill`` for why that matters.
++    #:
++    #: Defaults to 0, which is exactly the previous behaviour.
++    global_cb_headroom: int = 0
+ 
+     def __post_init__(self) -> None:
+         object.__setattr__(
+@@ -144,6 +281,8 @@ class Prefetcher2DConfig:
+             raise ValueError("prefetch_num_layers must be positive")
+         if self.release_global_cb_on_prefill and not self.defer_global_cb:
+             raise ValueError("release_global_cb_on_prefill requires defer_global_cb")
++        if self.global_cb_headroom < 0:
++            raise ValueError("global_cb_headroom cannot be negative")
+         if self.expected_weight_count % self.prefetch_num_layers != 0:
+             raise ValueError("expected_weight_count must be divisible by prefetch_num_layers")
+ 
+@@ -201,6 +340,8 @@ class Prefetcher2D:
+         derive_global_cb_size: GlobalCBSizeDeriver | None = None,
+         dram_prefetch_start: DramPrefetchStart | None = None,
+         dram_prefetch_stop: DramPrefetchStop | None = None,
++        l1_block_table: Callable[[Any], tuple[tuple[int, int, bool], ...]] | None = None,
++        reserve_l1: Callable[[Any, int], Any] | None = None,
+     ):
+         self.config = config
+         self._create_global_cb = create_global_cb or ttnn.create_global_circular_buffer
+@@ -210,6 +351,17 @@ class Prefetcher2D:
+         self._derive_global_cb_size = derive_global_cb_size or self._default_derive_global_cb_size
+         self._dram_prefetch_start = dram_prefetch_start or self._default_dram_prefetch_start
+         self._dram_prefetch_stop = dram_prefetch_stop or self._default_dram_prefetch_stop
++        self._l1_block_table = l1_block_table or _default_l1_block_table
++        self._reserve_l1 = reserve_l1 or _default_reserve_l1
++        #: The free-region top the first global-CB creation saw, and the L1 blocks
++        #: that creation added. Remembered so every later creation reproduces both
++        #: exactly: a decode program already in the ttnn program cache holds the
++        #: buffer's address, and a buffer recreated elsewhere is read at the wrong
++        #: place. The *blocks* rather than the lowest occupied address, because a
++        #: global circular buffer is two allocations and only one of them is the
++        #: buffer - see `_default_l1_block_table`.
++        self._global_cb_free_top: int | None = None
++        self._global_cb_blocks: frozenset[tuple[int, int]] | None = None
+         self._managers: dict[PrefetcherMode, Any] = {}
+         self._registered_weights: OrderedDict[str, Any] = OrderedDict()
+         self._global_cb: Any = None
+@@ -333,11 +485,7 @@ class Prefetcher2D:
+         try:
+             self._configure_mode_resources(self.config.decode)
+             if not self.config.defer_global_cb:
+-                global_cb = self._create_global_cb(
+-                    self.config.mesh_device,
+-                    list(self.config.sender_receiver_mapping),
+-                    resolved_cb_size,
+-                )
++                global_cb = self._allocate_global_cb(resolved_cb_size)
+             metadata = self._create_address_metadata(
+                 addresses,
+                 device=self.config.mesh_device,
+@@ -449,6 +597,132 @@ class Prefetcher2D:
+         self._active_mode = mode
+         return context
+ 
++    def _allocate_global_cb(self, size: int) -> Any:
++        """Create the global circular buffer at a **stable** L1 address.
++
++        Two things have to be true at once, and both are measured on `(8, 4)`:
++
++        * nothing long-lived may be allocated *below* the buffer. L1 is allocated
++          top-down and an address never moves, so anything allocated while the
++          ~774 kB buffer is resident is stranded underneath it for the life of the
++          process - and the Galaxy prefill embedding's static circular buffers
++          reach 630080, so one stranded byte down there makes every later prefill
++          unplaceable (`logs/a3_clash_steps_l1.log`: the first decode strands 32 B
++          at 545760, and releasing the buffer does not move it).
++          `global_cb_headroom` fixes that by making the buffer land that much
++          lower and leaving a free gap above it, which `FreeListOpt` - which scans
++          free blocks by ascending size class - hands to the small allocations in
++          preference to the large low block.
++        * the buffer must come back to the **same address** every time it is
++          recreated. `release_global_cb_on_prefill` frees it on the way into
++          prefill, and decode programs already in the ttnn program cache hold its
++          address; recreating it somewhere else is a silent wrong-address read,
++          not an error. Measured: with a *fixed* headroom the second creation
++          lands 32 416 B lower and the decode after it hangs
++          (`logs/b4_headroom_release_addr_l1.log`).
++
++        Two things make the placement reproducible, and both follow from the one
++        allocator rule that governs all of this: `FreeListOpt::allocate` takes the
++        **smallest free block that fits**.
++
++        * **hold every free gap above the low region.** Any hole in the resident
++          region will capture an allocation in preference to the low region, and
++          the creation's 192-byte config page is small enough to fit almost any
++          hole. Measured on `(8, 4)`, two fresh processes
++          (`logs/k1_llama_chunked_r1.log`, `logs/k2_llama_chunked_r2.log`): the
++          data buffer came back at 510816 both times while the config page moved
++          from 510624 to **1367872**, 850 kB away. That is a stale-address hazard
++          and not a cosmetic one -
++          `CircularBufferImpl::set_global_circular_buffer` captures
++          ``buffer_address()`` *and* ``config_address()`` once, and a cached
++          program re-sends the captured pair on every launch. With the gaps held,
++          the low region is the only free block and the two allocations are forced
++          to be adjacent.
++        * **reproduce the free-region top** the first creation saw, so the low
++          region's top is where it was and the pair lands where it landed. One
++          reservation was not enough before the gaps were being filled, and the
++          number said why: the leftover of the previous headroom is a free gap of
++          exactly the missing size, so a single reservation of that size lands in
++          it and moves the top by nothing. On the production path the buffer came
++          back 32 736 B high for exactly that reason, on both models
++          (`logs/d1_llama_repeat_l1.log`, `logs/d2_qwen_repeat_l1.log`). Both
++          loops are bounded and raise rather than spin.
++        """
++
++        mesh_device = self.config.mesh_device
++        mapping = list(self.config.sender_receiver_mapping)
++        if self.config.global_cb_headroom <= 0:
++            return self._create_global_cb(mesh_device, mapping, size)
++
++        table = self._l1_block_table(mesh_device)
++        before = _allocated(table)
++        lowest = _lowest_occupied(table)
++        if self._global_cb_free_top is None:
++            target_top = lowest - self.config.global_cb_headroom
++        else:
++            target_top = self._global_cb_free_top
++            if lowest < target_top:
++                raise RuntimeError(
++                    "cannot restore the global circular buffer to its original L1 address: the lowest "
++                    f"occupied L1 is {lowest}, already below the free top {target_top} the first "
++                    "creation had"
++                )
++
++        reservations: list[Any] = []
++        try:
++            # Fill every free gap above the low region first. The allocator takes
++            # the smallest free block that fits, so an unfilled gap captures the
++            # global CB's config page and moves it away from its data buffer; with
++            # the gaps held, the low region is the only free block and the
++            # creation's two allocations are forced to be adjacent and reproducible.
++            for _ in range(_MAX_GLOBAL_CB_RESERVATION_STEPS):
++                gaps = [(address, gap) for address, gap in _free_gaps_above_the_low_region(table) if gap % 32 == 0]
++                if not gaps:
++                    break
++                reservations.append(self._reserve_l1(mesh_device, gaps[0][1]))
++                table = self._l1_block_table(mesh_device)
++            else:
++                raise RuntimeError(
++                    f"could not fill the free L1 gaps above the low region in "
++                    f"{_MAX_GLOBAL_CB_RESERVATION_STEPS} reservations"
++                )
++            lowest = _lowest_occupied(table)
++            # Then reproduce the free-region top the first creation saw, so every
++            # allocation the creation makes reproduces with it.
++            for _ in range(_MAX_GLOBAL_CB_RESERVATION_STEPS):
++                if lowest <= target_top:
++                    break
++                reservations.append(self._reserve_l1(mesh_device, lowest - target_top))
++                lowest = _lowest_occupied(self._l1_block_table(mesh_device))
++            else:
++                raise RuntimeError(
++                    f"could not lower the L1 free top to {target_top} in "
++                    f"{_MAX_GLOBAL_CB_RESERVATION_STEPS} reservations; it is still {lowest}"
++                )
++            global_cb = self._create_global_cb(mesh_device, mapping, size)
++        finally:
++            # There is no `deallocate` on a global circular buffer, but every
++            # reservation is an ordinary tensor and this holds its only reference.
++            for reservation in reversed(reservations):
++                self._deallocate(reservation)
++            reservations.clear()
++
++        # The creation's own allocations, by address and size. Comparing the
++        # whole set rather than the lowest occupied address is what makes the
++        # check exact: the creation makes *two* allocations and a cached program
++        # holds the address of both, so "the lowest occupied address is where it
++        # was" is neither necessary nor sufficient.
++        added = _allocated(self._l1_block_table(mesh_device)) - before
++        if self._global_cb_blocks is None:
++            self._global_cb_free_top = target_top
++            self._global_cb_blocks = added
++        elif added != self._global_cb_blocks:
++            raise RuntimeError(
++                "the recreated global circular buffer did not land on its original L1 blocks: "
++                f"expected {sorted(self._global_cb_blocks)}, got {sorted(added)}"
++            )
++        return global_cb
++
+     def _ensure_global_cb(self, context: Prefetcher2DContext) -> None:
+         """Allocate the deferred global circular buffer and bind it to `context`.
+ 
+@@ -470,11 +744,7 @@ class Prefetcher2D:
+         # `_release_global_cb` freed it on the way into prefill.
+         if self._resolved_global_cb_size is None:
+             raise RuntimeError("global CB size was not resolved during sealing")
+-        global_cb = self._create_global_cb(
+-            self.config.mesh_device,
+-            list(self.config.sender_receiver_mapping),
+-            self._resolved_global_cb_size,
+-        )
++        global_cb = self._allocate_global_cb(self._resolved_global_cb_size)
+         self._global_cb = global_cb
+         object.__setattr__(context, "global_cb", global_cb)
+ 
+diff --git a/models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py b/models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py
+index ed837a50361..d6e27433e34 100644
+--- a/models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py
++++ b/models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py
+@@ -103,12 +103,14 @@ def _load(mesh_device: ttnn.MeshDevice, **overrides: Any):
+         from models.common.tests.models.galaxy.galaxy_checkpoint import load_layer_subset_causal_lm
+ 
+         kwargs["load_hf_model"] = lambda: load_layer_subset_causal_lm(hf_model, layer_indices=tuple(range(layers)))
+-    # Opt-in only, and off by default: releasing the global circular buffer on
+-    # every prefill is the candidate fix for "prefill after a decode" (the second
+-    # runner in one process), and it changes the mode-switching of the prefetcher.
+-    # See `Prefetcher2DConfig.release_global_cb_on_prefill`.
+-    if os.getenv("LLAMA33_70B_GALAXY_RELEASE_GLOBAL_CB", "").lower() in {"1", "true", "yes"}:
+-        kwargs["release_global_cb_on_prefill"] = True
++    # Releasing the global circular buffer on entering prefill is now the model's
++    # default - a prefill after a decode cannot place its circular buffers while
++    # the buffer is resident, which is what blocked this file's repeated-request
++    # gate. The switch is kept so the *old* behaviour can still be measured:
++    # `LLAMA33_70B_GALAXY_RELEASE_GLOBAL_CB=0` turns the release back off.
++    switch = os.getenv("LLAMA33_70B_GALAXY_RELEASE_GLOBAL_CB", "")
++    if switch:
++        kwargs["release_global_cb_on_prefill"] = switch.lower() in {"1", "true", "yes"}
+     return from_pretrained(mesh_device, **kwargs)
+ 
+ 
+diff --git a/models/common/tests/modules/prefetcher/test_prefetcher_2d.py b/models/common/tests/modules/prefetcher/test_prefetcher_2d.py
+index 81f3694c80a..20fab4c4e61 100644
+--- a/models/common/tests/modules/prefetcher/test_prefetcher_2d.py
++++ b/models/common/tests/modules/prefetcher/test_prefetcher_2d.py
+@@ -131,6 +131,7 @@ def make_config(
+     global_cb_size=4096,
+     defer_global_cb=False,
+     release_global_cb_on_prefill=False,
++    global_cb_headroom=0,
+ ):
+     mesh = FakeMesh() if mesh is None else mesh
+     return Prefetcher2DConfig(
+@@ -156,6 +157,7 @@ def make_config(
+         address_mesh_mapper="address-mapper",
+         defer_global_cb=defer_global_cb,
+         release_global_cb_on_prefill=release_global_cb_on_prefill,
++        global_cb_headroom=global_cb_headroom,
+     )
+ 
+ 
+@@ -668,3 +670,286 @@ def test_cleanup_takes_the_global_cb_back_out_of_every_context_it_handed_out(res
+ def test_release_without_defer_is_rejected(expect_error):
+     with expect_error(ValueError, "requires defer_global_cb"):
+         make_config(defer_global_cb=False, release_global_cb_on_prefill=True)
++
++
++class ScriptedL1:
++    """A small faithful model of the L1 free list, with one governing rule.
++
++    `FreeListOpt::allocate` takes the **smallest free block that fits**, and L1 is
++    allocated top-down inside the block it picks. Everything the global-CB
++    placement fix depends on follows from that one rule, so the model derives its
++    free blocks from its allocated ones rather than tracking them, and cannot
++    drift out of agreement with itself:
++
++    * a buffer created while something large is resident lands below it, and an
++      allocated address never moves;
++    * a request that fits a **gap** above the low region lands in that gap and
++      does not lower the free top - which is why one reservation was not enough
++      on silicon (`logs/d1_llama_repeat_l1.log`, `logs/d2_qwen_repeat_l1.log`:
++      the buffer came back 32 736 B high on both models);
++    * a global circular buffer is **two** allocations, a `size`-byte data buffer
++      and a 192-byte config page, and by the same rule a small gap anywhere in L1
++      captures the config page - which on silicon put it 850 kB from its own data
++      buffer (`logs/k1_llama_chunked_r1.log`, `logs/k2_llama_chunked_r2.log`).
++
++    Tests build a hole by seeding `blocks` with a block that leaves one.
++    """
++
++    CONFIG_PAGE = 192
++    TOP = 1_000_032
++
++    def __init__(self, *, blocks=None, creation_extra=0):
++        #: allocated blocks, address -> size. One resident block at the very top.
++        self.blocks = dict(blocks) if blocks else {1_000_000: 32}
++        #: bytes the creation allocates *beyond* the data buffer and its config
++        #: page. On silicon this is not constant, which is why a fixed headroom
++        #: cannot pin the buffer (`logs/b4_headroom_release_addr_l1.log`).
++        self.creation_extra = creation_extra
++        self.reads = 0
++        self.reserved = []
++        self.released = []
++
++    def free_blocks(self):
++        """Derive the free blocks: the complement of the allocated ones."""
++
++        free, cursor = [], 0
++        for address in sorted(self.blocks):
++            if address > cursor:
++                free.append((cursor, address - cursor))
++            cursor = address + self.blocks[address]
++        if cursor < self.TOP:
++            free.append((cursor, self.TOP - cursor))
++        return free
++
++    def l1_block_table(self, mesh):
++        del mesh
++        self.reads += 1
++        table = [(address, size, True) for address, size in self.blocks.items()]
++        table.extend((address, size, False) for address, size in self.free_blocks())
++        return tuple(table)
++
++    def _allocate(self, size):
++        candidates = [block for block in self.free_blocks() if block[1] >= size]
++        if not candidates:
++            raise AssertionError(f"the scripted L1 cannot fit {size} bytes")
++        address, extent = min(candidates, key=lambda block: (block[1], block[0]))
++        placed = address + extent - size  # top-down inside the chosen block
++        self.blocks[placed] = size
++        return placed
++
++    def reserve_l1(self, mesh, size):
++        del mesh
++        self.reserved.append(size)
++        return ("reservation", self._allocate(size), size)
++
++    def release(self, resource):
++        self.released.append(resource)
++        if isinstance(resource, tuple) and resource[0] == "reservation":
++            self.blocks.pop(resource[1], None)
++
++    def create_global_cb(self, mesh, mapping, size):
++        del mesh, mapping
++        if self.creation_extra:
++            self._allocate(self.creation_extra)
++        data = self._allocate(size)
++        self._allocate(self.CONFIG_PAGE)
++        return ("global-cb", data, size)
++
++    def release_global_cb(self, cb):
++        """Free the blocks the creation made, as dropping the last handle does."""
++
++        data = cb[1]
++        for address in (data, data - self.CONFIG_PAGE):
++            self.blocks.pop(address, None)
++
++
++class NonLoweringL1(ScriptedL1):
++    """An L1 whose reservations never take anything: the loops must be bounded."""
++
++    def reserve_l1(self, mesh, size):
++        del mesh
++        self.reserved.append(size)
++        return ("reservation", None, size)
++
++
++def _headroom_owner(resources, l1, *, headroom, create_global_cb=None):
++    owner = Prefetcher2D(
++        make_config(
++            expected_weight_count=1,
++            defer_global_cb=True,
++            release_global_cb_on_prefill=True,
++            global_cb_headroom=headroom,
++        ),
++        create_global_cb=create_global_cb or resources.create_global_cb,
++        create_address_metadata=resources.create_metadata,
++        deallocate=l1.release,
++        dram_prefetch_start=resources.start,
++        dram_prefetch_stop=resources.stop,
++        l1_block_table=l1.l1_block_table,
++        reserve_l1=l1.reserve_l1,
++    )
++    owner.initialize()
++    owner.register_weight("weight", FakeTensor(owner.config.mesh_device, 101, 128))
++    owner.seal()
++    return owner
++
++
++def test_the_global_cb_is_created_under_reserved_headroom():
++    """The headroom is taken before the buffer and given back after it.
++
++    L1 is allocated top-down and a buffer's address never moves, so anything
++    long-lived allocated while the ~774 kB global circular buffer is resident is
++    stranded *below* it for the life of the process - and the Galaxy prefill
++    embedding's static circular buffers reach 630080, so one stranded byte down
++    there makes every later prefill unplaceable. Measured on `(8, 4)`:
++    `tttv2_milestone_c_evidence/defects/logs/a3_clash_steps_l1.log` attributes a
++    32-byte block at 545760 to the first decode, and
++    `logs/b1_headroom_only_l1.log` shows it gone once 64 kiB of headroom is
++    reserved first.
++
++    Without the reservation this fails on `reserved == [4096]`.
++    """
++
++    resources = ResourceHarness()
++    l1 = ScriptedL1()
++    owner = _headroom_owner(resources, l1, headroom=4096, create_global_cb=l1.create_global_cb)
++
++    owner.activate("decode")
++
++    assert l1.reserved == [4096], "the headroom was not reserved before the global CB"
++    assert l1.released, "the headroom was never released"
++
++
++def test_a_recreated_global_cb_returns_to_its_first_l1_blocks_over_a_leftover_gap():
++    """The buffer comes back to the same blocks even when a gap would swallow the reservation.
++
++    `release_global_cb_on_prefill` frees the buffer on the way into prefill and
++    `_ensure_global_cb` recreates it on the way back into decode - and decode
++    programs already in the ttnn program cache hold its address. Measured with a
++    *fixed* headroom on `(8, 4)`
++    (`tttv2_milestone_c_evidence/defects/logs/b4_headroom_release_addr_l1.log`):
++    the buffer landed at 447296 and then at 414880, 32 416 B apart, and the decode
++    after the recreation hung with no output for four minutes.
++
++    This models the free list the production path presented on the second
++    creation: a decode block inside the old headroom, leaving a gap of **exactly**
++    the bytes the free top has to come down by. A single reservation of that size
++    lands in the gap and lowers nothing, which is why the buffer came back 32 736 B
++    high on both models (`logs/d1_llama_repeat_l1.log`,
++    `logs/d2_qwen_repeat_l1.log`).
++    """
++
++    resources = ResourceHarness()
++    l1 = ScriptedL1()
++    owner = _headroom_owner(resources, l1, headroom=4096, create_global_cb=l1.create_global_cb)
++
++    owner.activate("decode")
++    first = dict(l1.blocks)
++    cb = owner._global_cb
++    owner.activate("prefill")
++    l1.release_global_cb(cb)
++    # The first decode's own 1024 B, placed so that the leftover gap above it is
++    # exactly the distance the free top now has to travel: 997440 - 995904 = 1536,
++    # and 1000000 - 997440 - 1024 = 1536.
++    l1.blocks[997_440] = 1024
++
++    owner.activate("decode")
++
++    assert dict(l1.blocks) == {**first, 997_440: 1024}, "the recreated buffer moved"
++
++
++def test_a_free_gap_cannot_capture_the_global_cb_config_page():
++    """A 192-byte hole anywhere in L1 would take the config page; it is held first.
++
++    A global circular buffer is two allocations and a cached program holds the
++    address of **both** - `CircularBufferImpl::set_global_circular_buffer`
++    captures ``buffer_address()`` and ``config_address()`` once, and
++    `dispatch.cpp` re-sends the captured pair on every launch. Since
++    `FreeListOpt::allocate` takes the smallest free block that fits, a small hole
++    in the resident region captures the config page and moves it away from its own
++    data buffer. Measured on `(8, 4)`, two fresh processes
++    (`logs/k1_llama_chunked_r1.log`, `logs/k2_llama_chunked_r2.log`): the data
++    buffer came back at 510816 both times while the config page moved from 510624
++    to **1367872**, and the chunked-prefill claim failed on it.
++
++    Without the gap-filling pass the config page lands in the hole and the block
++    set no longer matches.
++    """
++
++    resources = ResourceHarness()
++    l1 = ScriptedL1()
++    owner = _headroom_owner(resources, l1, headroom=4096, create_global_cb=l1.create_global_cb)
++
++    owner.activate("decode")
++    first = dict(l1.blocks)
++    cb = owner._global_cb
++    owner.activate("prefill")
++    l1.release_global_cb(cb)
++    # A 32-byte block at 999776 leaves a 192-byte hole at 999808, exactly the
++    # config page's size, high above where the buffer goes.
++    l1.blocks[999_776] = 32
++
++    owner.activate("decode")
++
++    assert dict(l1.blocks) == {**first, 999_776: 32}, "the config page did not come back where it was"
++    assert 999_808 not in l1.blocks, "the hole was reserved but never given back"
++
++
++def test_a_recreated_global_cb_that_moves_is_reported_rather_than_used():
++    """A buffer that cannot be put back where it was is an error, not a silent read.
++
++    Decode programs in the ttnn program cache hold the old address; continuing
++    with a buffer somewhere else reads the wrong L1 and produces no error at all -
++    on silicon it hangs. So the owner checks and raises.
++    """
++
++    resources = ResourceHarness()
++    l1 = ScriptedL1()
++    owner = _headroom_owner(resources, l1, headroom=4096, create_global_cb=l1.create_global_cb)
++    owner.activate("decode")
++    cb = owner._global_cb
++    owner.activate("prefill")
++    l1.release_global_cb(cb)
++    # The next creation costs more than the first did, so the buffer lands lower.
++    l1.creation_extra = 512
++    with pytest.raises(RuntimeError, match="did not land on its original L1 blocks"):
++        owner.activate("decode")
++
++
++def test_a_free_top_that_never_comes_down_is_reported():
++    """A reservation loop that cannot reach its target is bounded, not spun on."""
++
++    resources = ResourceHarness()
++    l1 = NonLoweringL1()
++    owner = _headroom_owner(resources, l1, headroom=4096, create_global_cb=l1.create_global_cb)
++    with pytest.raises(RuntimeError, match="could not lower the L1 free top"):
++        owner.activate("decode")
++
++
++def test_a_gap_that_never_fills_is_reported():
++    """The gap-filling pass is bounded too, and says which pass gave up."""
++
++    resources = ResourceHarness()
++    l1 = NonLoweringL1(blocks={1_000_000: 32, 999_776: 32})
++    owner = _headroom_owner(resources, l1, headroom=4096, create_global_cb=l1.create_global_cb)
++    with pytest.raises(RuntimeError, match="could not fill the free L1 gaps"):
++        owner.activate("decode")
++
++
++def test_zero_headroom_creates_the_global_cb_exactly_as_before():
++    """The default is byte-for-byte the previous behaviour: no reservation, no query."""
++
++    resources = ResourceHarness()
++    l1 = ScriptedL1()
++    owner = _headroom_owner(resources, l1, headroom=0)
++
++    owner.activate("decode")
++
++    assert l1.reserved == []
++    assert l1.reads == 0, "zero headroom must not even query the allocator"
++    assert len(resources.created_cbs) == 1
++
++
++def test_negative_headroom_is_rejected(expect_error):
++    with expect_error(ValueError, "global_cb_headroom cannot be negative"):
++        make_config(global_cb_headroom=-1)

@@ -1,0 +1,47 @@
+OPEN
+
+The lifetime defect D-C7 names is FIXED and was qualified by attempt 1 to within 192 bytes,
+three fresh processes, byte-identical: the same test that left 923 776 B per L1 bank
+allocated at Milestone B leaves 131 520 B after the fix, so 792 256 B come back against a
+GALAXY_GLOBAL_CB_SIZE of 792 064 B (logs/d11_q_two_pools_run{1,2,3}.log, commit d40b2093783).
+
+THE BRIEF'S GATE IS NOT MET. It asks for two full models built, used and closed in one
+process with the second creating its global circular buffer, three fresh processes. What
+stands in the way has changed twice and is now named:
+
+  D-C13 (attempt 1)  the second model's global CB failed to allocate: 1 261 952 B free but
+                     the largest contiguous block 759 488 B, 32 576 B short. Fragmentation,
+                     not exhaustion. SUPERSEDED - with commit 32e552bb0b2 the allocation
+                     succeeds.
+  D-C14 (attempt 3)  the second model's first DECODE hangs, in
+                     FDMeshCommandQueue::wait_for_outstanding_reads under
+                     ttnn.synchronize_device, with both models' weights resident.
+                     Backtrace: tttv2_milestone_c_runs/c-defects3/logs/m1b_hang_bt.txt
+                     Run: logs/m1b_qwen_two_pools_r1.log (rc=143 after 21 min).
+                     Attempt 2's logs/e1_qwen_two_pools_l1.log hung at the same point under
+                     an earlier version of this code, so D-C14 predates the D-C13 fix and
+                     was masked by it.
+
+  D-C14's cause, read out of tt_metal: the ttnn program cache belongs to the mesh device,
+  outlives a model's close(), and keys on op-and-config hashes - so two structurally
+  identical Galaxy models in one process share compiled decode programs, and those programs
+  carry the first model's global circular buffer addresses
+  (CircularBufferImpl::set_global_circular_buffer captures buffer_address() and
+  config_address() once; dispatch.cpp:3035 re-sends the captured pair every launch). The
+  buffer must therefore land on the same L1 blocks for every model in the process.
+
+  The fix for that is IMPLEMENTED and HOST-QUALIFIED, not on silicon: GlobalCBPlacement, a
+  record the owner accepts by injection, held per mesh device for the life of the process by
+  models/common/models/galaxy/prefetch.py. test_prefetcher_2d.py 33 passed, including a case
+  that fails without the shared record.
+
+  It could not be qualified because the mesh lost board 23 at 11:10Z:
+  "Read 0xffffffff over PCIe ID 23: the board should be reset", and ten reset attempts over
+  four mechanisms (-glx_reset x7, -glx_reset_auto, -glx_reset_tray, -r 23) all ended
+  "POST_RESET failed for device 23".
+  Logs: tttv2_milestone_c_runs/c-defects3/logs/{mesh_state_1120Z,reset_1121Z,reset_1130Z,
+  reset_auto_1150Z,reset_tray3_1152Z,reset_r23_1152Z,reset_1156Z}.log
+
+NEXT STEP, on a healthy mesh: run test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is
+_unreachable and its Llama twin, three fresh processes each, against commit 32e552bb0b2 or
+later. The code is in place; only the measurement is missing.
