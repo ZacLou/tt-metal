@@ -46,8 +46,10 @@ def _torch_dense_mlp(x, gate_w, up_w, down_w, alpha, limit):
     ids=["s128"],
 )
 def test_dense_mlp_vs_ref(mesh_device, device_params, seq_len, hidden, inter, reset_seeds):
-    """DenseMLP vs torch reference, random weights. (1,1)=TP=1; (8,4)=TP=4 (gate/up col-parallel +
-    down-proj all-reduce). Output is full-hidden post-allreduce -> device[0] holds it. (8,4) needs
+    """DenseMLP vs torch reference, random weights. (1,1)=TP=1; (8,4)=TP=4 (gate/up col-parallel).
+    Under the production sharded residual (tt/residual.py default) the down-proj reduce-SCATTERS:
+    TP column c holds emb slice c, so the readback concatenates the column shards (at TP=1 that
+    degenerates to the single full-hidden device). (8,4) needs
     TT_MESH_GRAPH_DESC_PATH=single_bh_galaxy."""
     alpha, limit = 1.702, 7.0
     x = torch.randn(1, 1, seq_len, hidden) * 0.1
@@ -83,7 +85,11 @@ def test_dense_mlp_vs_ref(mesh_device, device_params, seq_len, hidden, inter, re
     )
 
     out_tt = mlp(x_tt)
-    out = ttnn.to_torch(ttnn.get_device_tensors(out_tt)[0]).reshape(1, 1, seq_len, hidden)
+    # Row 0's TP column shards reassemble full hidden (input is replicated, every row computes the
+    # same output; at TP=1 this is just device 0's full-hidden tensor).
+    cols = mesh_device.shape[1]
+    dts = ttnn.get_device_tensors(out_tt)
+    out = torch.cat([ttnn.to_torch(dts[c]).reshape(1, 1, seq_len, hidden // cols) for c in range(cols)], dim=-1)
 
     passing, pcc = comp_pcc(ref, out, 0.99)
     logger.info(f"dense_mlp seq={seq_len} hidden={hidden} inter={inter}: {pcc}")

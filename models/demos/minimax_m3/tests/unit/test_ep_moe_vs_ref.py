@@ -130,13 +130,18 @@ def test_ep_moe_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
         device=mesh_device,
         dtype=ttnn.bfloat16,
     )
-    out = mlp(tt_x)  # [1, 1, S, H] per device (full emb, replicated across cols)
+    # Production default is the SHARDED residual (tt/residual.py): the MLP returns emb/tp per
+    # device — routed reduce-scatter + shared-expert reduce-scatter, added in emb/tp — where TP
+    # column c holds emb slice c. Reassemble full emb per row by concatenating the column shards.
+    out = mlp(tt_x)  # [1, 1, S, H/tp] per device
     ttnn.synchronize_device(mesh_device)
 
-    # Per-row read: device index = r*cols (col 0; all cols hold the same all-gathered full-emb output).
     dts = ttnn.get_device_tensors(out)
     for r in range(rows):
-        row = ttnn.to_torch(dts[r * cols]).float().reshape(-1, HIDDEN)[:seq_len]
+        row = torch.cat(
+            [ttnn.to_torch(dts[r * cols + c]).float().reshape(seq_len, HIDDEN // cols) for c in range(cols)],
+            dim=-1,
+        )
         passing, pcc = comp_pcc(ref[r], row, 0.95)
         logger.info(f"prompt{r}: pcc={pcc}")
         assert passing, f"prompt {r} EP MoE PCC fail: {pcc}"
