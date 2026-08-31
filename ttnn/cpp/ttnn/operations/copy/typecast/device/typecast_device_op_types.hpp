@@ -26,4 +26,18 @@ struct TypecastInputs {
     std::optional<Tensor> preallocated_output;
 };
 
+// Dataflow-buffer format for a typecast operand.
+//
+// INT8 tensors hold raw two's complement bytes, but the Int8 unpacker/packer decode and emit
+// sign-magnitude, so configuring the buffers with tt::DataFormat::Int8 would corrupt every
+// negative value. They are configured as UInt8 instead - a raw byte pass-through - and the
+// typecast LLK, which is still selected from the true DataType, does the sign handling in the
+// SFPU. This mirrors the int8 quantization path in binary_ng.
+//
+// The LLK selection (make_typecast_defines) must keep using datatype_to_dataformat_converter.
+inline tt::DataFormat typecast_buffer_data_format(tt::tt_metal::DataType dtype) {
+    return dtype == tt::tt_metal::DataType::INT8 ? tt::DataFormat::UInt8
+                                                 : tt::tt_metal::datatype_to_dataformat_converter(dtype);
+}
+
 }  // namespace ttnn::prim

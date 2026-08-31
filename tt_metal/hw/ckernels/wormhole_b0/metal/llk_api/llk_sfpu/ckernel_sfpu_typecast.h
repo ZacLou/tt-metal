@@ -24,6 +24,19 @@ constexpr std::uint16_t UINT16_LOW_MASK = 0xFFFF;
 // lands in the high 16 bits where the packer reads UInt16 out of a 32-bit dest word.
 constexpr std::uint32_t SFPSTORE_MODE_SWAP_HI_LO16 = 9;
 
+// Int8 tensors hold raw two's-complement bytes and are read through the UInt8 unpacker, which
+// zero-extends the byte into a 32-bit Dest word (b in [0, 255]). The native Int8 unpacker is
+// avoided because it decodes the byte as sign-magnitude. XOR-ing that byte with 0x80 recovers the
+// excess-128 value e = s + 128, where s is the true signed value:
+//   b <  128 (s = b):       b ^ 0x80 = b + 128 = s + 128
+//   b >= 128 (s = b - 256): b ^ 0x80 = b - 128 = s + 128
+// so s = (b ^ 0x80) - 128. ckernel_sfpu_quant.h encodes its int8 operands the same way; these
+// constants are prefixed because a kernel can include both headers into namespace ckernel::sfpu.
+constexpr std::uint32_t TYPECAST_INT8_SIGN_MASK = 0x00000080;
+
+// -128.0f as the upper 16 bits of an fp32, which is the form SFPADDI takes its immediate in.
+constexpr std::uint32_t TYPECAST_INT8_MINUS_128_IMM16 = 0xC300;
+
 // Disarms the SFPLOADMACRO "Misc" / Load-Macro-Control config that the typecast init functions program
 // unconditionally (the init dispatch passes only APPROX, so it cannot see is_fp32_dest_acc_en and always arms
 // the macro). The 32-bit Dest (is_fp32_dest_acc_en) typecast paths fall back to a plain TTI_ loop that never
@@ -1009,6 +1022,60 @@ inline void calculate_typecast_uint_to_uint8() {
     }
 }
 
+// Sign-extend the UInt8-unpacked int8 byte held in LREG0, in place: LREG0 = (LREG0 ^ 0x80) - 128.
+// LREG12 (vConstIntPrgm0, programmed by init_typecast_int8_input) must hold TYPECAST_INT8_SIGN_MASK.
+inline void _typecast_int8_sign_extend_lreg0_() {
+    TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);  // e = b ^ 0x80  (excess-128)
+    TTI_SFPIADD(-128 & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+}
+
+// Int8 -> Int32 / UInt32. The sign-extended 2's complement word is also the correct UInt32 result:
+// a negative int8 wraps to s + 2**32, which is exactly what the low 32 bits hold.
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_typecast_int8_to_int32() {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; ++d) {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
+        _typecast_int8_sign_extend_lreg0_();
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, 0);
+    }
+}
+
+// Int8 -> Float32 / Float16_b / Bfp8_b / Bfp4_b. The excess-128 value e is in [0, 255], so the
+// plain SFPCAST is exact and none of the sign-magnitude fixup that calculate_typecast_int32_to_fp32
+// needs applies here. The [-128, 127] result is exactly representable in both fp32 and Float16_b,
+// so no explicit rounding is needed before the packer converts; the block-float outputs lose
+// precision in the packer, as they do for every other source format.
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_typecast_int8_to_fp32() {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; ++d) {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);               // e = b ^ 0x80 in [0, 255]
+        TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);                  // e as fp32
+        TTI_SFPADDI(TYPECAST_INT8_MINUS_128_IMM16, p_sfpu::LREG0, 0);  // s = e - 128.0f
+        TTI_SFPNOP;                                                    // SFPADDI result is not readable next cycle
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_2, 0);
+    }
+}
+
+// Int8 -> UInt16. Negatives clamp to 0, matching calculate_typecast_int32_to_uint16; the positive
+// range [0, 127] is well inside uint16 so no upper saturation is needed. Int8 input always runs
+// with a 32-bit Dest (typecast_impl sets preserve_fp32_precision for 8-bit integer inputs), where
+// the packer reads UInt16 out of the high half of the Dest word - hence the swap-hi-lo16 store.
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_typecast_int8_to_uint16() {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; ++d) {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
+        _typecast_int8_sign_extend_lreg0_();
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);  // LaneEnabled = s < 0
+        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);                // s = 0
+        TTI_SFPENCC(0, 0, 0, 0);                                          // LaneEnabled = true
+        TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_2, 0);
+    }
+}
+
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_uint8() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
@@ -1022,6 +1089,15 @@ inline void init_typecast_uint_to_uint8() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstIntPrgm0 = 0xFF;
     sfpi::vConstIntPrgm1 = UINT16_LOW_MASK;
+}
+
+// Shared init for every Int8-input typecast: only the excess-128 mask is needed. No SFPLOADMACRO
+// is programmed here, so the calculate_ bodies above (all plain loops) need no disarm.
+template <bool APPROXIMATION_MODE>
+inline void init_typecast_int8_input() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    sfpi::vConstIntPrgm0 = TYPECAST_INT8_SIGN_MASK;
 }
 
 }  // namespace sfpu
