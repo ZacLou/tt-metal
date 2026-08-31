@@ -1,0 +1,61 @@
+# c-defects attempt 6, queue 14 — the regression set for commit 299440bb276.
+# Everything here is unconditional: it has to be green whether or not the fix
+# closes the D-C7 gate, because it is shared code that two models depend on.
+#
+# The clash gate first: close() is exactly what this change touches, and
+# *_repeated_requests_and_deterministic_cleanup is the case the clash was
+# qualified on. Both models, three fresh processes each.
+zc1_llama_repeat_full_r1|1800|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_repeated_requests_and_deterministic_cleanup|
+zc2_llama_repeat_full_r2|1800|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_repeated_requests_and_deterministic_cleanup|
+zc3_llama_repeat_full_r3|1800|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_repeated_requests_and_deterministic_cleanup|
+zc4_qwen_repeat_full_r1|1800|models/common/tests/models/qwen3_32b_galaxy/test_full_model_wh_galaxy.py::test_qwen3_32b_galaxy_repeated_requests_and_deterministic_cleanup|
+zc5_qwen_repeat_full_r2|1800|models/common/tests/models/qwen3_32b_galaxy/test_full_model_wh_galaxy.py::test_qwen3_32b_galaxy_repeated_requests_and_deterministic_cleanup|
+zc6_qwen_repeat_full_r3|1800|models/common/tests/models/qwen3_32b_galaxy/test_full_model_wh_galaxy.py::test_qwen3_32b_galaxy_repeated_requests_and_deterministic_cleanup|
+# D-C5/D-C8's headline: device sampling end to end on both models, post-fix.
+zd1_qwen_greedy_r1|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_device_greedy_sampling_equals_host_argmax|
+zd2_qwen_greedy_r2|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_device_greedy_sampling_equals_host_argmax|
+zd3_qwen_greedy_r3|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_device_greedy_sampling_equals_host_argmax|
+zd4_llama_greedy_r1|1800|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_device_greedy_sampling_equals_host_argmax|
+zd5_llama_greedy_r2|1800|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_device_greedy_sampling_equals_host_argmax|
+zd6_llama_greedy_r3|1800|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_device_greedy_sampling_equals_host_argmax|
+# The one area-4 claim-verdict that has never had three fresh processes at ONE
+# commit. t7 was pre-fix, t8 was discarded, t9 was post-fix; these three are all
+# at 299440bb276.
+ze1_llama_seeded_slot_r1|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs|
+ze2_llama_seeded_slot_r2|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs|
+ze3_llama_seeded_slot_r3|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs|
+# Host regression passes 2 and 3, and the runtime set. The brief requires the
+# step-7 host suite after EVERY fix, at three fresh processes.
+zh_s7_concat32_p2|900|models/common/tests/models/galaxy/test_step7_concat32.py|
+zh_s7_long_context_p2|900|models/common/tests/models/galaxy/test_step7_long_context.py|
+zh_s7_paged_kv_p2|900|models/common/tests/models/galaxy/test_step7_paged_kv.py|
+zh_s7_prefix_cache_p2|900|models/common/tests/models/galaxy/test_step7_prefix_cache.py|
+zh_s7_repeat_and_cleanup_p2|900|models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py|
+zh_s7_sampling_p2|900|models/common/tests/models/galaxy/test_step7_sampling.py|
+zh_s7_token_composition_p2|900|models/common/tests/models/galaxy/test_step7_token_composition.py|
+zh_s7_concat32_p3|900|models/common/tests/models/galaxy/test_step7_concat32.py|
+zh_s7_long_context_p3|900|models/common/tests/models/galaxy/test_step7_long_context.py|
+zh_s7_paged_kv_p3|900|models/common/tests/models/galaxy/test_step7_paged_kv.py|
+zh_s7_prefix_cache_p3|900|models/common/tests/models/galaxy/test_step7_prefix_cache.py|
+zh_s7_repeat_and_cleanup_p3|900|models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py|
+zh_s7_sampling_p3|900|models/common/tests/models/galaxy/test_step7_sampling.py|
+zh_s7_token_composition_p3|900|models/common/tests/models/galaxy/test_step7_token_composition.py|
+zh_prefetcher_host_p2|900|models/common/tests/modules/prefetcher/test_prefetcher_2d.py|
+zh_prefetcher_host_p3|900|models/common/tests/modules/prefetcher/test_prefetcher_2d.py|
+zh_hostmod_release_p2|600|models/common/tests/modules/test_lazy_weight_release.py|
+zh_hostmod_release_p3|600|models/common/tests/modules/test_lazy_weight_release.py|
+zh_llm_runtime|1800|models/common/tests/llm_runtime|
+# D-C5/D-C8's own composition tests - the ones rewritten so they exercise the
+# WIDTH_SHARDED layout the LM head actually emits, under a loaded decode
+# sub-device. 6 passed x3 at attempt 1; cheap, and this is shared code.
+zf1_selector_r1|900|models/common/tests/models/galaxy/test_column_user_selector_wh_galaxy.py|
+zf2_selector_r2|900|models/common/tests/models/galaxy/test_column_user_selector_wh_galaxy.py|
+zf3_selector_r3|900|models/common/tests/models/galaxy/test_column_user_selector_wh_galaxy.py|
+# The direct assertion of the close() contract, committed at d2d6c424030.
+# Fails without the release fix by 398 617 984 B per DRAM bank on Llama.
+zg1_llama_close_returns_r1|1800|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_closed_model_returns_its_device_weights|
+zg2_llama_close_returns_r2|1800|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_closed_model_returns_its_device_weights|
+zg3_llama_close_returns_r3|1800|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_closed_model_returns_its_device_weights|
+zg4_qwen_close_returns_r1|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_closed_model_returns_its_device_weights|
+zg5_qwen_close_returns_r2|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_closed_model_returns_its_device_weights|
+zg6_qwen_close_returns_r3|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_closed_model_returns_its_device_weights|

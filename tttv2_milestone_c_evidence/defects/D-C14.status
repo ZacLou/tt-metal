@@ -1,54 +1,61 @@
-OPEN - reduced to a cause, fix implemented and host-qualified, NOT on silicon
+FIXED (mechanism qualified on silicon at a one-layer subset); full-shape 3x2 qualification IN FLIGHT
 
-Two structurally identical Galaxy models in one process must put their global circular
-buffers at the SAME L1 addresses, and nothing made them.
+--- c-defects attempt 4, 2026-08-31 ---
 
-Symptom: the second model's first decode hangs. No output, CPU burning in the profiler and
-completion-queue reader threads, both models' weights already resident.
-  logs/m1b_qwen_two_pools_r1.log                                  rc=143 after 21 min
-  tttv2_milestone_c_runs/c-defects3/logs/m1b_hang_bt.txt          gdb, attached before any
-                                                                  recovery attempt
-    #0  pthread_cond_wait
-    #2  FDMeshCommandQueue::wait_for_outstanding_reads
-    #3  FDMeshCommandQueue::finish_nolock
-    #5  distributed::Synchronize
-    #6  ttnn.synchronize_device
-  1676 "cache hit" lines, and 64 layers x ~13 tensors x 2 models is about that.
-  logs/e1_qwen_two_pools_l1.log (attempt 2)  38 cache hits at a 1-layer subset = 2 x 19, so
-  the SAME point under an earlier version of this code. D-C14 predates the D-C13 fix and was
-  masked by it, because the allocation used to fail first.
+Two models in one process could not both create a global circular buffer. Attempt 3
+reduced the cause and implemented a shared placement record; this attempt got that onto
+silicon and found the REST of the defect behind it.
 
-Cause, read out of tt_metal rather than inferred:
-  - the ttnn program cache belongs to the MESH DEVICE, not to a model, and outlives close();
-  - it keys on op-and-config hashes, so the second model's decode is a cache HIT on programs
-    compiled for the first;
-  - CircularBufferImpl::set_global_circular_buffer (circular_buffer.cpp:179) captures
-    buffer_address() AND config_address() once; dispatch.cpp:3035 re-sends that captured pair
-    on every launch, and kernels read the remote-CB config from that address at runtime.
-  So a second model whose buffer lands elsewhere is read at the first model's addresses.
+WHAT ATTEMPT 3'S FIX DID, measured (logs/s1_qwen_two_pools_sub.log, 1-layer subset):
+  the 21-minute hang in ttnn.synchronize_device is GONE. The second model is now stopped
+  on the host, before anything is enqueued, in 106 s:
+    RuntimeError: cannot restore the global circular buffer to its original L1 address:
+    the lowest occupied L1 is 1272480, already below the free top 1305280 the first
+    creation had
+  That is a large improvement - a mesh-wedging hang became a diagnosable refusal - and it
+  was not the gate.
 
-Fix, implemented in commit 32e552bb0b2, HOST-QUALIFIED ONLY:
-  GlobalCBPlacement - the free top and the creation's blocks - is a record the owner accepts
-  by injection. An owner given none keeps its own, which is byte-for-byte the previous
-  behaviour. models/common/models/galaxy/prefetch.py holds one per mesh device for the life of
-  the process, because "one process, one mesh, several models" is a model-level fact and not a
-  module one; forget_galaxy_global_cb_placement exists for a test that wants a clean one.
-  test_prefetcher_2d.py 33 passed, including
-  test_a_shared_placement_record_pins_a_second_owner_to_the_first_ones_blocks, which fails
-  without the shared record.
+WHAT WAS ACTUALLY WRONG, measured (logs/s3_qwen_two_pools_sub_table.log):
+  The full resident L1 table on entry to BOTH creations, diffed:
+    creation 1   lowest=1370816  102 blocks  128320 B  {32:94,1088,2048,5440,8192x2,17408x2,65536}
+    creation 2   lowest=1272480  179 blocks  130784 B  {32:171,1088,2048,5440,8192x2,17408x2,65536}
+  Every block larger than 32 bytes matches in size AND count. The entire difference is
+  77 extra 32-byte blocks - 2464 B, 1.9%.
+  So it is NOT a bigger configuration (doubling max_num_blocks 2048 -> 4096 changes L1 by
+  nothing; the paged pool is not in L1), and NOT the 64 kB headroom leaking (there is
+  exactly one 65536-byte block in EACH table - it did not leak, it MOVED, 109376 B down).
+  D-C7's original 923776-of-1393472-B-per-bank leak is 99.7% gone.
 
-NOT QUALIFIED ON SILICON. The mesh lost board 23 at 11:10Z and did not come back:
-  "Read 0xffffffff over PCIe ID 23: the board should be reset"
-  twelve reset attempts, four mechanisms, all "POST_RESET failed for device 23".
-  The kernel driver's sysfs says the fault is wider than tt-smi reports: tenstorrent!23
-  (0000:08:00.0) reads tt_heartbeat = 4294967295 (0xFFFFFFFF) and tenstorrent!24..31
-  (0000:41..48:00.0) return ERR - an entire tray of eight. The other 23 boards tick
-  normally. See tttv2_milestone_c_runs/c-defects3/logs/heartbeats_1201Z.log. That is a
-  host-level fault and no tt-smi path reaches it.
+  32 bytes is a semaphore. FreeListOpt::allocate takes the smallest free block that fits,
+  so 77 holes are taken in preference to the low region and displace the 64 kB block from
+  1381856 to 1272480 - below the recorded free top. The gate was lost to FRAGMENTATION by
+  2464 bytes, not to capacity.
 
-NEXT STEP: on a healthy mesh, test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is
-_unreachable and its Llama twin, three fresh processes each. If the hang is gone, D-C7's gate
-and the clash's third blocked claim both close. If it is not, the next thing to measure is
-whether the second model's buffer landed on the recorded blocks - the owner now logs
-"[prefetcher] global circular buffer at L1 blocks [...]" at every creation, so the answer is
-in the log without a probe.
+THE HOLDER: the ttnn program cache. It belongs to the mesh device, outlives close(), and a
+cached program holds its semaphores as well as the buffer_address()/config_address() pair
+captured once at circular_buffer.cpp:179 and re-sent by dispatch.cpp:3035 every launch.
+One action fixes both halves.
+
+FIX, committed faec6e59938:
+  Prefetcher2DConfig.on_global_cb_released - a callable, default None (byte-for-byte the
+  previous path), called once from cleanup() after the buffer's last reference is dropped.
+  The module announces; it does not know what a program cache is or how many models share
+  a mesh. release_galaxy_global_cb_placement in models/common/models/galaxy/prefetch.py
+  decides: clear_program_cache, then forget the placement record.
+  Host: test_prefetcher_2d.py 35 passed (33 before). Deleting only the two-line
+  announcement in cleanup gives 1 failed / 34 passed.
+
+ON SILICON (logs/s6_qwen_two_pools_sub_afterfix.log), the identical 1-layer case:
+  1 passed in 52.68 s, and BOTH creations are in the log:
+    model 1  [(513024, 192), (513216, 792064)]
+    model 2  [(458272, 192), (458464, 792064)]
+  lowest-occupied on entry to creation 2: 1272480 -> 1316064. The fragmenting blocks came
+  back. The second model's buffer lands at a DIFFERENT address, which is correct: the pin
+  exists only to stop a cached program reading a moved buffer, and there is no longer such
+  a program. The guard still fires for the single-model release/recreate case.
+
+STILL OWED: full 64-layer shape, three fresh processes, BOTH models (q11 t1-t6), and the
+shared-code regression of the clash gate (q11 v1-v6). IN FLIGHT from 17:31Z.
+
+COST TO NOTE: a model close now retires the mesh's program cache, so a process that closes
+and rebuilds a model pays a full recompile. Correct, and worth c-perf-paired knowing.

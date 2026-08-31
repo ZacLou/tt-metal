@@ -1,0 +1,7 @@
+# c-defects attempt 6, queue 13b — runs 2 and 3 of D-C7's gate, both models.
+# Run 1 of each is in q13. Three fresh processes is the standard and this is the
+# gate the whole workstream turns on.
+z8_llama_two_pools_r2|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+z9_llama_two_pools_r3|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+z10_qwen_two_pools_r2|2700|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+z11_qwen_two_pools_r3|2700|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|

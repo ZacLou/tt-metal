@@ -1,0 +1,20 @@
+# c-defects attempt 6, queue 12 — the clash, re-asked at HEAD.
+#
+# c-exec-llama measured the Llama L1 address clash at commit 2b463f17fcd and
+# established a 110-second reproduction: one executor, one KV allocation,
+# warmup_model_decode then warmup_model_prefill, and the next prefill throws.
+# THAT COMMIT PREDATES THE FIX. `32e552bb0b2` (2026-08-31 11:32) and
+# `faec6e59938` (17:31) both landed after c-exec-llama exited at 00:02Z on
+# 08-30, and the fix was qualified 3/3 on both models against the direct
+# runner (n1-n6). Nobody has yet run the executor's cheap reproduction at HEAD.
+# If it passes, the clash workstream is closed with its own evidence; if it
+# fails, the fix does not generalise and that is the most valuable thing this
+# job could learn. Three fresh processes either way.
+y1_exec_warmup_df_r1|1200|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_warmup_and_program_identity[wormhole_b0-decode_first-device_params0-mesh_device0]|
+y2_exec_warmup_df_r2|1200|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_warmup_and_program_identity[wormhole_b0-decode_first-device_params0-mesh_device0]|
+y3_exec_warmup_df_r3|1200|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_warmup_and_program_identity[wormhole_b0-decode_first-device_params0-mesh_device0]|
+# The clash's other executor shape: three startup/serve/cleanup cycles in one
+# process. 3/3 failed at 2b463f17fcd on TT_THROW at 542016.
+y4_exec_repeat_cycles_r1|1800|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_repeated_startup_and_cleanup|
+y5_exec_repeat_cycles_r2|1800|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_repeated_startup_and_cleanup|
+y6_exec_repeat_cycles_r3|1800|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_executor_repeated_startup_and_cleanup|

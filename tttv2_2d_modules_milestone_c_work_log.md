@@ -262,3 +262,84 @@ Host gates after the change, three fresh processes each and identical to Milesto
 step-7 34/32/37/18/12/29/8, `test_prefetcher_2d.py` **33 passed** (22 before),
 `llm_runtime` **1032 passed / 1 skipped**. Nothing relaxed, no expectation edited, zero changes
 under `models/common/llm_runtime/**` or to any `*_1d.py`.
+
+## 2026-08-31 — `c-defects` attempt 4
+
+- Mesh arrived HEALTHY (32/32 ticking, board 23 back). Attempt 3's closing state — 25 boards out,
+  "do not reset again" — no longer holds; the host was repaired between 12:26Z and 17:02Z. No reset
+  was run by this attempt. Attempt 3's heartbeat recipe reads `<node>/device/tt_heartbeat`, which at
+  driver 2.9.0 is the PCI directory and returns `ERR` for a live board; the attribute is
+  `<node>/tt_heartbeat`.
+- **Corrected the gate ledger against the tree.** Attempt 3 recorded D-C5/D-C8 as MET with "thirty
+  runs, every one reaching its assertion". Llama's `a_seeded_slot_repeats_across_runs` aborted on the
+  L1 clash 3/3 and never reached the sampler, so the gate is one claim short. Queued as `t7`–`t9`.
+- **D-C7 closed to its mechanism.** Attempt 3's placement record reached silicon and turned a
+  mesh-wedging 21-minute hang into a 106 s refusal. Behind it: the second model finds 77 extra
+  32-byte L1 blocks — 2 464 B — while every larger block matches the first model's in size and count.
+  Not capacity, not a bigger pool, not a leaked headroom: fragmentation. `FreeListOpt` takes the
+  smallest free block that fits, so 77 holes displaced a 64 kB allocation 109 376 B downward, below
+  the recorded free top. D-C7's original 923 776 B/bank leak is 99.7 % gone.
+- **Fix `faec6e59938`:** `Prefetcher2DConfig.on_global_cb_released` (default `None`, called once from
+  `cleanup`) plus `release_galaxy_global_cb_placement` at the model layer, which clears the mesh
+  program cache and forgets the placement record. The module announces, the model layer decides.
+  Host 35 passed (33 before); removing the two-line announcement gives 1 failed / 34 passed. On
+  silicon the one-layer two-pools case went 1 failed → **1 passed**, with both models' creations in
+  the log.
+- 19-run full-shape gate queue (`q11`) launched 17:31Z; 25-run host regression (`q12`) prepared to
+  follow it.
+
+## 2026-08-31 19:51Z — `c-defects` attempt 5 opens
+
+Arrived to find attempt 4's gate queue **still running** (`queue.sh` pid 19707, 7 of 19 runs
+dequeued). Adopted it rather than killing it. Read off `RESULTS.md`: D-C7's gate is **met for
+Qwen** at full shape 3/3 (`t1`–`t3`), and **Llama fails 2/2 at the 3600 s bound** (`t4`, `t5`).
+
+The Llama failure is a **DRAM** Out of Memory at `layer53_wqkv` of the *second* model, with DRAM
+99.95 % full — so the first model's DRAM was not returned by `close()`. That is a different
+resource from D-C7 (L1) and from attempt 4's fragmentation finding, and it is the one thing
+standing between this job and the finish condition.
+
+Reordered the running queue's unread tail in place (same inode, reader offset verified at a line
+boundary) to put a one-layer DRAM residue probe first, then D-C5/D-C8's last unevaluated claim,
+then the step-7 page-table placement file. Deferred the 6-run clash regression until the module is
+in its final state.
+
+## 2026-08-31 20:52Z — `c-defects` attempt 6 opens
+
+Attempt 4's queue was **still running** for the third time; adopted again rather than killed.
+Reconciled attempt 5's 20:10Z handoff against the tree: `t6` had landed (rc=124, the same DRAM OOM
+as `t4`/`t5`, so **3/3 byte-identical**) and attempt 5's probe had already run and **failed in 46 s**
+on an API slip — `ttnn.get_memory_view` returns a `MemoryView`, and the blocks are
+`view.block_table`. No measurement had been taken. Rewrote the probe and re-queued it.
+
+- **The Llama half of D-C7 is a DRAM retention defect, and capacity is refuted.** Two probes at
+  commit `faec6e59938`:
+  - 4 layers: **19 931 264 B per DRAM bank still allocated** after `close()`, `del` and
+    `gc.collect()`; **12 of 12** prefetcher-registered weights still live;
+  - full 80 layers, second arm only: **1 passed in 239 s** — the `max_seq_len=4096`,
+    4096-block-pool arm that the two-pools case dies on builds, prefills and decodes **on its own**
+    — and **398 617 984 B per bank**, 961 blocks, **240 of 240** weights still live after close.
+    That is **37 %** of the 1 070 773 184 B bank, against an OOM reading
+    `allocated: 1070239264, free: 533920`.
+  The residual histogram names the owner: 240 = 80 × 3 (`w1`/`w2`/`w3`), 80 each of the attention
+  shapes including the 208 896 B that is exactly the failing `wqkv_ring`, and 384 × 161 = two RMS
+  norms per layer plus the final norm.
+- **Fix `299440bb276`.** `MLP2D` had no `release` and no `close` at all; the block's `close()`
+  called only `self.attention.close()`, which never touches weights. Added
+  `lazy_weight.release_device_weights` (dedupes on the `LazyWeight` *and* on its `_value`, because
+  `prefill_wqkv = resolved.prefill_wqkv or wqkv`), `RMSNorm2D.release`, `MLP2D.release`,
+  `Attention2D.release`, and `<Block>.release_weights` called per layer from each model's `close()`
+  — **after** `Prefetcher2D.cleanup()`, because the attention decode weights are registered with the
+  prefetcher and freeing one under a live prefetch is a use-after-free. Zero `llm_runtime` lines,
+  zero `*_1d.py` lines.
+- **Measured after the fix, same probe, same shape:** residue **19 931 264 B → 0**, blocks 49 → 0,
+  registered weights **12 of 12 → 0 of 12**. Host regression pass 1 unchanged on all ten suites.
+- **Committed test `d2d6c424030`:** `test_<model>_a_closed_model_returns_its_device_weights`, on
+  both models, asserting the allocator returns to baseline with `handle` and `runner` still bound —
+  `close()` alone must be sufficient. Threshold zero on principle and zero in measurement.
+- Area 4's last unevaluated claim-verdict — Llama's seeded slot — **reached its assertion for the
+  first time** (610 s, zero clash lines) and **fails as D-C12**, matching Qwen claim for claim.
+- Two of `c-exec-llama`'s three handed-over defects reduce to **not shared-Galaxy-code**:
+  `chunk_start` alignment is `llm_runtime/warmup.py:700` assuming a block-aligned prefix is a valid
+  chunk start (32 vs Galaxy's 128), and the `page_table width` failure is a stale table after a pool
+  shrink. Reductions written; `llm_runtime` not touched, per this brief.

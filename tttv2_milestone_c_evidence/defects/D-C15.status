@@ -1,0 +1,90 @@
+FIXED (mechanism qualified on silicon at the full 80-layer shape, both arms, one process);
+three-fresh-process gate runs IN FLIGHT
+
+--- c-defects attempt 6, 2026-08-31 ---
+
+D-C15: A CLOSED GALAXY MODEL DOES NOT RETURN ITS LAYER WEIGHTS (DRAM).
+
+This is the defect behind the Llama half of D-C7's gate. D-C7 is named for L1 and its L1
+half is fixed and qualified (see D-C7.status, D-C14.status). What stopped
+test_llama_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable was a different
+resource entirely.
+
+MEASURED, three fresh processes, byte-identical, full 80-layer shape, commit faec6e59938
+(logs/t4_llama_two_pools_r1.log, t5_..r2, t6_..r3):
+  TT_FATAL: Out of Memory: Not enough space to allocate 2297856 B DRAM buffer across 11
+  banks, where each bank needs to store 208896 B, but bank size is 1070773184 B
+  (allocated: 1070239264 B, free: 533920 B, largest free block: 99712 B)
+  raised at layer53_wqkv_ring - the SECOND model's ring-weight pass, 66% through, with the
+  first model already closed, deleted and gc.collect()ed. Each run then hung in teardown
+  until the 3600 s bound (rc=124).
+
+CAPACITY WAS REFUTED, not assumed away (logs/x1_llama_pool4096_only_full.log):
+  the two-pools case is asymmetric - arm 1 is max_seq_len=2048 with the default 2048-block
+  pool, arm 2 is max_seq_len=4096 with an explicit 4096-block pool, so arm 2's KV is twice
+  arm 1's. Built ALONE at the full 80-layer shape, arm 2 builds, prefills, decodes and
+  closes: 1 passed in 239 s. The second model fits. What does not fit is the second model
+  plus the first model's weights.
+
+RETENTION WAS MEASURED (same log):
+  after close(), del and gc.collect() -
+    398 617 984 B per DRAM bank still allocated, 961 blocks
+    240 of 240 prefetcher-registered weights still live
+  which is 37% of the 1 070 773 184 B bank. At a four-layer subset
+  (logs/w2_llama_dram_probe_l4.log): 19 931 264 B, 49 blocks, 12 of 12.
+  The residual histogram names the owner:
+    650624 x240 = 80 layers x 3   (w1 / w2 / w3)
+    696320 x160, 731136 x80, 278528 x80, 232832 x80, 208896 x80, 186048 x80  (attention;
+      208896 is exactly the size of the wqkv_ring buffer the OOM died on)
+    384 x161 = two RMS norms per layer plus the one final norm
+
+THE CAUSE: close() released the embedding, the LM head, the rotary setup, sampling and the
+column selector, and left attention and MLP alone. MLP2D had NO release and NO close at
+all, and <Model>TransformerBlock2D.close() called only self.attention.close(), which
+releases intermediates and runtime tensors and never weights. A LazyWeight memoizes its
+device tensor in _value, so the weights survive for as long as any caller holds the model -
+a runner still bound in an enclosing frame, an executor kept for its metrics. That is what
+the two-pools test does and what a serving system does by construction.
+
+FIX, commit 299440bb276 (six files, zero llm_runtime lines, zero *_1d.py lines):
+  lazy_weight.release_device_weights   deallocate each distinct materialized weight once,
+      clear its memo; dedupe on the LazyWeight AND on its _value, because Attention2D
+      resolves prefill_wqkv = resolved.prefill_wqkv or wqkv
+  RMSNorm2D.release, MLP2D.release, Attention2D.release
+  <Block>.release_weights, called per layer from each model's close()
+It is the pattern Embedding2D.release, LMHead2D.release, RotarySetup2D.release and
+Sampling2D.release already use. Attention, MLP and RMS norm were the three weight-owning
+2D modules that lacked it.
+
+ORDERING IS THE MODEL'S, NOT THE MODULE'S: the release runs AFTER Prefetcher2D.cleanup(),
+because the attention decode weights are registered with the prefetcher and freeing one
+while a prefetch can still read it is a use-after-free - which on this mesh means a
+TT_FATAL inside a multi-subdevice program and an un-drainable teardown, exactly the failure
+mode t4-t6 spent three hours in. For the same reason a model that BORROWS shared resources
+does not release; it does not control when the prefetch stops. That leaves a
+borrowed-resources model's weights resident, recorded rather than assumed away -
+owns_shared_resources is True for every model this tree builds.
+
+MEASURED AFTER THE FIX, same probe, same shapes, commit 299440bb276:
+  4 layers   (logs/z4_probe_l4_afterfix.log,  72.81 s, 1 passed)
+      residue 19 931 264 B -> 0 B, 49 blocks -> 0, 12 of 12 -> 0 of 12
+  80 layers, BOTH arms, ONE process
+             (logs/z5_probe_full_afterfix.log, 626.11 s, 1 passed)
+      0-default-2048-closed   DRAM=0    0 of 240 weights live   residual n=0 bytes=0
+      1-explicit-4096-built   DRAM=170 325 056  <- from an EMPTY bank
+      1-explicit-4096-closed  DRAM=0    0 of 240 weights live
+      zero "Out of Memory" lines in 5 914 lines of log
+
+TESTS:
+  host   models/common/tests/modules/test_lazy_weight_release.py - 6 passed; covers both
+         aliasing cases and the partial-failure path. Without the primitive it does not
+         import.
+  device test_<model>_a_closed_model_returns_its_device_weights (commit d2d6c424030), in
+         both models' step-7 coverage files: build one model, use it, close it, assert the
+         DRAM allocator is back to baseline with handle and runner STILL BOUND - close()
+         alone must be sufficient. Threshold zero on principle and zero in measurement.
+
+NOTHING WAS RELAXED. No threshold was moved, no test was deleted or xfailed.
+
+STILL OWED at the time of writing: the committed gate test at three fresh processes on both
+models (q13 z6/z7, q13b z8-z11), and the regression set in q14.

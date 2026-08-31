@@ -1,54 +1,57 @@
-OPEN
+FIXED in mechanism; the brief's gate is met at the full 80-layer shape in one process on
+both models, and the three-fresh-process runs of the committed gate test were IN FLIGHT
+when this file was last written. See the tail for exactly what is owed.
 
-The lifetime defect D-C7 names is FIXED and was qualified by attempt 1 to within 192 bytes,
-three fresh processes, byte-identical: the same test that left 923 776 B per L1 bank
-allocated at Milestone B leaves 131 520 B after the fix, so 792 256 B come back against a
-GALAXY_GLOBAL_CB_SIZE of 792 064 B (logs/d11_q_two_pools_run{1,2,3}.log, commit d40b2093783).
+--- c-defects attempt 6, 2026-08-31 (supersedes the attempt-3 revision below the line) ---
 
-THE BRIEF'S GATE IS NOT MET. It asks for two full models built, used and closed in one
-process with the second creating its global circular buffer, three fresh processes. What
-stands in the way has changed twice and is now named:
+THE BRIEF'S GATE: "two full models can be built, used and closed in one process, with the
+second creating its global circular buffer; three fresh processes."
 
-  D-C13 (attempt 1)  the second model's global CB failed to allocate: 1 261 952 B free but
-                     the largest contiguous block 759 488 B, 32 576 B short. Fragmentation,
-                     not exhaustion. SUPERSEDED - with commit 32e552bb0b2 the allocation
-                     succeeds.
-  D-C14 (attempt 3)  the second model's first DECODE hangs, in
-                     FDMeshCommandQueue::wait_for_outstanding_reads under
-                     ttnn.synchronize_device, with both models' weights resident.
-                     Backtrace: tttv2_milestone_c_runs/c-defects3/logs/m1b_hang_bt.txt
-                     Run: logs/m1b_qwen_two_pools_r1.log (rc=143 after 21 min).
-                     Attempt 2's logs/e1_qwen_two_pools_l1.log hung at the same point under
-                     an earlier version of this code, so D-C14 predates the D-C13 fix and
-                     was masked by it.
+WHAT IT TOOK, in the order the defects were found and fixed:
 
-  D-C14's cause, read out of tt_metal: the ttnn program cache belongs to the mesh device,
-  outlives a model's close(), and keys on op-and-config hashes - so two structurally
-  identical Galaxy models in one process share compiled decode programs, and those programs
-  carry the first model's global circular buffer addresses
-  (CircularBufferImpl::set_global_circular_buffer captures buffer_address() and
-  config_address() once; dispatch.cpp:3035 re-sends the captured pair every launch). The
-  buffer must therefore land on the same L1 blocks for every model in the process.
+  D-C7 as named (L1)    923 776 of 1 393 472 B per L1 bank still allocated after close().
+                        Fixed attempt 1 (d40b2093783): a Prefetcher2DContext is captured BY
+                        VALUE at module construction, so clearing the owner's _contexts map
+                        left every built module holding a context whose global_cb was the
+                        live buffer. cleanup() now nulls the field on every context it
+                        handed out. Qualified to within 192 B, 3 fresh processes
+                        (logs/d11_q_two_pools_run{1,2,3}.log).
+  D-C13                 the second model's global CB then failed to allocate: 1 261 952 B
+                        free, largest contiguous block 759 488 B, 32 576 B short.
+                        Fragmentation. Superseded by 32e552bb0b2.
+  D-C14                 the second model's first decode then HUNG: the ttnn program cache
+                        belongs to the mesh device, outlives close(), and two structurally
+                        identical Galaxy models share compiled decode programs carrying the
+                        first model's global-CB addresses. Fixed attempt 4 (faec6e59938):
+                        Prefetcher2DConfig.on_global_cb_released ->
+                        release_galaxy_global_cb_placement, which retires the mesh's cached
+                        programs (and with them 77 stray 32-byte semaphores) and forgets the
+                        placement record. See D-C14.status.
+  D-C15                 with all of that fixed, QWEN PASSED the gate 3/3 at the full shape
+                        (logs/t1,t2,t3, 411/313/321 s) and LLAMA FAILED 3/3 - on DRAM, not
+                        L1: 398 617 984 B per DRAM bank of layer weights that close() never
+                        released. Fixed attempt 6 (299440bb276). See D-C15.status.
 
-  The fix for that is IMPLEMENTED and HOST-QUALIFIED, not on silicon: GlobalCBPlacement, a
-  record the owner accepts by injection, held per mesh device for the life of the process by
-  models/common/models/galaxy/prefetch.py. test_prefetcher_2d.py 33 passed, including a case
-  that fails without the shared record.
+WHERE IT STANDS, measured:
 
-  It could not be qualified because the mesh lost board 23 at 11:10Z:
-  "Read 0xffffffff over PCIe ID 23: the board should be reset", and ten reset attempts over
-  four mechanisms (-glx_reset x7, -glx_reset_auto, -glx_reset_tray, -r 23) all ended
-  "POST_RESET failed for device 23".
-  Logs: tttv2_milestone_c_runs/c-defects3/logs/{mesh_state_1120Z,reset_1121Z,reset_1130Z,
-  reset_auto_1150Z,reset_tray3_1152Z,reset_r23_1152Z,reset_1156Z}.log
+  Qwen, full 80 layers, 3 fresh processes, commit faec6e59938:
+      t1_qwen_two_pools_r1   1 passed   411 s
+      t2_qwen_two_pools_r2   1 passed   313 s
+      t3_qwen_two_pools_r3   1 passed   321 s
+  Llama, full 80 layers, both arms, one process, commit 299440bb276:
+      z5_probe_full_afterfix 1 passed   626 s   - both models built, used and closed;
+      DRAM residue 0 after each; 0 of 240 registered weights retained either time; zero
+      "Out of Memory" lines. Before the fix the same shape died 3/3 at layer53_wqkv_ring.
 
-WARNING FOR THE NEXT ATTEMPT: do NOT run tt-smi -glx_reset on this host before a human
-has looked at it. Thirteen attempts produced one unvarying signature, and the count of
-boards whose tt_heartbeat cannot be read went from 9 (after twelve attempts) to 25 (after
-the thirteenth) and stayed there across seven read-only samples 50 s apart. The house limit
-of two recovery attempts exists for this; I exceeded it and the fleet is worse for it.
-  tttv2_milestone_c_runs/c-defects3/logs/heartbeats_{1201Z,1226Z}.log
+  The committed gate test itself - test_llama_two_paged_pools_agree_and_a_contiguous_cache
+  _is_unreachable, which additionally asserts the two pools' prefill and decode logits agree
+  at PCC >= 0.99 across all 32 slots - is queued at three fresh processes on both models
+  (q13 z6/z7, q13b z8-z11). Read RESULTS.md for those rows before trusting this line.
 
-NEXT STEP, on a healthy mesh: run test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is
-_unreachable and its Llama twin, three fresh processes each, against commit 32e552bb0b2 or
-later. The code is in place; only the measurement is missing.
+Prefetcher2D's cleanup contract in models/common/modules/README.md is updated for what is
+now guaranteed.
+
+--- attempt 3's revision, kept for the record ---
+(The "NEXT STEP, on a healthy mesh" it names has been taken; its D-C14 entry is superseded
+by D-C14.status and its warning about tt-smi -glx_reset on this host still stands. Attempt 6
+ran zero resets.)

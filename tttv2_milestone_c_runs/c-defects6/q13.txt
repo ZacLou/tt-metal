@@ -1,0 +1,22 @@
+# c-defects attempt 6, queue 13 — qualifying commit 299440bb276 (the weight release).
+# Cheap regressions first: if the shared-module change moved a passing claim I want
+# to know in four minutes, not after a twelve-minute full-shape run.
+z0_partition|600|models/common/tests/models/galaxy/test_partition_wh_galaxy.py|
+z1_hostmod_release|600|models/common/tests/modules/test_lazy_weight_release.py|
+z2_prefetcher_host_p1|900|models/common/tests/modules/prefetcher/test_prefetcher_2d.py|
+z3_s7_concat32_p1|900|models/common/tests/models/galaxy/test_step7_concat32.py|
+z3_s7_long_context_p1|900|models/common/tests/models/galaxy/test_step7_long_context.py|
+z3_s7_paged_kv_p1|900|models/common/tests/models/galaxy/test_step7_paged_kv.py|
+z3_s7_prefix_cache_p1|900|models/common/tests/models/galaxy/test_step7_prefix_cache.py|
+z3_s7_repeat_and_cleanup_p1|900|models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py|
+z3_s7_sampling_p1|900|models/common/tests/models/galaxy/test_step7_sampling.py|
+z3_s7_token_composition_p1|900|models/common/tests/models/galaxy/test_step7_token_composition.py|
+# The direct before/after on silicon: the same probe that measured 19 931 264 B of
+# residue per DRAM bank at four layers must now measure ~0.
+z4_probe_l4_afterfix|1500|tttv2_milestone_c_runs/c-defects6/scratch/test_llama_dram_lifecycle_probe.py|LLAMA33_70B_GALAXY_TEST_LAYERS=4
+z5_probe_full_afterfix|2700|tttv2_milestone_c_runs/c-defects6/scratch/test_llama_dram_lifecycle_probe.py|
+# THE GATE: two full models built, used and closed in one process, the second
+# creating its global circular buffer. Llama first, because it is the half that
+# fails; Qwen because this is shared code and a fix has to be qualified on both.
+z6_llama_two_pools_r1|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+z7_qwen_two_pools_r1|2700|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|

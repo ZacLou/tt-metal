@@ -1885,3 +1885,318 @@ record shows what was skipped and on what grounds — a silent truncation would 
 
 Every step-7 number is identical to Milestone B's, in three fresh processes each. **Nothing was
 relaxed and no expectation was edited.**
+
+---
+
+# Attempt 4, 2026-08-31 — D-C7's last 2 464 bytes
+
+## The mesh, first, because attempt 3's closing claim no longer holds
+
+Attempt 3 ended at 12:26Z with 25 of 32 boards unreadable, twelve failed `tt-smi -glx_reset`
+attempts and the instruction not to reset again before a human looked at it. At 17:04Z, before any
+device work, `tt-smi -ls` enumerates all 32, board 23 (`0000:08:00.0`) ticks at 16021 where it read
+`0xFFFFFFFF`, the whole `!24`–`!31` tray ticks, and `test_partition_wh_galaxy.py` is **5 passed in
+15.94 s** (`c-defects4/logs/z0_partition.log`). The sysfs node directories are stamped 17:02 and the
+driver reports 2.9.0, so the host was repaired or power-cycled between the two. **No reset was run
+by this attempt.**
+
+One correction worth carrying forward: attempt 3's handoff reads the heartbeat at
+`/sys/class/tenstorrent/tenstorrent!N/device/tt_heartbeat`. At driver 2.9.0 that path is the PCI
+device directory and holds no `tt_*` attribute, so it returns `ERR` for every board and a live fleet
+looks completely dead. The attribute is one level up:
+
+```sh
+for d in /sys/class/tenstorrent/*; do printf '%s %s\n' "$(basename $d)" "$(cat $d/tt_heartbeat)"; done
+```
+
+## The gate ledger was wrong about D-C5/D-C8, and the tree said so
+
+Attempt 3 §11 records D-C5/D-C8 as *"MET as worded … Thirty runs, every one reaching its
+assertion."* Grepping all 36 area-4 logs for `clash with L1 buffers` shows that is false for one of
+the ten claim-verdicts: **Llama's `a_seeded_slot_repeats_across_runs` aborted on the L1 address clash
+in all three runs** (`program 100`, L1 buffer at 544832) and never reached the sampler. Nine
+combinations reached their assertions; the tenth was never evaluated. That is the brief's own
+warning — the clash "hid D-C5 for Llama by killing the demo path before it ever reached the sampler"
+— happening inside the evidence that was being counted as a measurement *of* the sampler.
+
+The claim is runnable now that the clash is fixed, and it is queued as `t7`–`t9`.
+
+## D-C7 — the last 2 464 bytes, and why they cost the gate
+
+### What was inherited
+
+Attempt 3's `GlobalCBPlacement` — one placement record per mesh device, shared by every owner — was
+committed and host-qualified but had never run on silicon; the mesh died before it could. Getting it
+onto silicon was this attempt's first act, and it works:
+
+| | shape | outcome |
+| --- | --- | --- |
+| attempt 2 `e1_qwen_two_pools_l1` | 1 layer | **hung**, killed at the 29-minute bound, wedged the mesh |
+| attempt 3 `m1b_qwen_two_pools_r1` | 80 layers | **hung** 21 min in `ttnn.synchronize_device`, mesh unaddressable |
+| attempt 4 `s1_qwen_two_pools_sub` | 1 layer | **1 failed in 106.43 s**, clean `RuntimeError`, mesh healthy |
+
+```text
+RuntimeError: cannot restore the global circular buffer to its original L1 address:
+the lowest occupied L1 is 1272480, already below the free top 1305280 the first creation had
+```
+
+A mesh-wedging hang became a diagnosable refusal. That is not the gate, but it is what made the rest
+possible in one evening instead of one night.
+
+### What was actually wrong
+
+The refusal names two numbers and no owner, so the next run logged the **whole** resident L1 table on
+entry to both creations (`logs/s3_qwen_two_pools_sub_table.log`):
+
+| | creation 1 (2048-block pool) | creation 2 (4096-block pool) |
+| --- | --- | --- |
+| lowest occupied | 1370816 | **1272480** |
+| blocks | 102 | 179 |
+| total allocated | 128 320 B | 130 784 B |
+| size histogram | `{32:94, 1088:1, 2048:1, 5440:1, 8192:2, 17408:2, 65536:1}` | `{32:171, 1088:1, 2048:1, 5440:1, 8192:2, 17408:2, 65536:1}` |
+
+**Every block larger than 32 bytes matches in size and in count.** The entire difference is 77 extra
+32-byte blocks — 2 464 B, 1.9 %. Three readings die on that table:
+
+- it is not a larger configuration. Doubling `max_num_blocks` from 2048 to 4096 changes the L1
+  footprint by **nothing**; the paged pool does not live in L1;
+- it is not the 64 kB headroom leaking. There is exactly one 65 536-byte block in *each* table. It
+  did not leak — it **moved**, from 1381856 to 1272480, 109 376 B down;
+- it is not D-C7 as written either. The original defect was 923 776 of 1 393 472 B per bank still
+  allocated after close. **That is 99.7 % gone.**
+
+32 bytes is a semaphore, and `FreeListOpt::allocate` takes the smallest free block that fits. So 77
+holes scattered through the resident region are taken in preference to the low region, and the 64 kB
+block is displaced below the free top the first creation recorded — which is exactly what makes the
+buffer unplaceable. **The gate was lost to fragmentation by 2 464 bytes, not to capacity.**
+
+### What the fix is, and why it is the smallest that respects the boundary
+
+The holder is the ttnn program cache: it belongs to the **mesh device**, outlives a model's
+`close()`, and a cached program holds both its semaphores and the `buffer_address()` /
+`config_address()` pair captured once at `circular_buffer.cpp:179` and re-sent by `dispatch.cpp:3035`
+on every launch. One action fixes both halves — return the semaphores, and leave no program holding a
+dead address.
+
+- **`Prefetcher2DConfig.on_global_cb_released`** — a callable, default `None`, called once from
+  `cleanup()` after the buffer's last reference is dropped. The module knows only that *its* buffer
+  is gone. It does not know what a program cache is, or how many models share the mesh.
+- **`release_galaxy_global_cb_placement(mesh_device)`** in `models/common/models/galaxy/prefetch.py`
+  — `clear_program_cache()`, then forget the placement record. That file already owns the per-mesh
+  record, because "one process, one mesh, several models" is a model-level fact.
+
+The module announces; the model layer decides. Default `None` is byte-for-byte the previous path, and
+`test_an_owner_with_no_release_listener_behaves_exactly_as_before` pins that. No `is_galaxy`, no
+model-name branch, and nothing in the module that knows a program cache exists.
+
+### The logs
+
+| claim | log | result |
+| --- | --- | --- |
+| the refusal, before the fix | `logs/s1_qwen_two_pools_sub.log` | 1 failed, 106.43 s |
+| the L1 tables that named the cause | `logs/s3_qwen_two_pools_sub_table.log` | 1 failed, 51.24 s |
+| the same case after the fix | `logs/s6_qwen_two_pools_sub_afterfix.log` | **1 passed, 52.68 s** |
+| host suite | — | **35 passed** (33 before); removing only the two-line announcement gives 1 failed / 34 passed |
+
+`s6` carries the gate condition in its own log — two creations, two models, one process:
+
+```text
+[prefetcher] global circular buffer at L1 blocks [(513024, 192), (513216, 792064)]   <- model 1
+[prefetcher] global circular buffer at L1 blocks [(458272, 192), (458464, 792064)]   <- model 2
+```
+
+and the mechanism in one number: lowest-occupied on entry to creation 2 went **1272480 → 1316064**.
+The fragmenting blocks came back.
+
+The second model's buffer lands at a *different* address, and that is correct rather than a
+regression. The pin exists only to stop a cached program reading a moved buffer; with the cache
+retired there is no such program. The guard still fires for the single-model release-and-recreate
+case, which is what `v1`–`v6` re-qualify.
+
+**Cost to note for `c-perf-paired`:** closing a model now retires the mesh's program cache, so a
+process that closes and rebuilds a model pays a full recompile.
+
+Committed as `faec6e59938`.
+
+---
+
+# Attempt 6, 2026-08-31 — the Llama half of D-C7 is a DRAM retention defect
+
+## Arrival, and what was inherited as measured rather than re-measured
+
+Attempt 4's queue was still draining when this attempt started at 20:52Z, as it had been when
+attempt 5 arrived. I adopted it rather than killing it, for the same reasons: it holds the mesh
+lock, it is making progress, and its remaining items are the ones the gate ledger needs.
+`healthy_boards_before=32` on every run in this attempt. **Zero `tt-smi` resets.**
+
+Attempt 5's handoff is stamped 20:10Z and two results landed after it, so its status section is
+stale in the job's favour. Reconciled against the tree:
+
+| run | attempt 5 said | the tree says |
+| --- | --- | --- |
+| `t6_llama_two_pools_r3` | IN FLIGHT | rc=124 at 20:51:22Z, same DRAM OOM as `t4`/`t5` |
+| `w1_llama_dram_probe` | "~5 min for the answer" | ran and **failed in 46 s**, `TypeError: 'MemoryView' object is not iterable` — no measurement |
+
+Inherited as measured, not re-run: `t0` 5 passed; `t1`–`t3` **Qwen two-pools 1 passed ×3 at the
+full 80-layer shape**; `t4`/`t5` rc=124.
+
+**Nothing was discarded on dead-mesh grounds.** `t4`–`t6` are rc=124 outer-timeout kills, but they
+are not dead-mesh artifacts: each printed a complete and identical `TT_FATAL` and then hung in
+teardown, which is the documented un-drainable teardown after a `TT_FATAL` in a multi-subdevice
+program. `w1` opened and closed a cluster cleanly at 20:53Z and `t7` ran to 610 s after it, which
+is direct evidence the mesh was never wedged.
+
+## The defect, stated correctly
+
+Three fresh processes, full 80-layer shape, byte-identical, `logs/t{4,5,6}_llama_two_pools_r*.log`:
+
+```text
+2026-08-31 18:08:28.943 | critical | TT_FATAL: Out of Memory: Not enough space to allocate
+2297856 B DRAM buffer across 11 banks, where each bank needs to store 208896 B, but bank size is
+1070773184 B (allocated: 1070239264 B, free: 533920 B, largest free block: 99712 B)
+```
+
+raised at `layer53_wqkv_ring` — the **second** model's prefetcher ring-weight pass, 66 % through,
+with the first model already closed, `del`eted and `gc.collect()`ed. It is **DRAM**, not the L1
+leak D-C7 is named for; attempt 4's L1 fix holds, and Qwen's `t1`–`t3` pass the identical case at
+full shape.
+
+Two explanations fitted, and they implied different fixes:
+
+* **retention** — `close()` does not return model 1's DRAM;
+* **capacity** — it does, and the second arm alone does not fit. The two-pools test is
+  **asymmetric**: arm 1 is `max_seq_len=2048` with the default 2048-block pool, arm 2 is
+  `max_seq_len=4096` with an explicit **4096**-block pool, so arm 2's KV is twice arm 1's and
+  "model 1 fitted" does not imply "model 2 fits".
+
+Attempt 5 assumed retention. The tree did not establish it, so this attempt measured the fork.
+
+## The two probes that settled it
+
+`tttv2_milestone_c_runs/c-defects6/scratch/test_llama_dram_lifecycle_probe.py` reads
+`ttnn.get_memory_view(...).block_table` at every lifecycle point and records the prefetcher's
+registered weights **by address**, because holding the tensors would pin exactly the references it
+is looking for. Attempt 5's version died on the missing `.block_table`; this one guards every
+allocator read and self-tests it before anything expensive.
+
+### `w2_llama_dram_probe_l4` — 4 layers, 98 s
+
+```text
+0-default-2048-built     DRAM=8 918 080     L1=125 760
+0-default-2048-used      DRAM=73 968 256    L1=920 640
+0-default-2048-closed    DRAM=19 931 264    L1=2 432
+default-2048: registered weights still allocated after close+gc: 12 of 12
+  layer[0].w1 @ 2968640 · layer[0].w3 · layer[0].w2 · … · layer[3].w2
+residual 650624 x12 · 696320 x8 · 731136 x4 · 278528 x4 · 232832 x4 · 208896 x4 · 186048 x4 · 384 x9
+```
+
+### `x1_llama_pool4096_only_full` — the **full 80-layer** shape, second arm only, 239 s, **1 passed**
+
+```text
+0-explicit-4096-built    DRAM=170 325 056
+0-explicit-4096-used     DRAM=684 511 744
+0-explicit-4096-closed   DRAM=398 617 984      (961 blocks)
+explicit-4096: registered weights still allocated after close+gc: 240 of 240
+residual 650624 x240 · 696320 x160 · 731136 x80 · 278528 x80 · 232832 x80 · 208896 x80 · 186048 x80 · 384 x161
+```
+
+**Capacity is refuted.** The arm the two-pools case dies on builds, prefills and decodes on its own
+at the full shape in four minutes.
+
+**Retention is measured.** 240 of 240 registered weights still allocated after `close()`, `del` and
+`gc.collect()`: **398 617 984 B per DRAM bank, 37 % of the 1 070 773 184 B bank**, against an OOM
+that reads `allocated: 1070239264, free: 533920`.
+
+**The histogram names the owner.** 240 = 80 × 3 (`w1`/`w2`/`w3`); 80 each of the attention shapes,
+including the 208 896 B that is exactly the size of the `wqkv_ring` buffer the OOM died on; and
+**384 × 161** = two RMS norms per layer plus the one final norm.
+
+## The fix — commit `299440bb276`
+
+`close()` released the embedding, the LM head, the rotary setup, sampling and the column selector,
+and left attention and MLP alone. `MLP2D` had **no `release` and no `close` at all**, and
+`<Model>TransformerBlock2D.close()` called **only** `self.attention.close()`, which releases
+intermediates and runtime tensors and never weights. A `LazyWeight` memoizes its device tensor in
+`_value`, so the weights survive for as long as any caller holds the model — a runner still bound
+in an enclosing frame, an executor kept for its metrics. That is what the two-pools test does, and
+it is what a serving system does by construction.
+
+| file | change |
+| --- | --- |
+| `modules/lazy_weight.py` | `release_device_weights(weights)`: deallocate each distinct materialized weight once, clear its memo. Dedupes on the `LazyWeight` **and** on its `_value` — `Attention2D` resolves `prefill_wqkv = resolved.prefill_wqkv or wqkv`, so two config fields are routinely one object. Collects failures, raises the first |
+| `modules/rmsnorm/rmsnorm_2d.py` | `RMSNorm2D.release()` |
+| `modules/mlp/mlp_2d.py` | `MLP2D.release()` |
+| `modules/attention/attention_2d.py` | `Attention2D.release()`, including the optional `q_norm`/`k_norm` |
+| `models/llama33_70b_galaxy/model.py`, `models/qwen3_32b_galaxy/model.py` | `<Block>.release_weights()`; `close()` calls it per layer plus the final norm |
+
+**Why it is the smallest fix that respects the module/model boundary.** `Embedding2D.release`,
+`LMHead2D.release`, `RotarySetup2D.release` and `Sampling2D.release` already exist and already do
+precisely this. Attention, MLP and RMS norm were the three weight-owning 2D modules that lacked it.
+No new mechanism, no new configuration, and no change to any path that does not call `close()`.
+
+**The ordering is the model's, not the module's.** The release runs **after**
+`Prefetcher2D.cleanup()`: the attention decode weights are registered with the prefetcher, and
+freeing one while a prefetch can still read it is a use-after-free — which on this mesh means a
+`TT_FATAL` inside a multi-subdevice program and an un-drainable teardown, the exact failure mode
+`t4`–`t6` spent three hours in. For the same reason a model that **borrows** shared resources does
+not release; it does not control when the prefetch stops. That leaves a borrowed-resources model's
+weights resident, recorded here rather than assumed away — `owns_shared_resources` is `True` for
+every model this tree builds.
+
+Host coverage: `models/common/tests/modules/test_lazy_weight_release.py`, six cases including both
+aliasing shapes and the partial-failure path. Without the primitive the file does not import.
+
+## Area 4's last claim-verdict, evaluated for the first time
+
+`test_llama_a_seeded_slot_repeats_across_runs` had never reached its assertion on Llama: attempt
+1's three runs all aborted on the L1 address clash. With the clash fixed it now runs, 610 s, and
+`grep -c 'clash with L1 buffers'` on the log is **0**.
+
+It fails, and as a defect already on the ledger:
+
+```text
+AssertionError: a seeded stochastic decode did not repeat
+observed[0] = tensor([ 2662, 5966, 28, 1566, 4354, 304, 220, … ])          token ids
+observed[1] = tensor([3209869902, 3203938928, 32149, 3222092442, … ])      float32 bits as int32
+```
+
+That is **D-C12** — the second `decode_sampled` in a process returns the wrong buffer — already
+qualified 3/3 on Qwen. `t7` (pre-fix) and `t9` (post-fix) agree byte-for-byte on `observed[0]` and
+both find float bit patterns in `observed[1]`; the garbage itself differs between runs, which is
+what a stale-buffer read looks like. **So Llama's area-4 ledger now matches Qwen's claim for
+claim, and the weight-release fix moved none of it.**
+
+`t8` is discarded: it started while this attempt had a half-applied edit in the working tree and
+died in 0.87 s on `AttributeError: 'function' object has no attribute '__mro__'`. That is a
+mistake of process, not a result, and it is recorded in the handoff as one.
+
+## Two of `c-exec-llama`'s three handed-over defects are not shared-Galaxy defects
+
+* **`chunk_start must be non-negative and aligned to chunk_alignment`** (`attention_2d.py:860`).
+  Measured (`exec_llama/logs/f_warmup_pf_r1.log:1743`): `chunk_start=32`, `sequence_length=128`,
+  Galaxy `chunk_alignment=128` — it is the flash-SDPA `q_chunk_size`/`k_chunk_size`
+  (`recipes.py:651`). The value comes from `llm_runtime/prefill/plan.py:381`,
+  `absolute_start = num_cached_tokens + relative_start`, with `num_cached_tokens` set at
+  **`llm_runtime/warmup.py:700`** as `cached_tokens=layout.block_size` — 32. The common runtime's
+  default warmup plan assumes any block-aligned prefix is a valid chunk start; on Galaxy the block
+  size is 32 and the chunk alignment is 128. The module validator and the shared recipe are both
+  correct. **This is a runtime defect and this brief forbids changing `llm_runtime`** — "if you
+  believe otherwise, write the reduction and stop", so this is the reduction. Lowering Galaxy's
+  `chunk_alignment` to 32 would be relaxing a constraint to turn a failure green and was not done.
+* **`page_table width cannot address the required KV capacity`** (`attention_2d.py:714`). Measured
+  (`exec_llama/logs/f_shrink_r1.log:672`): staged table `(1, 128)` against
+  `PagedKVMetadata(block_size=32, max_num_blocks=95)`, so the failing clause is
+  `shape[1] > meta.max_num_blocks`, 128 > 95. The pool was shrunk and the previously staged wider
+  table reused. The caller owes a restage after `configure_paged_attention`. **An executor defect.**
+* **`test_reference_prefill_and_decode` at 2048 → non-finite decode logits.** This one *is* shared
+  code (`GalaxyDirectRunner`). Recorded OPEN; it is not in this brief's finish condition.
+
+## The clash evidence `c-exec-llama` handed over predates the fix
+
+`git merge-base --is-ancestor` puts every one of `c-exec-llama`'s commits **before** the clash fix:
+it exited at 2026-08-30T00:02Z at `2b463f17fcd`, while `32e552bb0b2` landed 2026-08-31 11:32 and
+`faec6e59938` at 17:31. So its "prefill after a decode" reproduction, its three addresses
+(543488, 542016, 544832) and its "the clash blocks serving" conclusion are all pre-fix, and nobody
+has re-asked them at HEAD. `q12.txt` queues that question: three fresh processes each of
+`test_executor_warmup_and_program_identity[decode_first]` and
+`test_executor_repeated_startup_and_cleanup`, ~110–190 s apiece.

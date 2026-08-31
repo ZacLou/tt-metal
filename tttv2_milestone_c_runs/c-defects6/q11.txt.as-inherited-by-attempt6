@@ -1,0 +1,33 @@
+# c-defects attempt 4, queue 11 — the gate queue, at FULL shape, against commit faec6e59938.
+# Cheapest sanity first.
+t0_partition|600|models/common/tests/models/galaxy/test_partition_wh_galaxy.py|
+# D-C7's gate AND the clash's third blocked claim: two models built, used and closed in
+# one process, the second creating its global circular buffer. Three fresh processes,
+# BOTH models, because this is shared Galaxy code.
+t1_qwen_two_pools_r1|3600|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+t2_qwen_two_pools_r2|3600|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+t3_qwen_two_pools_r3|3600|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+t4_llama_two_pools_r1|3600|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+t5_llama_two_pools_r2|3600|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+t6_llama_two_pools_r3|3600|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable|
+# ===== attempt 5 rewrote this unread tail at 19:59Z; inode preserved, the queue's
+# ===== read offset was exactly 1487 = this line's start. Rationale:
+# =====  * t4/t5 show Llama's second model dying on a DRAM Out of Memory while
+# =====    loading layer53's weights - NOT the L1 clash and NOT D-C7's L1 leak.
+# =====    Which of the four candidate retainers it is decides the fix, so the
+# =====    one-layer DRAM probe goes first: ~5 min for the answer.
+# =====  * v1-v6 (clash regression under the changed module) are DEFERRED out of
+# =====    this queue. They cost ~60 min and their whole purpose is to qualify the
+# =====    module as it will finally stand; running them before a further fix to
+# =====    the same module would only have to be redone.
+w1_llama_dram_probe|1500|tttv2_milestone_c_runs/c-defects5/scratch/test_llama_dram_residue_probe.py|LLAMA33_70B_GALAXY_TEST_LAYERS=1
+# The one area-4 claim that has NEVER been evaluated on silicon: all three of
+# attempt 1's runs aborted on the L1 address clash before reaching the sampler.
+# Closes D-C5/D-C8.
+t7_llama_seeded_slot_r1|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs|
+t8_llama_seeded_slot_r2|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs|
+t9_llama_seeded_slot_r3|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs|
+# The one step-7 file that opens a mesh and so could never be run host-only.
+u1_s7_page_table_placement_p1|1800|models/common/tests/models/galaxy/test_step7_page_table_placement_wh_galaxy.py|
+u2_s7_page_table_placement_p2|1800|models/common/tests/models/galaxy/test_step7_page_table_placement_wh_galaxy.py|
+u3_s7_page_table_placement_p3|1800|models/common/tests/models/galaxy/test_step7_page_table_placement_wh_galaxy.py|
