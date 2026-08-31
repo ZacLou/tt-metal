@@ -137,6 +137,7 @@ def make_config(
     defer_global_cb=False,
     release_global_cb_on_prefill=False,
     global_cb_headroom=0,
+    on_global_cb_released=None,
 ):
     mesh = FakeMesh() if mesh is None else mesh
     return Prefetcher2DConfig(
@@ -161,6 +162,7 @@ def make_config(
         address_memory_config="address-memcfg",
         address_mesh_mapper="address-mapper",
         defer_global_cb=defer_global_cb,
+        on_global_cb_released=on_global_cb_released,
         release_global_cb_on_prefill=release_global_cb_on_prefill,
         global_cb_headroom=global_cb_headroom,
     )
@@ -1075,3 +1077,78 @@ def test_a_gap_that_is_not_a_multiple_of_32_is_taken_as_far_as_it_can_be():
 
     assert dict(l1.blocks) == {**first, 999_000: 64}, "the unaligned gap captured part of the creation"
     assert 928 in l1.reserved, "the gap was not taken as far as 32-byte units allow"
+
+
+def test_cleanup_announces_the_global_cb_release_once_the_buffer_is_gone():
+    """`on_global_cb_released` fires from `cleanup`, and only after the release.
+
+    A program in the ttnn program cache captures the global circular buffer's
+    ``buffer_address()`` and ``config_address()`` once and re-sends the pair on
+    every launch, and it holds its semaphores - 32 bytes of L1 each - for as long
+    as it is cached. So when the buffer goes away, something has to be able to
+    retire the programs that still refer to it. The module does not know how many
+    models share the mesh, so it announces the release and the caller decides.
+
+    Measured consequence of having no such announcement, on `(8, 4)`
+    (`tttv2_milestone_c_runs/c-defects4/logs/s3_qwen_two_pools_sub_table.log`): a
+    second model in one process found 77 extra 32-byte L1 blocks resident, which
+    fragmented the free list enough to displace a 64 kB allocation 109 376 B
+    downward and made the buffer unplaceable at its recorded address.
+    """
+
+    resources = ResourceHarness()
+    l1 = ScriptedL1()
+    announced: list[str] = []
+
+    owner = Prefetcher2D(
+        make_config(
+            expected_weight_count=1,
+            defer_global_cb=True,
+            release_global_cb_on_prefill=True,
+            global_cb_headroom=4096,
+            on_global_cb_released=lambda: announced.append("released"),
+        ),
+        create_global_cb=l1.create_global_cb,
+        create_address_metadata=resources.create_metadata,
+        deallocate=l1.release,
+        dram_prefetch_start=resources.start,
+        dram_prefetch_stop=resources.stop,
+        l1_block_table=l1.l1_block_table,
+        reserve_l1=l1.reserve_l1,
+    )
+    owner.initialize()
+    owner.register_weight("weight", FakeTensor(owner.config.mesh_device, 101, 128))
+    owner.seal()
+    owner.activate("decode")
+
+    assert announced == [], "the release was announced while the buffer was still live"
+    owner.cleanup()
+    assert announced == ["released"], "cleanup did not announce the global CB release"
+
+    # Terminal and idempotent, exactly as `cleanup` itself is: a second cleanup
+    # must not retire the mesh's programs a second time.
+    owner.cleanup()
+    assert announced == ["released"], "cleanup announced the release more than once"
+
+
+def test_an_owner_with_no_release_listener_behaves_exactly_as_before():
+    """The hook defaults to `None`, and that path is byte-for-byte the old one."""
+
+    resources = ResourceHarness()
+    l1 = ScriptedL1()
+    owner = Prefetcher2D(
+        make_config(expected_weight_count=1, defer_global_cb=True),
+        create_global_cb=l1.create_global_cb,
+        create_address_metadata=resources.create_metadata,
+        deallocate=l1.release,
+        dram_prefetch_start=resources.start,
+        dram_prefetch_stop=resources.stop,
+        l1_block_table=l1.l1_block_table,
+        reserve_l1=l1.reserve_l1,
+    )
+    assert owner.config.on_global_cb_released is None
+    owner.initialize()
+    owner.register_weight("weight", FakeTensor(owner.config.mesh_device, 101, 128))
+    owner.seal()
+    owner.activate("decode")
+    owner.cleanup()

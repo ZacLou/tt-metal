@@ -284,6 +284,21 @@ class Prefetcher2DConfig:
     #: Defaults to 0, which is exactly the previous behaviour.
     global_cb_headroom: int = 0
 
+    #: Called once from `cleanup`, after the global circular buffer's last
+    #: reference is dropped and its L1 is back.
+    #:
+    #: The buffer's addresses are captured **once** per program
+    #: (`CircularBufferImpl::set_global_circular_buffer` takes
+    #: ``buffer_address()`` and ``config_address()``; `dispatch.cpp` re-sends the
+    #: captured pair on every launch), so a program that outlives the buffer holds
+    #: a dead address. Whether anything *can* outlive it is not a fact this module
+    #: knows: the ttnn program cache belongs to the mesh device, and how many
+    #: models share one mesh is a model-level question. So the owner announces
+    #: that the buffer is gone and the caller decides what that means.
+    #:
+    #: Defaults to `None`, which is exactly the previous behaviour.
+    on_global_cb_released: Callable[[], None] | None = None
+
     def __post_init__(self) -> None:
         object.__setattr__(
             self,
@@ -696,6 +711,13 @@ class Prefetcher2D:
         else:
             target_top = placement.free_top
             if lowest < target_top:
+                # Diagnostic, not a behaviour change: name the blocks that are
+                # sitting below the free top the first creation saw. Whether they
+                # are residue the previous owner failed to return or allocations
+                # this owner made for a larger configuration is the whole question,
+                # and the addresses answer it.
+                intruders = sorted((address, size) for address, size in _allocated(table) if address < target_top)
+                logger.info(f"[prefetcher] blocks below the first creation's free top {target_top}: {intruders}")
                 raise RuntimeError(
                     "cannot restore the global circular buffer to its original L1 address: the lowest "
                     f"occupied L1 is {lowest}, already below the free top {target_top} the first "
@@ -895,6 +917,11 @@ class Prefetcher2D:
                 attempt(lambda manager=manager: mesh.remove_sub_device_manager(manager))
 
         self._contexts.clear()
+        # Announce the release only now: every reference to the buffer is gone
+        # above, so by this point its L1 is genuinely back and a listener that
+        # retires programs holding its address is retiring them against a fact.
+        if self.config.on_global_cb_released is not None:
+            attempt(self.config.on_global_cb_released)
         self._cleaned = True
         if first_error is not None:
             raise first_error

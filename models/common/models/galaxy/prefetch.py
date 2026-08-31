@@ -12,6 +12,7 @@ contexts to its module configs.
 
 from __future__ import annotations
 
+import functools
 from typing import Any
 
 import ttnn
@@ -71,6 +72,46 @@ def forget_galaxy_global_cb_placement(mesh_device: Any) -> None:
     """
 
     _GLOBAL_CB_PLACEMENTS.pop(id(mesh_device), None)
+
+
+def release_galaxy_global_cb_placement(mesh_device: Any) -> None:
+    """Retire the mesh's cached programs, then forget its placement record.
+
+    Called when a Galaxy owner's global circular buffer has been released and its
+    L1 is back - `Prefetcher2DConfig.on_global_cb_released`.
+
+    Two facts make this the model layer's job rather than the module's, and both
+    are about the *mesh* rather than about any one owner:
+
+    * the ttnn program cache belongs to the mesh device and outlives a model's
+      `close()`. Its keys are op-and-config hashes, so two structurally identical
+      Galaxy models hash to the same keys and the second model's decode is a cache
+      **hit** on programs compiled for the first. Those programs carry the first
+      buffer's captured `buffer_address()` and `config_address()`
+      (`circular_buffer.cpp:179`, re-sent by `dispatch.cpp:3035` on every launch),
+      so once that buffer is gone every one of them is a wrong-address read
+      waiting to happen. Clearing the cache is what makes them stop being that;
+    * a cached program also holds its **semaphores**, and a semaphore is a
+      32-byte L1 allocation. Measured on `(8, 4)`, one-layer subsets
+      (`tttv2_milestone_c_runs/c-defects4/logs/s3_qwen_two_pools_sub_table.log`):
+      a second model in one process found **77 extra 32-byte blocks** resident -
+      2 464 B - while every block larger than 32 bytes matched the first model's
+      in size and count. Those 77 holes are not a capacity problem; they are a
+      *fragmentation* problem. `FreeListOpt::allocate` takes the smallest free
+      block that fits, so they are taken in preference to the low region, and the
+      64 kB block that sat at 1381856 for the first model was displaced to
+      1272480 for the second - 109 376 B lower, below the free top the first
+      creation recorded, which is precisely what made the buffer unplaceable.
+
+    Clearing the cache addresses both at once, and it is safe in the order used
+    here because the owner announces the release only after the buffer's last
+    reference is gone.
+    """
+
+    try:
+        mesh_device.clear_program_cache()
+    finally:
+        forget_galaxy_global_cb_placement(mesh_device)
 
 
 _RECEIVER_COLUMN_PAIRS = tuple(((1, y), (2, y)) for y in (9, 0, 4, 5)) + tuple(
@@ -207,6 +248,10 @@ def build_galaxy_prefetcher_config(
         # stranded underneath the CB.
         release_global_cb_on_prefill=release_global_cb_on_prefill,
         global_cb_headroom=global_cb_headroom,
+        # When this owner's buffer is gone, the mesh's cached programs still hold
+        # its addresses and its semaphores. Retiring them is a mesh-level action
+        # and so it is resolved here, not inside the module.
+        on_global_cb_released=functools.partial(release_galaxy_global_cb_placement, mesh_device),
     )
 
 
