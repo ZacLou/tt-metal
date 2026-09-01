@@ -1,0 +1,115 @@
+c-defects Finish-condition ledger, machine-written by attempt 10
+generated:  2026-09-01T10:48:18Z
+HEAD:       8a5c1d7ba80e00eb6ebbcbac60df8004ceb0884f
+merge-base: 6af44349413ca6ce2c0d98f5b26dd2898dc1f067  (apbernal/tttv2_wh_glx_2d_modules_milestone_b)
+
+GATE 1  D-C5/D-C8: device sampling end to end, both models; five area-4 claims x3 fresh
+ claim 1  device greedy == host argmax
+  zd1_qwen_greedy_r1               f61978825cda clash=0 skip=0 fatal=0 | 1 failed, 2 warnings in 147.11s (0:02:27)
+  zd2_qwen_greedy_r2               f61978825cda clash=0 skip=0 fatal=0 | 1 failed, 2 warnings in 147.34s (0:02:27)
+  zd3_qwen_greedy_r3               f61978825cda clash=0 skip=0 fatal=0 | 1 failed, 2 warnings in 146.38s (0:02:26)
+  zd4_llama_greedy_r1              f61978825cda clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 442.44s (0:07:22)
+  zd5_llama_greedy_r2              f61978825cda clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 343.06s (0:05:43)
+  zd6_llama_greedy_r3              f61978825cda clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 226.26s (0:03:46)
+ claim 2  no padded vocabulary id is ever sampled
+  zq1_qwen_padded_vocab_r1         671802f94648 clash=0 skip=0 fatal=0 | 3 passed, 2 warnings in 656.18s (0:10:56)
+  zq2_qwen_padded_vocab_r2         671802f94648 clash=0 skip=0 fatal=0 | 3 passed, 2 warnings in 510.17s (0:08:30)
+  zq3_qwen_padded_vocab_r3         671802f94648 clash=0 skip=0 fatal=0 | 3 passed, 2 warnings in 620.36s (0:10:20)
+  zl1_llama_padded_vocab_r1        671802f94648 clash=0 skip=0 fatal=0 | 3 passed, 2 warnings in 1234.84s (0:20:34)
+  zl2_llama_padded_vocab_r2        4292d26e47fa clash=0 skip=0 fatal=0 | 3 passed, 2 warnings in 813.37s (0:13:33)
+  zl3_llama_padded_vocab_r3        4292d26e47fa clash=0 skip=0 fatal=0 | 3 passed, 2 warnings in 1072.36s (0:17:52)
+ claim 3  T=0.02 collapses onto host argmax (Milestone A D4)
+  zq4_qwen_near_zero_temp_r1       671802f94648 clash=0 skip=0 fatal=0 | 1 failed, 2 warnings in 182.73s (0:03:02)
+  zq5_qwen_near_zero_temp_r2       671802f94648 clash=0 skip=0 fatal=0 | 1 failed, 2 warnings in 172.23s (0:02:52)
+  zq6_qwen_near_zero_temp_r3       671802f94648 clash=0 skip=0 fatal=0 | 1 failed, 2 warnings in 167.22s (0:02:47)
+  zl4_llama_near_zero_temp_r1      4292d26e47fa clash=0 skip=0 fatal=0 | 1 failed, 2 warnings in 304.95s (0:05:04)
+  zl5_llama_near_zero_temp_r2      4292d26e47fa clash=0 skip=0 fatal=0 | 1 failed, 2 warnings in 310.33s (0:05:10)
+  zl6_llama_near_zero_temp_r3      4292d26e47fa clash=0 skip=0 fatal=0 | 1 failed, 2 warnings in 282.99s (0:04:42)
+ claim 4  a seeded slot repeats across runs
+  zq10_qwen_seeded_slot_r1         671802f94648 clash=0 skip=0 fatal=0 | 1 failed, 2 warnings in 237.45s (0:03:57)
+  zq11_qwen_seeded_slot_r2         671802f94648 clash=0 skip=0 fatal=0 | 1 failed, 2 warnings in 225.75s (0:03:45)
+  zq12_qwen_seeded_slot_r3         671802f94648 clash=0 skip=0 fatal=0 | 1 failed, 2 warnings in 231.25s (0:03:51)
+  ze1_llama_seeded_slot_r1         f61978825cda clash=0 skip=0 fatal=0 | 1 failed, 2 warnings in 301.09s (0:05:01)
+  ze2_llama_seeded_slot_r2         f61978825cda clash=0 skip=0 fatal=0 | 1 failed, 2 warnings in 308.77s (0:05:08)
+  ze3_llama_seeded_slot_r3         f61978825cda clash=0 skip=0 fatal=0 | 1 failed, 2 warnings in 352.00s (0:05:52)
+ claim 5  per-slot heterogeneous controls
+  zq7_qwen_per_slot_controls_r1    671802f94648 clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 159.54s (0:02:39)
+  zq8_qwen_per_slot_controls_r2    671802f94648 clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 167.56s (0:02:47)
+  zq9_qwen_per_slot_controls_r3    671802f94648 clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 164.92s (0:02:44)
+  zl7_llama_per_slot_controls_r1   4292d26e47fa clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 248.44s (0:04:08)
+  zl8_llama_per_slot_controls_r2   4292d26e47fa clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 248.30s (0:04:08)
+  zl9_llama_per_slot_controls_r3   4292d26e47fa clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 311.74s (0:05:11)
+ the selector at the layout the LM head actually emits, under a loaded decode sub-device
+  zf1_selector_r1                  f61978825cda clash=0 skip=0 fatal=0 | 7 passed in 23.58s
+  zf2_selector_r2                  f61978825cda clash=0 skip=0 fatal=0 | 7 passed in 23.82s
+  zf3_selector_r3                  f61978825cda clash=0 skip=0 fatal=0 | 7 passed in 23.54s
+
+GATE 2  D-C7: two models built, used, closed in one process; second creates its global CB; x3
+  z6_llama_two_pools_r1            d2d6c424030c clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 797.78s (0:13:17)
+  z8_llama_two_pools_r2            d2d6c424030c clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 1150.68s (0:19:10)
+  z9_llama_two_pools_r3            874a0e9da758 clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 820.22s (0:13:40)
+  z7_qwen_two_pools_r1             d2d6c424030c clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 445.81s (0:07:25)
+  z10_qwen_two_pools_r2            874a0e9da758 clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 437.29s (0:07:17)
+  z11_qwen_two_pools_r3            874a0e9da758 clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 272.24s (0:04:32)
+
+GATE 3  Llama address clash: *_repeated_requests_and_deterministic_cleanup 3/3 (+ Qwen control)
+  zc1_llama_repeat_full_r1         874a0e9da758 clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 571.12s (0:09:31)
+  zc2_llama_repeat_full_r2         f61978825cda clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 282.62s (0:04:42)
+  zc3_llama_repeat_full_r3         f61978825cda clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 222.86s (0:03:42)
+  zc4_qwen_repeat_full_r1          f61978825cda clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 302.74s (0:05:02)
+  zc5_qwen_repeat_full_r2          f61978825cda clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 144.62s (0:02:24)
+  zc6_qwen_repeat_full_r3          f61978825cda clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 143.75s (0:02:23)
+
+GATE 4  Llama address clash: the three claims it blocked, measured
+ (a) block-level cross-slot isolation
+  zm1_llama_cross_slot_r1          4292d26e47fa clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 309.40s (0:05:09)
+  zm2_llama_cross_slot_r2          f84ed48496ef clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 333.24s (0:05:33)
+  zm3_llama_cross_slot_r3          c4605147cb94 clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 439.24s (0:07:19)
+ (b) chunked prefill matches a single uncached prefill
+  zm4_llama_chunked_prefill_r1     c4605147cb94 clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 303.64s (0:05:03)
+  zm5_llama_chunked_prefill_r2     c4605147cb94 clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 228.93s (0:03:48)
+  zm6_llama_chunked_prefill_r3     c4605147cb94 clash=0 skip=0 fatal=0 | 1 passed, 2 warnings in 249.68s (0:04:09)
+ (c) two paged pools in one process = GATE 2 above (z6/z8/z9)
+
+GATE 5  D-C6: DEFERRED with measurements
+  D-C6.status line 1: DEFERRED
+
+GATE 6  step-7 suite green, expectations unchanged
+  git diff $MB..HEAD -- 'models/common/tests/models/galaxy/test_step7_*.py':
+    0 lines of diff  (0 = the seven files are byte-identical to Milestone B)
+  production code diff 299440bb276..HEAD under models/, non-test:
+    models/common/modules/README.md
+  host passes, three fresh processes:
+    p1 (z3_*): 170 tests passed across the seven files
+    p2 (zh_*): 170 tests passed across the seven files
+    p3 (zh_*): 170 tests passed across the seven files
+  device-side step-7 (the one file that needs a mesh), three fresh at HEAD:
+  u4_s7_page_table_placement_h1    c4605147cb94 clash=0 skip=0 fatal=0 | 3 passed in 12.24s
+  u5_s7_page_table_placement_h2    c4605147cb94 clash=0 skip=0 fatal=0 | 3 passed in 12.00s
+  u6_s7_page_table_placement_h3    c4605147cb94 clash=0 skip=0 fatal=0 | 3 passed in 12.07s
+
+GATE 7  pytest models/common/tests/llm_runtime
+  zh_llm_runtime                   f61978825cda clash=0 skip=1 fatal=0 | 1032 passed, 1 skipped, 9 warnings in 212.08s (0:03:32)
+
+GATE 8  zero changes to any *_1d.py and zero under models/common/llm_runtime/
+    *_1d.py                 : 0 lines of diff
+    models/common/llm_runtime: 0 lines of diff
+    git status models/       : 0 modified paths
+
+PROVENANCE OF THE GATE LOGS - every commit any gate log carries, checked against HEAD
+  commit        date         non-test models/ diff vs HEAD
+  d2d6c424030c  08-31 21:34  modules/README.md  (documentation only)
+  874a0e9da758  08-31 22:08  (none)
+  f61978825cda  08-31 22:58  (none)
+  671802f94648  09-01 01:17  (none)
+  4292d26e47fa  09-01 08:20  (none)
+  f84ed48496ef  09-01 09:53  (none)
+  c4605147cb94  09-01 10:01  (none)
+  and: git diff --name-only d2d6c424030c..HEAD -- models/  ==  modules/README.md ALONE,
+  so NO TEST FILE under models/ changed either, across the whole span of the gate logs.
+  => every gate run above executed the same production code and the same test code as HEAD.
+
+HF_HOME in every gate log: /localdev/ctr-apbernal/hf_data  (the required value)
+SKIPPED count in every device gate log: 0
+The one skip in GATE 7 is the documented Milestone B baseline skip and is not a checkpoint skip:
+  SKIPPED [1] models/common/tests/demos/llama3_8b/demo.py:378: Unsupported MESH_DEVICE=''

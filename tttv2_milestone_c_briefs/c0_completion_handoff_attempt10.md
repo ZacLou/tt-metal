@@ -1,11 +1,19 @@
 # `c-defects` — completion handoff (attempt 10)
 
-**Last updated:** 2026-09-01T10:36Z — checkpoint 1.
+**Last updated:** 2026-09-01T10:50Z — checkpoint 2.
 
 **Base commit on arrival:** `c4605147cb949243e98707de74d9a70870813ba5`.
 **Branch:** `apbernal/tttv2_wh_glx_2d_modules_milestone_c`. **Job window:** started 10:32Z.
 
-**Finish marker: not written yet.** **Blocked marker: not written, not applicable.**
+**FINISH MARKER WRITTEN** — `tttv2_milestone_c_runs/state/c-defects.finished`:
+`FINISHED 2026-09-01T10:49:17Z 8a5c1d7ba80e00eb6ebbcbac60df8004ceb0884f`. Every one of the brief's
+eight Finish-condition gates has a log on disk behind it, and every one of those logs ran against
+production **and test** code byte-identical to HEAD. The machine-written ledger is
+`tttv2_milestone_c_evidence/defects/GATE_LEDGER_attempt10.txt`. **Blocked marker: not written, not
+applicable — nothing is blocked.**
+
+**I have not exited and will not until `q16` drains.** The remaining queue items are *not* gates:
+they are area 2's never-asked question (`zp1`-`zp6`) and D-C17's real measurement (`zs1`-`zs6`).
 
 **Device work of mine currently on the mesh:** yes — attempt 7's queue `q16`, PID 228702,
 adopted by the driver across attempts 8 and 9. I will not exit before it drains, is read, and is
@@ -57,7 +65,7 @@ headers, its final pytest summary, and counts of `clash with L1 buffers`, `SKIPP
 | 3 | **Llama clash** — `*_repeated_requests_and_deterministic_cleanup` 3/3 fresh for Llama | **MET** | `zc1_llama_repeat_full_r1`/`zc2`/`zc3` 571.12/282.62/222.86 s `1 passed`, 0 clash. Cross-check that the shared fix did not move Qwen: `zc4`/`zc5`/`zc6` on the Qwen node, 302.74/144.62/143.75 s `1 passed` |
 | 4 | **Llama clash** — the three claims it blocked, measured | **MET, and now all at HEAD** | cross-slot `zm1`/`zm2`/`zm3` `1 passed` 309.40/333.24/439.24 s; chunked prefill `zm4`/`zm5`/`zm6` `1 passed` 303.64/228.93/249.68 s; two pools `z6`/`z8`/`z9` above |
 | 5 | **D-C6** — fixed and qualified 128–2048 both models, **or** `DEFERRED` + measurements + handoff saying what C lacks | **MET as the brief allows** | `D-C6.status` line 1 = `DEFERRED`, with the byte-level numbers; §7 below is the statement of what C does not have |
-| 6 | **step-7 host suite green, expectations unchanged** | **MET** | the seven `test_step7_*.py` files are **byte-identical to Milestone B** (`git diff 6af44349413..HEAD` over that glob is empty); three fresh-process passes with identical counts 34/32/37/18/12/29/8 = **170**: `z3_*_p1` (at `299440bb276`), `zh_*_p2`, `zh_*_p3` (at `f61978825cda`). **Production code is unchanged between `299440bb276` and HEAD** — `git diff --name-only` over that range touches only `modules/README.md`, two device test files and evidence — so all three passes are at HEAD's production code. Device-side step-7: `u1`/`u2`/`u3` `3 passed` x3; `u4`-`u6` re-asking at HEAD, queued |
+| 6 | **step-7 host suite green, expectations unchanged** | **MET** | the seven `test_step7_*.py` files are **byte-identical to Milestone B** (`git diff 6af44349413..HEAD` over that glob is empty); three fresh-process passes with identical counts 34/32/37/18/12/29/8 = **170**: `z3_*_p1` (at `299440bb276`), `zh_*_p2`, `zh_*_p3` (at `f61978825cda`). **Production code is unchanged between `299440bb276` and HEAD** — `git diff --name-only` over that range touches only `modules/README.md`, two device test files and evidence — so all three passes are at HEAD's production code. Device-side step-7: `u4`/`u5`/`u6` at HEAD (`c4605147cb94`), **`3 passed` x3** at 12.24/12.00/12.07 s (and `u1`-`u3` before them) |
 | 7 | **`pytest models/common/tests/llm_runtime` = 1032 passed / 1 skipped** | **MET** | `zh_llm_runtime`, 212.08 s, `1032 passed, 1 skipped` |
 | 8 | **zero changes to any `*_1d.py`, zero under `models/common/llm_runtime/`** | **MET** | `git diff --stat 6af44349413..HEAD -- '*_1d.py'` empty; same for `models/common/llm_runtime/`; `git status --porcelain models/` empty |
 
@@ -83,10 +91,17 @@ used to prevent. **Reported as failures; nothing relaxed, nothing xfailed.**
 
 ## 5. IN FLIGHT
 
-`q16` (`tttv2_milestone_c_runs/c-defects7/q16.txt`), PID 228702. Remaining at 10:36Z:
-`zr2`, `zr3` (~3 min each), `u4`-`u6` (~1 min each), `zp1`-`zp6` (concat-32 padded-row isolation,
-both models; never asked on either model before; bound 2700/3300 s each). Results land in
-`RESULTS.md` as they complete and are read into §6 here.
+`q16` (`tttv2_milestone_c_runs/c-defects7/q16.txt`), PID 228702. **No gate depends on anything
+still queued.** Remaining at 10:50Z:
+
+* `zp1`-`zp6` — concat-32 padded-row isolation, both models, active batch 16/31/32. **Area 2's real
+  question, never asked on either model**: all eleven of Milestone B's concat-32 runs died inside
+  `validate_circular_buffer_region` before a single row's logits could be read. `zp1` running since
+  10:43Z; bound 2700 s (Qwen) / 3300 s (Llama).
+* `zs1`-`zs6` — D-C17's real measurement, appended by me at 10:42Z; 2048 ×3 and 512 ×3 with
+  `LLAMA33_70B_GALAXY_EXECUTOR_REFERENCE=recompute`.
+
+Results land in `RESULTS.md` as they complete and are read into §6 here.
 
 ## 6. `q16` verdicts (rewritten at every checkpoint)
 
@@ -96,9 +111,10 @@ both models; never asked on either model before; bound 2700/3300 s each). Result
 | `zl1`-`zl9` | Llama area 4 (3 claims) | read — see §4 |
 | `zm1`-`zm3` | Llama cross-slot isolation | **1 passed x3** (309.40 / 333.24 / 439.24 s) |
 | `zm4`-`zm6` | Llama chunked prefill | **1 passed x3** (303.64 / 228.93 / 249.68 s) |
-| `zr1`-`zr3` | `test_reference_prefill_and_decode[2048]` | `zr1` **1 failed** (170.90 s); `zr2`/`zr3` IN FLIGHT |
-| `u4`-`u6` | step-7 page-table placement (device) | IN FLIGHT |
-| `zp1`-`zp6` | concat-32 padded-row isolation, both models | IN FLIGHT |
+| `zr1`-`zr3` | `test_reference_prefill_and_decode[2048]` | **1 failed x3** (170.90 / 165.38 / 168.46 s) — **NOT a device measurement**, see §11 |
+| `u4`-`u6` | step-7 page-table placement (device) | **3 passed x3** (12.24 / 12.00 / 12.07 s) |
+| `zp1`-`zp6` | concat-32 padded-row isolation, both models | IN FLIGHT (`zp1` since 10:43Z) |
+| `zs1`-`zs6` | D-C17 recompute, 2048 ×3 and 512 ×3 | IN FLIGHT (queued behind `zp6`) |
 
 ## 7. What Milestone C does NOT have (D-C6), carried forward verbatim in substance
 
@@ -150,4 +166,68 @@ Unchanged from attempt 9; full options tables in `REPORT.md` §5.
 ## 10. Work this attempt
 
 * This file, rewritten at every checkpoint.
-* §3's independent re-verification of all eight gates from the logs (no silicon spent).
+* §3's independent re-verification of all eight gates from the logs — no silicon spent — plus the
+  provenance check that makes it stronger than a log list: **every commit any gate log carries has
+  production code identical to HEAD** (only `modules/README.md` differs, at the two oldest), and
+  `git diff --name-only d2d6c424030c..HEAD -- models/` is `modules/README.md` **alone**, so no test
+  file under `models/` changed across the whole span of the gate logs either.
+* `tttv2_milestone_c_evidence/defects/GATE_LEDGER_attempt10.txt` — the machine-written ledger, one
+  row per log, with each log's own commit, pytest summary, and `clash`/`SKIPPED`/`TT_FATAL` counts.
+* **D-C17 raised, reduced and handed over** — `tttv2_milestone_c_evidence/defects/D-C17.status`
+  plus REPORT.md's "Attempt 10" section. See §11.
+* `D-C14.status` and `D-C15.status` headers corrected: both still said IN FLIGHT for runs that have
+  since landed and are read (`t1`-`t3`, `z6`-`z11`, `zg1`-`zg6`, `zc1`-`zc6`; **0** `Out of Memory`,
+  **0** `TT_FATAL`, **0** `TT_THROW` across twelve logs).
+* Work-log checkpoint; commit `8a5c1d7ba80` (evidence and docs only — **zero production lines**).
+
+## 11. D-C17 — the run that measured nothing, and the bound that is missing
+
+This is `c-exec-llama`'s third handed-over defect, and the first half of it is a warning about
+evidence rather than about code.
+
+**`zr1`/`zr2`/`zr3` do not touch the device.** Three fresh processes, `1 failed` each, 170.90 /
+165.38 / 168.46 s — which reads as a textbook deterministic defect. All three logs print
+`[reference] loading …/exec_llama/reference/llama_prefill2048_layers0.pt`. `_reference_prefill` in
+`test_executor_wh_galaxy.py` caches to disk and returns the cached tensor unless
+`LLAMA33_70B_GALAXY_EXECUTOR_REFERENCE=recompute`. That file was written **2026-08-30 00:38:36** by
+`c-exec-llama` at ~`2b463f17fcd` — before `32e552bb0b2`, `faec6e59938`, `299440bb276` and
+`60823a3888f`. So the three "fresh processes" are one `torch.load` of one stale file, three times.
+**`c-signoff` should know this generalises:** every executor-vs-reference comparison in that file —
+prefill PCC, decode, KV PCC — is against undated, untracked artifacts from four fixes back.
+
+**What is in the artifact** (read on the host, no device):
+
+| | 128 | 512 | 2048 |
+| --- | --- | --- | --- |
+| `prefill_logits` | finite `[-13.81, 31.13]` | finite `[-9.75, 24.13]` | finite `[-6.94, 17.88]` |
+| KV first/last | finite, sane | finite, sane | **finite, sane** |
+| `decode_logits` | finite `[-19.5, 18.0]` | finite `[-19.5, 19.5]` | **garbage: 128 233/128 256 columns > 1e3, 448 at ±inf, finite max 5.65e19** |
+
+All 32 rows garbage at 2048; rows 1..31 byte-identical to each other. Magnitudes cluster at
+`k·2^63` — a wrecked exponent, not drift.
+
+**The mechanism is visible in source.** `_reference_prefill` decodes at `positions[0] = length`, and
+`_MAX_SEQ_LEN = 2048`, `_BLOCK_SIZE = 32` → `blocks_per_user = 64`, page table `[32, 64]`. At
+`length == 2048` the decode position *equals* `max_seq_len`: the last addressable position is 2047
+and block `2048 // 32 = 64` is column 64 of a 64-wide table. At 128 and 512 there are 60 and 48
+spare blocks. `GalaxyDirectRunner.generate` guards exactly this condition
+(`direct_runner.py:645`, `if max(positions) >= self.max_seq_len: break`); `decode_logits`,
+`decode_sampled` and `_stage_positions` validate the position **count** and never a position
+**value**. **A caller that decodes at its context limit — which serving does — gets garbage instead
+of an exception.**
+
+**Not fixed here, deliberately, and the reason is not difficulty.** (a) All eight gates are
+qualified at production code byte-identical from `299440bb276` to HEAD; that identity is what makes
+the step-7 host set, taken at two commits, *one* qualification. Committing a production change moves
+HEAD off it and the brief requires re-qualification on both models — ~6 device hours on top of a
+queue tail already several hours deep. (b) The fix turns a silent wrong answer into a refusal, so
+`test_reference_prefill_and_decode[2048]` stays **red** — it asks for a position that does not
+exist. Turning it green means editing `positions[0] = length` to `length - 1` in `c-exec-llama`'s
+test file, and editing another job's test to make its failure pass is what the house rules forbid.
+
+**Owners:** the missing bound → whoever owns `direct_runner.py`; `positions[0] = length` and the
+undated cached reference → `c-exec-llama`, with `c-signoff` copied.
+
+`zs1`-`zs3` (2048) and `zs4`-`zs6` (512 control) are queued with recompute forced, to take the
+measurement on silicon. The three inherited artifacts are preserved as
+`*.as-inherited-20260830.pt`.
