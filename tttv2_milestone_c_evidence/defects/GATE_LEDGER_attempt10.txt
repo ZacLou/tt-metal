@@ -128,3 +128,26 @@ THE DRIVER'S STANDING CLASH WARNING, RE-CHECKED AT HEAD BY ATTEMPT 10 (not inher
   => the clash does not reproduce at HEAD in the shape the warning names, and the
      "blocks serving" consequence is refuted. The warning is a pre-fix account: c-exec-llama
      measured it at 2b463f17fcd and the two fixes (32e552bb0b2, faec6e59938) landed after.
+
+FINAL RE-CHECK, 2026-09-01T13:36Z, at HEAD 5a0c81f098a (after both queues drained)
+  area-4 named logs present            30 / 30
+  area-4 logs with TT_FATAL|TT_THROW|clash with L1 buffers|num_intersections == num_cores
+                  |must be interleaved|SKIPPED                        0 / 30
+  area-4 logs with no pytest verdict                                  0 / 30
+  D-C7  z6/z8/z9, z7/z10/z11                                    1 passed x6
+  clash zc1/zc2/zc3 (Llama), zc4/zc5/zc6 (Qwen control)         1 passed x6
+  blocked claims zm1-zm3 (cross-slot), zm4-zm6 (chunked)        1 passed x6
+  D-C6.status line 1                                            DEFERRED
+  step-7 host files vs Milestone B merge base                   0 lines of diff
+  step-7 device u4/u5/u6 at HEAD                                3 passed x3
+  llm_runtime zh_llm_runtime                                    1032 passed, 1 skipped
+  *_1d.py diff / llm_runtime diff / working-tree models/ dirty   0 / 0 / 0
+  git diff --name-only c4605147cb9..HEAD -- models/             EMPTY - attempt 10 changed
+                                                                zero production and zero test lines
+  => 8 of 8 gates. Marker written: FINISHED 2026-09-01T13:36:36Z 5a0c81f098a
+
+A SIDE EFFECT TO DECLARE. The repo's pre-commit `black` hook reformatted two files during a
+staging attempt of mine: tttv2_milestone_c_runs/c-defects2/scratch/test_clash_owner3_probe.py and
+tttv2_milestone_c_runs/c-defects5/scratch/test_llama_dram_residue_probe.py. Both are earlier
+attempts' DIAGNOSTIC-ONLY scratch probes, untracked by git and never committed; only their
+formatting changed and neither was re-run. Declared rather than left for someone to notice.
