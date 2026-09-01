@@ -113,3 +113,18 @@ HF_HOME in every gate log: /localdev/ctr-apbernal/hf_data  (the required value)
 SKIPPED count in every device gate log: 0
 The one skip in GATE 7 is the documented Milestone B baseline skip and is not a checkpoint skip:
   SKIPPED [1] models/common/tests/demos/llama3_8b/demo.py:378: Unsupported MESH_DEVICE=''
+
+THE DRIVER'S STANDING CLASH WARNING, RE-CHECKED AT HEAD BY ATTEMPT 10 (not inherited)
+  The job prompt says the clash's trigger is "a prefill after a decode in the same process",
+  reproducible in ~110 s by warmup_model_decode then warmup_model_prefill, and that it
+  "blocks serving". Measured at HEAD:
+    y1/y2/y3  test_executor_warmup_and_program_identity[decode_first]  <- that exact shape
+              1 failed x3, 561.12 / 219.14 / 197.25 s, clash lines = 0 / 0 / 0
+              what they fail on: ValueError: chunk_start must be non-negative and aligned
+              to chunk_alignment  -> D-C16, host-side, NOT the clash
+    y4/y5/y6  test_executor_repeated_startup_and_cleanup  <- 3 startup/serve/cleanup cycles,
+              each one prefilling AND decoding, so prefill-after-decode twice per cycle
+              1 passed x3, 199.68 / 199.28 / 199.83 s, clash lines = 0 / 0 / 0
+  => the clash does not reproduce at HEAD in the shape the warning names, and the
+     "blocks serving" consequence is refuted. The warning is a pre-fix account: c-exec-llama
+     measured it at 2b463f17fcd and the two fixes (32e552bb0b2, faec6e59938) landed after.
