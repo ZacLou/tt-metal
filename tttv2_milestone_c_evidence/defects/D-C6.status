@@ -72,3 +72,30 @@ has separated them.
 
 Attempt 6's weight-release change (299440bb276) touches teardown only and does not bear on
 any of the above.
+
+--- c-defects attempt 9, 2026-09-01: the residual is BOUNDED, and the "refuted" line is too narrow ---
+
+The probe line quoted above - "every diverged slot is an exact tie: False" - is correct, and the
+rest of the same table is what matters (logs/concat_tie_probe.log):
+
+  slot 11:  seq gap=0.125  bat gap=0.125  differs=True   max|seq-bat| over the row = 0.75
+  slot 13:  seq gap=0.375  bat gap=0      differs=True   max|seq-bat| over the row = 1.5
+  diverged=[11, 13];  widest sequential top-two gap among diverged slots = 0.375
+  max|seq-bat| across ALL 32 slots ranges 0.656 .. 2.281
+
+  1. The two diverged slots are the two with the SMALLEST top-two gaps - one and three bfloat16
+     ulps at magnitude 15. No wide-gap slot diverges.
+  2. The two paths differ by 5..18 ulps everywhere. So the accumulation-order difference exceeds
+     the top-two gap at exactly the diverging slots and is below it at the other thirty.
+  3. The residual is therefore bounded and is NOT cross-row contamination: it is argmax being a
+     discontinuous function of a quantity the two paths agree on only to ~1-2 logit units.
+     Llama's 480 slot-comparisons (32 slots x 5 lengths x 3 processes) never meet a gap that
+     small, which is why the same shared recipe passes there.
+
+NOTHING WAS RELAXED. The claim compares argmax, it fails 3/3 at 128 and 3/3 at 256, and that is
+the recorded result. What a fix would have to be is now on record: either a tighter-than-bfloat16
+accumulation in the concat-32 reduction, or a discriminator that bounds the logit difference
+rather than matching an argmax - and the second weakens the claim, so it belongs to whoever owns
+the gate wording, not to this job.
+
+STILL DEFERRED.

@@ -2423,3 +2423,36 @@ as production code does, `read2` after `ttnn.synchronize_device`, `read3` after
 names a one-line fix in *our* code (`collectives.compose_galaxy_sampled_tokens`). `read1 == read2
 != read3` says the same and that the decode stall group excludes the sampling cores — also ours.
 All three equal and stale sends it back to the addresses in the per-op trace.
+
+## D-C6's Qwen residual, read once more off `concat_tie_probe.log` — bounded, and not a tie
+
+`D-C6.status` records the tie hypothesis as "tested and **refuted**", quoting the probe's own last
+line. That line is right and the reading it invites is too narrow. The probe's full table
+(`logs/concat_tie_probe.log`, Qwen, sequential vs concat-32 in one process) says three things:
+
+```text
+[concat] slot 11: seq id=18    gap=0.125  bat id=16     gap=0.125  differs=True  max|seq-bat|=0.75
+[concat] slot 13: seq id=13806 gap=0.375  bat id=88856  gap=0      differs=True  max|seq-bat|=1.5
+[concat] diverged=[11, 13]
+[concat] widest sequential top-two gap among diverged slots=0.375
+[concat] every diverged slot is an exact tie: False
+```
+
+1. **The two diverged slots are the two slots with the smallest top-two gaps** — 0.125 and 0.375,
+   i.e. **one and three** bfloat16 ulps at magnitude 15. No slot with a wide gap diverges.
+2. **The two paths differ by more than that everywhere.** `max|seq-bat|` runs from 0.656 to 2.281
+   across all 32 slots — 5 to 18 ulps. So the accumulation-order difference between concat-32 and
+   sequential prefill is *larger than the top-two gap* at exactly the slots that diverge, and
+   smaller than it at the other thirty.
+3. **So the residual is bounded and explained, and it is not a cross-row contamination.** It is
+   argmax being a discontinuous function of a quantity the two paths agree on only to ~1–2 logit
+   units. Llama's 480 slot-comparisons (32 slots × 5 lengths × 3 processes) never hit a gap that
+   small, which is why the same recipe passes there.
+
+**This does not make the claim pass and nothing was relaxed.** `test_qwen_concat32_matches_
+sequential_prefill_at_each_length` compares argmax, it fails 3/3 at 128 and 3/3 at 256, and that is
+the recorded result. What the measurement adds is *what a fix would have to be*: either a
+tighter-than-bfloat16 accumulation in the concat-32 reduction, or a discriminator that bounds the
+logit difference instead of matching an argmax. The second is a test change that would weaken the
+claim, so it is not this job's to make; it is a question for whoever owns the gate wording, and it
+is now on record with the numbers behind it. **D-C6 stays `DEFERRED`.**
