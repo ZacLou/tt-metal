@@ -480,3 +480,40 @@ of Memory`, 0 `TT_FATAL`, 0 `TT_THROW` across twelve logs).
 `test_reference_prefill_and_decode` at 2048 and 512 with
 `LLAMA33_70B_GALAXY_EXECUTOR_REFERENCE=recompute`, to take D-C17's measurement on silicon instead of
 off a stale file. The three inherited artifacts are preserved as `*.as-inherited-20260830.pt`.
+
+### `c-defects` attempt 10, part 2 — both queues drained, 13:32:14Z
+
+`q16` (inherited, PID 228702) drained 12:41Z; `q17` (launched 12:42:56Z after a full preflight)
+drained 13:32:14Z. Verified 13:32:30Z: no `queue.sh`, no pytest, 32/32 boards, no watcher of mine.
+Zero `tt-smi` resets this attempt. **27 device runs, all read.**
+
+**Area 2's real question, asked for the first time on either model.** Qwen PASS x3 at all three
+active levels; Llama PASS x3 at active16 and active31 and one failure of three at active32. All six
+logs carry **0 `validate_circular_buffer_region`**, which independently confirms D-C6's overflow is
+gone. `active=32` is DEGENERATE — `GALAXY_PHYSICAL_BATCH - active` is zero, so no filler rows exist
+and both invocations get byte-identical input; its assertion message is misleading. So the question,
+at the two levels that test it, passes on both models bit-exactly.
+
+**D-C18** raised for the `active32` event and recorded at exactly its strength: 27 comparisons on
+byte-identical input, **one** differing. It happened (`zp4`, slot 10) and it did not reproduce in 26
+further comparisons across four fresh processes — neither a qualified defect nor dismissible noise.
+The probe (one load, four invocations, six pairwise comparisons per arm) did not reproduce `zp4`'s
+process state, and the cheapest next experiment is named in the status file.
+
+**D-C17 confirmed on silicon at HEAD.** With `LLAMA33_70B_GALAXY_EXECUTOR_REFERENCE=recompute`
+forced, 2048 fails 3/3 (all three logs print `[reference] wrote`, not `loading`) and 512 passes 3/3.
+The freshly computed artifact has prefill logits and KV **bit-identical** to the 2026-08-30 one
+while the decode garbage differs between them — garbage that varies while its inputs do not.
+
+**D-C12: both standing hypotheses refuted.** Not a premature readback (`read1==read2==read3` in
+12/12 observations; attempt 9's §9 withdrawn) and not a moved address (10 of 13 op addresses
+identical, and the 3 that move do so identically in the mode that is CORRECT). What discriminates is
+a host readback between the ops — `mode=cache_sig` is `mode=cache` plus that and nothing else, and it
+is correct 4/4 calls 3/3 processes. Observing the chain fixes it. The lag is not fixed either.
+
+**The near-zero-temperature residual is an exact bfloat16 tie on BOTH models.** Llama's `[2, 11]` —
+the measurement attempt 9 named as owed — are both slots where the top-two host gap is exactly 0,
+byte-identical across three fresh processes; Qwen's `[4, 21]` likewise. No missed slot on either
+model has a non-zero gap.
+
+Nothing was relaxed, nothing xfailed, and zero production lines changed this attempt.

@@ -327,3 +327,9 @@
 | 12:49:13Z | dc12_bisect_r2 | `tttv2_dc12_scratch/test_dc12_op_bisect.py` | 1 failed, 2 passed in 19.85s  | 45 | `logs/dc12_bisect_r2.log` |
 | 12:50:22Z | dc12_bisect_r3 | `tttv2_dc12_scratch/test_dc12_op_bisect.py` | 1 failed, 2 passed in 19.87s  | 45 | `logs/dc12_bisect_r3.log` |
 | 12:57:03Z | tie_llama_r1 | `tttv2_milestone_c_runs/c-defects/scratch/test_greedy_tie_probe.py` | 1 passed, 2 warnings in 340.49s (0:05:40)  | 376 | `logs/tie_llama_r1.log` |
+| 13:02:34Z | tie_llama_r2 | `tttv2_milestone_c_runs/c-defects/scratch/test_greedy_tie_probe.py` | 1 passed, 2 warnings in 287.15s (0:04:47)  | 330 | `logs/tie_llama_r2.log` |
+| 13:11:13Z | tie_llama_r3 | `tttv2_milestone_c_runs/c-defects/scratch/test_greedy_tie_probe.py` | 1 passed, 2 warnings in 481.46s (0:08:01)  | 519 | `logs/tie_llama_r3.log` |
+| 13:16:16Z | dc18_repeat_active32_r1 | `tttv2_dc18_scratch/test_dc18_concat32_repeat_probe.py` | 1 passed, 2 warnings in 261.19s (0:04:21)  | 303 | `logs/dc18_repeat_active32_r1.log` |
+| 13:22:09Z | dc18_repeat_active32_r2 | `tttv2_dc18_scratch/test_dc18_concat32_repeat_probe.py` | 1 passed, 2 warnings in 315.49s (0:05:15)  | 353 | `logs/dc18_repeat_active32_r2.log` |
+| 13:27:13Z | dc18_repeat_active32_r3 | `tttv2_dc18_scratch/test_dc18_concat32_repeat_probe.py` | 1 passed, 2 warnings in 264.64s (0:04:24)  | 304 | `logs/dc18_repeat_active32_r3.log` |
+| 13:32:14Z | dc18_repeat_active16_c1 | `tttv2_dc18_scratch/test_dc18_concat32_repeat_probe.py` | 1 passed, 2 warnings in 259.91s (0:04:19)  | 300 | `logs/dc18_repeat_active16_c1.log` |

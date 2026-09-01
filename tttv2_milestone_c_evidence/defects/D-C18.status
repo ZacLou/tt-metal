@@ -1,4 +1,5 @@
-OPEN - MEASURED AS A FLIP, MAGNITUDE IN FLIGHT. Not a finish-condition gate.
+OPEN - ONE REAL OBSERVATION IN 27 COMPARISONS, NOT REPRODUCED, MECHANISM UNKNOWN.
+Not a finish-condition gate. Do NOT read this as "qualified defect" and do NOT read it as "noise".
 
 --- c-defects attempt 10, 2026-09-01 ---
 
@@ -68,3 +69,63 @@ D-C18 adds that concat-32 on LLAMA - whose length sweep passes at all five lengt
 reproducibility question against it that the length sweep never asked.
 
 NOTHING WAS RELAXED AND NOTHING WAS XFAILED. zp4 is recorded as a failure.
+
+--- attempt 10, 13:34Z: the measurement came back, and it did NOT reproduce ---
+
+dc18_repeat_active32_r{1,2,3} and dc18_repeat_active16_c1 all ran, four invocations each, one
+model load each, all six pairwise comparisons each. Every arm: `SUMMARY: 0 of 6 pairs differ`,
+`max_abs_diff=0` on every pair, logits finite, absmax 37.75 (active32) / 34.50 (active16),
+argmax0 = 220 in every invocation, 0 SKIPPED.
+
+THE FULL TALLY of comparisons on BYTE-IDENTICAL input:
+
+  zp4  active32, committed test         1 comparison   -> 1 DIFFERED (slot 10)
+  zp5  active32, committed test         1 comparison   -> clean
+  zp6  active32, committed test         1 comparison   -> clean
+  dc18_r1/r2/r3  active32, probe       18 comparisons  -> clean
+  dc18_c1        active16, probe        6 comparisons  -> clean
+                                       --------------
+                                       27 comparisons, ONE differing
+
+SO THE HONEST VERDICT IS BOTH OF THESE, AND NEITHER ALONE:
+
+  * It happened. zp4's log is on disk. At active32 the two invocations receive byte-identical
+    input by construction, and slot 10's logits were not equal. `prefill_batched` returned a
+    different answer for the same input. That is a real event, not a misread test.
+  * It did not reproduce in 26 further comparisons across four fresh processes. It is therefore
+    NOT qualified as a defect by this brief's own standard - three byte-identical observations -
+    and it is NOT dismissible as noise either, because the house rules are explicit that a case
+    which flips across fresh processes is a defect and three of Milestone A's four defects
+    presented as intermittent PASSES.
+
+  Recorded as: a single reproducible-on-disk observation of non-reproducibility, rate <= 1/27,
+  mechanism unknown. Nothing is claimed beyond that.
+
+A CONDITION DIFFERENCE THE PROBE DID NOT REPRODUCE, and it is the obvious next thing to try.
+In the committed test the three parametrizations run in ONE pytest process, so `active32` - the
+failing one - executes as the THIRD case, after two complete `_load` / prefill / `_close` cycles.
+The probe runs `active32` ALONE in a fresh process, with no prior load. So the probe has 18 clean
+comparisons under a process state that is NOT zp4's. zp5 and zp6 did run active32 third and were
+clean, so two prior cycles are not sufficient on their own - but they are not ruled out as
+necessary, and the probe never tested them.
+
+  CHEAPEST NEXT EXPERIMENT, for whoever picks this up: add two `_load(...)`/`_close(...)` cycles
+  before the four measured invocations in tttv2_dc18_scratch/test_dc18_concat32_repeat_probe.py
+  and re-run. That reproduces zp4's process state at six comparisons per run instead of one, and
+  costs ~6 minutes per arm. If it stays clean, the next lever is invocation count, not state.
+
+WHAT IS NOW ESTABLISHED ABOUT THE TEST ITSELF, independent of the defect, and worth fixing
+regardless of who owns it: `test_<model>_concat32_padded_rows_change_no_active_rows_logits` is
+DEGENERATE at `active=32`. `GALAXY_PHYSICAL_BATCH - active` is zero, no filler rows are
+appended, and the two invocations compare byte-identical input. Its assertion message - "active
+slots [10] moved when only the padding rows changed" - is then actively misleading, because no
+padding row changed or existed. The parametrization is not worthless (it caught something) but it
+is not measuring padding isolation, and whoever owns the node should either drop `32` from the
+`active` list or rename what that level asserts. That is a test change and therefore not this
+job's to make.
+
+WHAT AREA 2'S QUESTION ACTUALLY ANSWERS TO, once active32 is set aside as degenerate:
+  Qwen  active16, active31   PASS x3   (zp1/zp2/zp3)
+  Llama active16, active31   PASS x3   (zp4/zp5/zp6 - all three passed BOTH of these levels)
+  => on both models, at both non-degenerate levels, changing only the padding rows moves no
+     active row's logits, bit-exactly. Asked for the first time on either model; see D-C6.status.

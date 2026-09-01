@@ -1,6 +1,7 @@
 # `c-defects` — completion handoff (attempt 10)
 
-**Last updated:** 2026-09-01T10:50Z — checkpoint 2.
+**Last updated:** 2026-09-01T13:35Z — checkpoint 3, FINAL. Later than my last device result
+(`dc18_repeat_active16_c1`, 13:32:14Z).
 
 **Base commit on arrival:** `c4605147cb949243e98707de74d9a70870813ba5`.
 **Branch:** `apbernal/tttv2_wh_glx_2d_modules_milestone_c`. **Job window:** started 10:32Z.
@@ -12,8 +13,9 @@ production **and test** code byte-identical to HEAD. The machine-written ledger 
 `tttv2_milestone_c_evidence/defects/GATE_LEDGER_attempt10.txt`. **Blocked marker: not written, not
 applicable — nothing is blocked.**
 
-**I have not exited and will not until `q16` drains.** The remaining queue items are *not* gates:
-they are area 2's never-asked question (`zp1`-`zp6`) and D-C17's real measurement (`zs1`-`zs6`).
+**BOTH QUEUES HAVE DRAINED AND EVERY RESULT IS READ.** `q16` drained 12:41Z, `q17` drained
+13:32:14Z. At 13:32:30Z: no `queue.sh`, no pytest on the mesh, 32/32 boards, and no watcher,
+poller or armed chain of mine anywhere. Zero `tt-smi` resets this attempt.
 
 **Device work of mine currently on the mesh:** yes — attempt 7's queue `q16`, PID 228702,
 adopted by the driver across attempts 8 and 9. I will not exit before it drains, is read, and is
@@ -89,19 +91,12 @@ maximum, and D-C12 (a second device-sampling call in a warm process) — and nei
 D-C8. Every one of the thirty runs reaches its assertion, which is precisely what D-C5 and D-C8
 used to prevent. **Reported as failures; nothing relaxed, nothing xfailed.**
 
-## 5. IN FLIGHT
+## 5. IN FLIGHT — none
 
 `q16` (`tttv2_milestone_c_runs/c-defects7/q16.txt`), PID 228702. **No gate depends on anything
 still queued.** Remaining at 10:50Z:
 
-* `zp1`-`zp6` — concat-32 padded-row isolation, both models, active batch 16/31/32. **Area 2's real
-  question, never asked on either model**: all eleven of Milestone B's concat-32 runs died inside
-  `validate_circular_buffer_region` before a single row's logits could be read. `zp1` running since
-  10:43Z; bound 2700 s (Qwen) / 3300 s (Llama).
-* `zs1`-`zs6` — D-C17's real measurement, appended by me at 10:42Z; 2048 ×3 and 512 ×3 with
-  `LLAMA33_70B_GALAXY_EXECUTOR_REFERENCE=recompute`.
-
-Results land in `RESULTS.md` as they complete and are read into §6 here.
+**Nothing. Both queues drained; see §12.**
 
 ## 6. `q16` verdicts (rewritten at every checkpoint)
 
@@ -231,3 +226,125 @@ undated cached reference → `c-exec-llama`, with `c-signoff` copied.
 `zs1`-`zs3` (2048) and `zs4`-`zs6` (512 control) are queued with recompute forced, to take the
 measurement on silicon. The three inherited artifacts are preserved as
 `*.as-inherited-20260830.pt`.
+
+---
+
+## 12. The two queues, drained and read — 27 device runs this attempt
+
+`q16` (inherited, PID 228702) drained **12:41Z**. `q17` (launched by me 12:42:56Z after a full
+preflight) drained **13:32:14Z**. Verified at 13:32:30Z: no `queue.sh`, no pytest, 32/32 boards, no
+watcher of mine. **Zero `tt-smi` resets this attempt. Nothing discarded on dead-mesh grounds.**
+
+| runs | what | verdict |
+| --- | --- | --- |
+| `zr1`-`zr3` | `test_reference_prefill_and_decode[2048]` | **1 failed x3** — and **not device measurements**, see §11 |
+| `u4`-`u6` | step-7 page-table placement, device, at HEAD | **3 passed x3** (12.24/12.00/12.07 s) — completes gate 6 |
+| `zp1`-`zp3` | Qwen concat-32 padded-row isolation | **3 passed x3** (590.75/730.40/508.97 s) |
+| `zp4`-`zp6` | Llama concat-32 padded-row isolation | **1 failed+2 passed / 3 passed / 3 passed** — the failure is `active32`, see §13 |
+| `zs1`-`zs3` | 2048 with `…REFERENCE=recompute` | **1 failed x3** — D-C17 confirmed on silicon at HEAD |
+| `zs4`-`zs6` | 512 with `…REFERENCE=recompute` | **1 passed x3** — the control; length-specific |
+| `p0b` | partition envelope | 5 passed |
+| `dc12_repeat_head_r1`-`r3` | does D-C12 still reproduce at HEAD? | **1 failed x3, byte-identical** — yes |
+| `dc12_bisect_r1`-`r3` | race, or moved address? | **neither** — see §14 |
+| `tie_llama_r1`-`r3` | Llama's near-zero-temperature gaps | **1 passed x3, gap column byte-identical** — see §15 |
+| `dc18_repeat_active32_r1`-`r3`, `dc18_repeat_active16_c1` | is `prefill_batched` reproducible? | **0 of 6 pairs differ, every arm** — see §13 |
+
+## 13. Area 2's real question, answered — and D-C18, recorded at exactly its strength
+
+The brief's section 4 promised this question becomes askable once D-C6's overflow is fixed. It had
+**zero** runs on either model before today.
+
+| | active16 | active31 | active32 |
+| --- | --- | --- | --- |
+| Qwen | PASS x3 | PASS x3 | PASS x3 |
+| Llama | PASS x3 | PASS x3 | **FAIL / pass / pass** |
+
+All six logs: 0 clash, 0 `TT_FATAL`/`TT_THROW`, 0 `SKIPPED`, **0 `validate_circular_buffer_region`**
+— independent confirmation that D-C6's overflow is gone.
+
+**`active=32` is degenerate and its failure is not about padding.** `GALAXY_PHYSICAL_BATCH - active`
+is zero there, so no filler rows exist and both invocations get **byte-identical input**. Its
+message — "active slots [10] moved when only the padding rows changed" — is misleading. So area 2's
+question, at the two levels that genuinely test it, **passes on both models bit-exactly**, and
+`zp4` is a different finding.
+
+**D-C18, stated at the strength the evidence supports and no further.** I wrote a probe (one load,
+four invocations, all six pairwise comparisons with per-slot `max|diff|` — six comparisons per load
+against the committed test's one per two processes). Tally on byte-identical input: **27
+comparisons, one differing.** Both of these are true and neither alone is: *it happened* (`zp4`'s
+log is on disk; identical input, slot 10 unequal), and *it did not reproduce in 26 further
+comparisons across four fresh processes*. Not qualified as a defect by the three-identical-runs
+standard; not dismissible as noise either, because the house rules say a flip across processes is a
+defect. **The probe did not reproduce `zp4`'s process state** — in the committed test `active32` runs
+*third*, after two `_load`/`_close` cycles; the probe runs it alone. `zp5`/`zp6` ran it third and
+were clean, so two prior cycles are not sufficient, but they are not ruled out as necessary. The
+cheapest next experiment is named in `D-C18.status`.
+
+## 14. D-C12 — both standing hypotheses refuted on silicon
+
+* **Still reproduces at HEAD**, never re-asked since `dc7f62430c0` (which predates the
+  program-cache retirement and the weight release). Cache warm: call 0 right, calls 1–3 wrong 32/32,
+  every returned id **in vocabulary** — a stale *answer*, not garbage. Cache cleared per call: all
+  four right. Three logs byte-identical over every `[repeat]` line.
+* **Not a premature readback** — attempt 9's hypothesis. Reading the same output immediately, after
+  `synchronize_device`, and after `reset_sub_device_stall_group()` + synchronize gives the **same**
+  value in **twelve of twelve** observations. A race shows `read1 != read2`. Withdrawn.
+* **Not a moved address** — the received story. Ten of thirteen op output addresses are identical
+  between call 0 and calls 1–3, and the three that move do so *identically in the mode that
+  produces correct results*.
+* **What discriminates is a host readback between the ops.** `mode=cache_sig` is `mode=cache` plus
+  one read of each intermediate, nothing else, and it is correct 4/4 calls, 3/3 processes.
+  **Observing the chain fixes it** — a dependency lost on a cache hit, not a stale read.
+* **The lag is not fixed**: `r1`/`r2` byte-identical; `r3` has call 3 returning call 2's answer
+  where they returned call 1's. A single stale buffer lags by exactly one.
+* Pointer handed on, untested: `manual_seed` and `sampling` report the **same** output address.
+
+The remaining experiment is a thirteen-arm sync bisect at 20 s an arm, named in `D-C12.status`. The
+ops are `ttnn`'s, not shared Galaxy code, so it is not this brief's to fix.
+
+## 15. The near-zero-temperature residual is an exact bfloat16 tie on BOTH models
+
+| model | gate misses, 3/3 | slots with top-two gap **exactly 0** | missed ⊆ tied? |
+| --- | --- | --- | --- |
+| Qwen | `[4, 21]` | `{4, 12, 21}` | **yes** |
+| Llama | `[2, 11]` | `{2, 7, 8, 11, 12, 18}` | **yes** |
+
+**Every missed slot, on either model, is one where two ids attain the row maximum exactly in
+bfloat16.** No missed slot has a non-zero gap. `torch.argmax` breaks a zero gap by lowest index; a
+sampler need not. At random, landing on tied slots twice of two is ~0.03 (Llama) and ~0.006 (Qwen).
+The Llama half was the measurement attempt 9 named as owed and never took; it is taken, three fresh
+processes, gap column byte-identical, `agreed=32/32` on the greedy half in all three.
+
+**Caveat that must travel with the probe:** its `[cold]` verdict column is the *second* device
+sampling call and is D-C12-corrupted on both models (device ids are float32 bit patterns). Only the
+`gap` column, from composed host logits, carries the measurement. The missed-slot lists come from
+`zl4`-`zl6` / `zq4`-`zq6`.
+
+**Nothing was relaxed.** Those six runs stay recorded as failures.
+
+## 16. Deliverables, checked rather than assumed
+
+| brief deliverable | state |
+| --- | --- |
+| 1. the fixes committed, each with the test that fails without it | **met, with one caveat.** Five of the seven production commits name their failing-without test *and* a negative control (e.g. `faec6e59938`: "Deleting only the two-line announcement gives 1 failed / 34 passed"). `60823a3888f` and `0c6c8bc3e52` are recipe additions naming no test of their own; their covering tests arrive in the commits that wire them in (`d40b2093783`, `49a69560329`). A commit-message gap, not a coverage gap |
+| 2. `<id>.status` for all five workstreams | **met** — `D-C5`, `D-C8`, `D-C7`, `llama-address-clash`, `D-C6`, plus `D-C12`, `D-C14`, `D-C15`, `D-C16`, `D-C17`, `D-C18` |
+| 3. `REPORT.md`, one section per workstream | **met** — attempts 1–10, 2 718 lines |
+| 4. a checkpoint in the work log | **met** |
+| 5. handoff written progressively | **met** — this file, rewritten at three checkpoints |
+
+## 17. What the next job should not re-derive
+
+1. **The clash does not reproduce at HEAD** in the shape the driver's standing warning names.
+   Verified by me, not inherited: `y1`-`y3` (`[decode_first]`, the named 110-second shape) fail 3/3
+   with **0** clash lines, on D-C16's host-side `chunk_start` error; `y4`-`y6` (three
+   startup/serve/cleanup cycles, prefill-after-decode twice each) pass 3/3 with 0 clash lines.
+   Recorded in `GATE_LEDGER_attempt10.txt` so nobody spends silicon on it again.
+2. **The gate logs span seven commits but no production *or test* file under `models/` changed
+   across that span** — `git diff --name-only d2d6c424030c..HEAD -- models/` is `modules/README.md`
+   alone. That is what makes them one qualification rather than seven fragments.
+3. **`test_executor_wh_galaxy.py` compares against undated, untracked disk artifacts.** `c-signoff`
+   should treat every PCC number from that file as needing a `[reference] wrote` line in its log, or
+   it may be a comparison against a four-fixes-old file. See §11.
+4. **D-C12 is not a race and not a moved address.** Two hypotheses are closed with evidence; don't
+   reopen them without new data.
+5. **Both near-zero-temperature residuals are exact ties.** Measured on both models.

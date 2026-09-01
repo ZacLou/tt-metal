@@ -2601,3 +2601,118 @@ one-check fix, and both owners named: the `direct_runner` check belongs to whoev
 `models/common/models/galaxy/direct_runner.py`, and the `positions[0] = length` call belongs to
 `c-exec-llama`. `zs1`-`zs6` will say whether the garbage reproduces on silicon at HEAD; the
 reduction stands either way, because the missing bound is visible in the source.
+
+---
+
+# Attempt 10, part 2 — what the two drained queues said
+
+`q16` drained at 12:41Z (attempt 7's queue, adopted across attempts 8, 9 and 10). `q17` was
+launched at 12:42Z after a full preflight and drained at 13:32:14Z. **Both are read in full and
+nothing is in flight.** Mesh: 32/32 boards, zero `tt-smi` resets this attempt.
+
+## Area 2's real question is asked on both models, and one parametrization of it is degenerate
+
+The brief's section 4 says that once D-C6's L1 overflow is fixed, "area 2's real question becomes
+askable for the first time: do padded rows change an active row's logits at active batch 16, 31 and
+32?" It had **zero** runs in `RESULTS.md` on either model — Milestone B's attempts all died inside
+`validate_circular_buffer_region` first. Answered now:
+
+| | active16 | active31 | active32 |
+| --- | --- | --- | --- |
+| Qwen (`zp1`/`zp2`/`zp3`, 590.75 / 730.40 / 508.97 s) | PASS x3 | PASS x3 | PASS x3 |
+| Llama (`zp4`/`zp5`/`zp6`, 1047.37 / 1008.67 / 820.67 s) | PASS x3 | PASS x3 | **FAIL / pass / pass** |
+
+All six logs: 0 clash lines, 0 `TT_FATAL`/`TT_THROW`, 0 `SKIPPED`, **0
+`validate_circular_buffer_region`** — which independently confirms D-C6's overflow is gone on a
+node that could not survive that call at Milestone B.
+
+**`active=32` is a degenerate level and its failure is not about padding.**
+`GALAXY_PHYSICAL_BATCH - active` is zero there, so no filler rows are appended and `padded` is
+`list(rows)` in *both* loop iterations. The two invocations receive **byte-identical input**. The
+assertion message — "active slots [10] moved when only the padding rows changed" — is therefore
+misleading: no padding row changed, or existed. What that level actually asserts is that
+`prefill_batched` returns bit-identical logits when called twice with the same input.
+
+So area 2's question, at the two levels that genuinely test it, **passes on both models, three
+fresh processes, bit-exactly** — and `zp4` is a separate finding, D-C18.
+
+## D-C18: one real observation of non-reproducibility in 27 comparisons
+
+`tttv2_dc18_scratch/test_dc18_concat32_repeat_probe.py` (diagnostic only, never committed) does
+one model load and **four** invocations, then reports all **six** pairwise comparisons with
+per-slot `max|diff|` — six comparisons per model load where the committed test gives one per two
+processes. Three arms at `active32` and one control at `active16`: **`0 of 6 pairs differ` in every
+arm**, `max_abs_diff=0` on every pair, `argmax0 = 220` in all sixteen invocations.
+
+Tally on byte-identical input: **27 comparisons, one differing** (`zp4`, slot 10). Both of these
+are true and neither alone is: *it happened*, and *it did not reproduce in 26 further comparisons
+across four fresh processes*. It is not qualified as a defect by this brief's three-identical-runs
+standard, and it is not dismissible as noise either, because the house rules are explicit that a
+case which flips across fresh processes is a defect. Recorded at exactly that strength.
+
+**The probe did not reproduce `zp4`'s process state, and that is the next lever.** In the committed
+test all three parametrizations share one pytest process, so `active32` runs *third*, after two
+complete `_load`/prefill/`_close` cycles; the probe runs it alone in a fresh process. `zp5` and
+`zp6` did run it third and were clean, so two prior cycles are not sufficient — but they are not
+ruled out as necessary. The cheapest next experiment is two `_load`/`_close` cycles before the four
+measured invocations: zp4's state at six comparisons per run instead of one, ~6 minutes an arm.
+
+## D-C12: the two standing hypotheses are both refuted, on silicon, three fresh processes
+
+Full account in `D-C12.status`. The short form, because it changes what anyone should look at next:
+
+* **It still reproduces at HEAD** — never re-asked since `dc7f62430c0`, which predates the
+  program-cache retirement and the weight release. `dc12_repeat_head_r{1,2,3}`, 17.89/18.06/17.85 s,
+  **byte-identical over every `[repeat]` line** (md5 `42d42591e9d7becf580287d3143b94f9`). Cache
+  warm: call 0 right, calls 1–3 wrong 32/32, every returned id **in vocabulary** — a stale
+  *answer*, not garbage. Cache cleared per call: all four right.
+* **Not a premature readback.** The bisect reads the same output three times per call — immediately
+  as production does, after `ttnn.synchronize_device`, and after `reset_sub_device_stall_group()`
+  plus a synchronize. `read1==read2` and `read2==read3` in **twelve of twelve** observations. A
+  race shows `read1 != read2`. **Attempt 9's §9 hypothesis is withdrawn.**
+* **Not a moved address.** Ten of the thirteen ops' output addresses are identical between call 0
+  and calls 1–3; the three that do move (`sharded_to_interleaved`, `matmul`, `add`) move
+  *identically in the mode that produces correct results*, so movement is not the discriminator.
+  This also confirms attempt 9's source reading that `reduction/{topk,sampling,manual_seed}` pass
+  no bare address.
+* **What discriminates is a host readback between the ops.** `mode=cache_sig` is `mode=cache` plus
+  one read of each intermediate and nothing else — same cache, same addresses — and it is correct
+  in all four calls, 3/3 processes. **Observing the chain fixes it**, which is the signature of a
+  dependency lost on a cache hit rather than a stale read.
+* **The lag is not fixed.** `r1` and `r2` are byte-identical over every `[bisect]` line; `r3`
+  differs in exactly one cell — call 3 returned call 2's answer where `r1`/`r2` returned call 1's.
+  A single stale buffer lags by exactly one, always.
+* One pointer handed on and deliberately not interpreted: `manual_seed` and `sampling` report the
+  **same** output address (2990304) in every mode and call.
+
+## The near-zero-temperature residual is an exact bfloat16 tie on BOTH models
+
+Attempt 9 measured this on Qwen and left Llama's `[2, 11]` unmeasured, naming it as the thing to
+take. `tie_llama_r{1,2,3}` took it — three fresh processes, the gap column **byte-identical** in all
+three, `agreed=32/32` on the first-call greedy half in all three (which independently reproduces
+`zd4`–`zd6`'s pass):
+
+| model | slots the gate misses, 3/3 | slots whose top-two host gap is **exactly 0** | missed ⊆ tied? |
+| --- | --- | --- | --- |
+| Qwen | `[4, 21]` | `{4, 12, 21}` | **yes** |
+| Llama | `[2, 11]` | `{2, 7, 8, 11, 12, 18}` | **yes** |
+
+**Every slot the near-zero-temperature gate misses, on either model, is a slot where two vocabulary
+ids attain the row maximum exactly in bfloat16.** No missed slot has a non-zero gap, on either
+model. `torch.argmax` breaks a zero gap by lowest index; a sampler is under no such obligation. If
+misses were spread at random over 32 slots, landing on tied slots twice out of two is
+`(6/32)(5/31) ≈ 0.03` on Llama and `(3/32)(2/31) ≈ 0.006` on Qwen — about `2e-4` jointly.
+
+So the residual on this claim is fully explained on both models, and what a fix would have to be is
+the same shape as D-C6's: either a tie-break convention the device sampler is required to match, or
+a discriminator that bounds the logit difference instead of matching an argmax. The second weakens
+the claim, so it belongs to whoever owns the gate wording. **Nothing was relaxed; `zl4`–`zl6` and
+`zq4`–`zq6` stay recorded as failures.**
+
+**A caveat that has to travel with this probe.** Its `[cold]` half — the `T=0.02` measurement — is
+the *second* device sampling call in the process, and on Llama it reports `missed=True` in all 32
+slots with device ids like `3212163627` and `1066581928`, which are float32 bit patterns rather
+than tokens. That is D-C12, exactly as attempt 9 found on Qwen. **The `[cold]` verdict column is
+therefore worthless on both models and only the `gap` column — computed from composed host logits —
+carries the measurement above.** The gate's own missed-slot lists come from `zl4`–`zl6` and
+`zq4`–`zq6`, not from this probe.
