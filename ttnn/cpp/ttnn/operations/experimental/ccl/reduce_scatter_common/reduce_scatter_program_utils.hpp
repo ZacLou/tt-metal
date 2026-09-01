@@ -26,7 +26,15 @@ uint32_t reduce_scatter_core_count_per_link(
     uint32_t num_directions_per_link,
     uint32_t num_mux_cores_per_direction_per_link);
 
+// Pages the workers of one direction divide between them -- exactly the quantity
+// reduce_scatter_get_tile_offsets splits. Computable from the input alone, so the worker count can
+// be chosen with knowledge of how much work there actually is (see reduce_scatter_default_workers).
+uint32_t reduce_scatter_splittable_pages(const ttnn::Tensor& input_tensor, uint32_t dim, uint32_t ring_size);
+
 // Selects the default number of workers per direction based on data size heuristics.
+//
+// `splittable_pages`, when given, additionally caps the count so no worker is starved: see
+// MIN_PAGES_PER_WORKER in the .cpp. Omit it to keep the size-only behaviour.
 uint32_t reduce_scatter_default_workers(
     const ttnn::MeshDevice& mesh_device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
@@ -35,7 +43,8 @@ uint32_t reduce_scatter_default_workers(
     uint32_t num_links,
     uint32_t ring_size,
     uint32_t num_directions_per_link,
-    uint32_t num_mux_cores_per_direction_per_link);
+    uint32_t num_mux_cores_per_direction_per_link,
+    std::optional<uint32_t> splittable_pages = std::nullopt);
 
 // Returns the default chunks_per_sync value for the given topology and tile counts.
 uint32_t reduce_scatter_default_chunks_per_sync(

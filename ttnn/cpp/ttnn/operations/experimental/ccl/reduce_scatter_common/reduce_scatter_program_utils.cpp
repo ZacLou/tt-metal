@@ -29,6 +29,25 @@ uint32_t reduce_scatter_core_count_per_link(
     return num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
 }
 
+uint32_t reduce_scatter_splittable_pages(const ttnn::Tensor& input_tensor, uint32_t dim, uint32_t ring_size) {
+    const auto& shape = input_tensor.padded_shape();
+    const auto [normalized_dim, input_tensor_C, input_tensor_B] =
+        (shape.rank() == 2) ? reduce_scatter_map_2d_to_4d(dim) : reduce_scatter_map_nd_to_4d(shape, dim);
+
+    uint32_t slice_B = input_tensor_B;
+    uint32_t slice_C = input_tensor_C;
+    if (normalized_dim == 0) {
+        slice_B /= ring_size;
+    } else if (normalized_dim == 1) {
+        slice_C /= ring_size;
+    }
+
+    const uint32_t output_tensor_num_pages = input_tensor.buffer()->num_pages() / ring_size;
+    const uint32_t output_batch_num_pages = output_tensor_num_pages / slice_B;
+    // Mirrors reduce_scatter_get_tile_offsets: dim 0 splits batches, every other dim splits channels.
+    return (normalized_dim == 0) ? output_batch_num_pages : (output_batch_num_pages / slice_C);
+}
+
 uint32_t reduce_scatter_default_workers(
     const ttnn::MeshDevice& mesh_device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
@@ -37,7 +56,8 @@ uint32_t reduce_scatter_default_workers(
     uint32_t num_links,
     uint32_t ring_size,
     uint32_t num_directions_per_link,
-    uint32_t num_mux_cores_per_direction_per_link) {
+    uint32_t num_mux_cores_per_direction_per_link,
+    std::optional<uint32_t> splittable_pages) {
     auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     uint32_t num_cores = subdevice_core_range_set.num_cores();
@@ -77,7 +97,25 @@ uint32_t reduce_scatter_default_workers(
             candidate_worker_counts = {4, 2, 1};
         }
     }
+    // More than one worker per direction routes the sends through a FabricMuxV2 mux core (see
+    // reduce_scatter_minimal_async_program.cpp, which drops the mux only at worker_count == 1). That
+    // path deadlocks -- silently, with no TT_FATAL and no watcher trip -- when a worker is left with
+    // one page or fewer: measured on [8,8,32,32] and [8,8,32,64] scattering on dim 1, which hang with
+    // 2 workers and complete in ~11s with 1. Two pages per worker is the lowest count observed to
+    // work. Skipping the starved candidates keeps the op out of that regime; it is the same kind of
+    // narrowing as the core-count check below, which already falls back through {4, 2, 1}.
+    constexpr uint32_t MIN_PAGES_PER_WORKER = 2;
     for (auto worker_count : candidate_worker_counts) {
+        if (splittable_pages.has_value() && worker_count > 1 &&
+            splittable_pages.value() < worker_count * MIN_PAGES_PER_WORKER) {
+            log_trace(
+                tt::LogOp,
+                "DEBUG: skipping worker_count {}: only {} splittable pages ({} needed)",
+                worker_count,
+                splittable_pages.value(),
+                worker_count * MIN_PAGES_PER_WORKER);
+            continue;
+        }
         uint32_t core_count =
             num_links * reduce_scatter_core_count_per_link(
                             worker_count, num_directions_per_link, num_mux_cores_per_direction_per_link);
