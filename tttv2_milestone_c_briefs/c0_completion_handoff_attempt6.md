@@ -498,3 +498,123 @@ D-C7 gate (block-level cross-slot isolation, chunked prefill) under the changed 
 `c-exec-llama`'s third handed-over defect — `test_reference_prefill_and_decode` at 2048 returning
 non-finite decode logits through `GalaxyDirectRunner`, the one of the three that **is** shared code
 — at HEAD for the first time.
+
+
+## 26. `q14` regression results as they land — nothing has moved
+
+**The clash gate, re-qualified under the changed `close()`** —
+`*_repeated_requests_and_deterministic_cleanup`, three fresh processes per model, at
+`299440bb276`:
+
+| run | result |
+| --- | --- |
+| `zc1_llama_repeat_full_r1` | **1 passed**, 571.12 s |
+| `zc2_llama_repeat_full_r2` | **1 passed**, 282.62 s |
+| `zc3_llama_repeat_full_r3` | **1 passed**, 222.86 s |
+| `zc4_qwen_repeat_full_r1` | **1 passed**, 302.74 s |
+| `zc5_qwen_repeat_full_r2` | **1 passed**, 144.62 s |
+| `zc6_qwen_repeat_full_r3` | **1 passed**, 143.75 s |
+
+`zc1`'s 571 s is cold-cache variance, not a regression: `zc2`/`zc3` land at 282/222 s against
+attempt 3's 234/243/300 s on the same node.
+
+**Device sampling end to end, both models** — `test_<model>_device_greedy_sampling_equals_host_argmax`:
+
+| run | result |
+| --- | --- |
+| `zd4`/`zd5`/`zd6` Llama | **1 passed ×3** — 442.44 / 343.06 / 226.26 s, 32/32 slots |
+| `zd1`/`zd2`/`zd3` Qwen | **1 failed ×3** — `disagreed with host argmax in slots [4]`, 31/32 |
+
+Qwen's failure is **byte-identical to attempt 3's** three runs at
+`d11_q_device_greedy_sampling_equals_host_argmax_run{1,2,3}.log`, which also read `slots [4]`. That
+is the exact bfloat16 tie at 15.375 already on the ledger, and the point of re-running it was to
+show a shared-module change did not move it. It did not. **Nothing was relaxed to make this
+green, and it is reported as a failure.**
+
+
+**The Llama seeded-slot claim, three fresh processes at one commit** — the last of area 4's ten
+claim-verdicts to have never had that:
+
+| run | result | clash lines |
+| --- | --- | --- |
+| `ze1_llama_seeded_slot_r1` | **1 failed**, 301.09 s | 0 |
+| `ze2_llama_seeded_slot_r2` | **1 failed**, 308.77 s | 0 |
+| `ze3_llama_seeded_slot_r3` | **1 failed**, 352.00 s | 0 |
+
+All three reach the assertion — `AssertionError: a seeded stochastic decode did not repeat` — and
+none aborts on the L1 address clash, where attempt 1's three runs of this node all did. The claim
+is **evaluated**, and it fails as **D-C12**, exactly as it does on Qwen. Llama's area-4 ledger and
+Qwen's are now identical claim for claim.
+
+
+## 27. `q14` complete — 43 runs, every count unchanged
+
+**The new close contract, on silicon, three fresh processes per model, byte-identical:**
+
+| run | result | printed measurement |
+| --- | --- | --- |
+| `zg1`/`zg2`/`zg3` Llama | **1 passed ×3** — 247.88 / 218.61 / 196.38 s | `240 registered weights, peak 565 614 080 B per DRAM bank, residue after close 0 B` |
+| `zg4`/`zg5`/`zg6` Qwen | **1 passed ×3** — 281.26 / 127.60 / 124.95 s | `192 registered weights, peak 456 632 704 B per DRAM bank, residue after close 0 B` |
+
+Nothing is deleted or collected before that residue is read: `handle` and `runner` are both still
+bound. Before the fix the same quantity on Llama at the same shape was **398 617 984 B**.
+
+**The step-7 host suite, three fresh processes, identical to every recorded pass on this branch:**
+
+| file | pass 1 | pass 2 | pass 3 |
+| --- | --- | --- | --- |
+| `test_step7_concat32.py` | 34 | 34 | 34 |
+| `test_step7_long_context.py` | 32 | 32 | 32 |
+| `test_step7_paged_kv.py` | 37 | 37 | 37 |
+| `test_step7_prefix_cache.py` | 18 | 18 | 18 |
+| `test_step7_repeat_and_cleanup.py` | 12 | 12 | 12 |
+| `test_step7_sampling.py` | 29 | 29 | 29 |
+| `test_step7_token_composition.py` | 8 | 8 | 8 |
+| **total** | **170** | **170** | **170** |
+
+`test_prefetcher_2d.py` **35 passed ×3**. `test_lazy_weight_release.py` **6 passed ×3**.
+`test_step7_page_table_placement_wh_galaxy.py` **3 passed ×3** (`u1`–`u3`).
+
+**`models/common/tests/llm_runtime`: 1032 passed, 1 skipped** in 212.08 s — exactly the Milestone B
+baseline the brief names. The queue's row carries its generic `<- SKIPPED IS A FAILED RUN`
+annotation; that heuristic does not apply here, because 1032 passed / **1 skipped** *is* the
+expected result, stated as such in the brief's own finish condition.
+
+**`test_column_user_selector_wh_galaxy.py`: 7 passed ×3.** Earlier runs on this branch
+(`c8_selector_run{1,2,3}`) read **6 passed**; the difference is
+`test_column_user_selection_is_bit_exact`, added by attempt 2 in commit `49a69560329` *after* those
+runs. It is a test added, not an expectation changed, and the node-id lists in the two logs differ
+by exactly that one entry.
+
+
+## 28. 01:14Z — the clash is gone from the executor path, and what blocks it now is D-C13
+
+`y1_exec_warmup_df_r1` — `test_executor_warmup_and_program_identity[decode_first]`, the node
+`c-exec-llama` used as its 110-second clash reproduction, re-run at HEAD:
+
+```text
+grep -c 'clash with L1 buffers'  ->  0
+E  ValueError: chunk_start must be non-negative and aligned to chunk_alignment
+   models/common/modules/attention/attention_2d.py:908
+1 failed, 2 warnings in 561.12s
+```
+
+At `2b463f17fcd` this node failed 3/3 on
+`TT_THROW … Statically allocated circular buffers in program 922 clash with L1 buffers on core
+range [0-0 - 0-3]`. At HEAD it does not clash at all: the decode warmup completes, and the
+**prefill** warmup that follows it — the "prefill after a decode" that was the whole trigger — gets
+all the way into `Attention2D._validate_prefill` before failing.
+
+**So the driver's arrival note is out of date, and this is the reconciliation.** "At this commit the
+clash blocks serving" was true of `2b463f17fcd`, the commit `c-exec-llama` measured. It is not true
+of `faec6e59938`/`299440bb276`. What blocks the executor's warmup now is **D-C13**, and D-C13 is
+the *runtime* defect reduced in §9: `llm_runtime/warmup.py:700` builds its prefix-cached warmup case
+as `cached_tokens=layout.block_size` — 32 — and Galaxy's `chunk_alignment` is 128, so
+`llm_runtime/prefill/plan.py:381` hands the module a `chunk_start` of 32 and the module correctly
+refuses it. **Both** warmup orders now fail there, for the same reason; the two used to fail for two
+unrelated reasons.
+
+Note what that does **not** say: it is the *prefix-cached* warmup case that fails, not a plain
+prefill after a decode. `y4`–`y6` — `test_executor_repeated_startup_and_cleanup`, three
+startup/serve/cleanup cycles in one process, which failed 3/3 on the clash at `TT_THROW … 542016` —
+are the direct test of whether serving is unblocked, and they are queued behind `y2`/`y3`.
