@@ -2371,3 +2371,55 @@ still confirmed, on the `T = 0.02` direction alone**, and that direction is suff
 slots landing on the argmax cannot happen under the inverted convention, which flattens the
 distribution over 32 candidates and would make even 30 agreements a ~`1/32**30` event. The
 two-directional reading is withdrawn; the one-directional one stands.
+
+## D-C12: the received explanation has a hole in it, and this repo's own linters widen it
+
+D-C12 is qualified — only the **first** device sampling call in a warm-cache process is correct;
+four consecutive calls on four different inputs are all correct with
+`disable_and_clear_program_cache()` before each, three fresh processes
+(`logs/d11_repeat_sample_probe_run{2,3,4}.log`). The received explanation is a program-cache
+runtime-argument defect: on a cache hit ttnn rewrites runtime args only, so an op whose new input
+**address** never reaches them reads the previous call's buffer.
+
+**That mechanism needs an address that moves, and in that probe none should.** The only thing
+differing between the four calls is the contents of one host→device write; every allocation is made
+and freed in the same order in every call, so the free list returns to the same state and every
+intermediate should land at the same address. It also does not explain why the *logits* readback
+(`compose_galaxy_logits`, the same `ttnn.to_torch`) is correct on repeated calls while the *sampled
+token* readback is not.
+
+Two negative results, both cheap and both on the host:
+
+1. **The three ttnn factories in the chain carry no baked addresses.** `reduction/topk`,
+   `reduction/sampling` and `reduction/manual_seed` contain zero `address()` calls between them;
+   every buffer reaches the kernels through `emplace_runtime_args` as a `MeshTensor`, which
+   `tt_metal/api/tt-metalium/program_descriptors.hpp:110-125` documents as exactly the declaration
+   the framework patches on a cache hit.
+2. **This repo already lints for that bug class, and it does not fire anywhere in the chain.**
+   `.pre-commit-config.yaml` carries `detect_smuggled_rta.py` ("raw buffer address pushed into
+   runtime args") and `detect_override_rebuild.py`. Run over **all 2 993** `ttnn/**/device/*.{cpp,hpp}`
+   files they report five and three sites respectively, and **not one is in the sampling chain**:
+
+   ```text
+   smuggled RTA: ccl/all_to_all_dispatch, sliding_window/halo (x4)
+   override rebuild: ccl/mesh_partition, data_movement/roll (x2)
+   ```
+
+**The mechanism that fits without a moved address is a premature readback.** Call 0 has to compile
+its programs, which stalls the host long enough for the device to finish; on a cache hit there is
+no compile, the readback races the still-running program, and at a stable address it returns
+exactly what the buffer held before — the previous call's answer. It also explains the model tests'
+float32 bit patterns, where the same buffer previously held logits, and it explains why only the
+sampling readback is affected if the last writer's cores are not what the read synchronizes
+against: decode runs under `set_sub_device_stall_group([SubDeviceId(1)])`, and `ttnn.sampling` is
+the one op in the chain placed by `Sampling2D._sampling_core_grid()` rather than by the recipe's
+worker grid.
+
+`tttv2_dc12_scratch/test_dc12_op_bisect.py` (written this attempt, diagnostic only, never
+committed) asks both questions in one ~20 s arm: every intermediate's **buffer address** and
+device-0 signature per call, and per call **three reads of the same output** — `read1` immediately
+as production code does, `read2` after `ttnn.synchronize_device`, `read3` after
+`reset_sub_device_stall_group()` and a synchronize. `read1 != read2` is direct proof of a race and
+names a one-line fix in *our* code (`collectives.compose_galaxy_sampled_tokens`). `read1 == read2
+!= read3` says the same and that the decode stall group excludes the sampling cores — also ours.
+All three equal and stale sends it back to the addresses in the per-op trace.

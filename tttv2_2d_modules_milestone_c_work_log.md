@@ -397,3 +397,40 @@ and will not exit before it drains and is read.
   refuted by reading (`Sampling2D.release` resets every cached handle; `LazyBuffer.update` really
   copies host→device), and attempt 1's cache-vs-nocache bisect points at a ttnn op's program-cache
   handling, whose root fix is C++ — and this job may not rebuild tt-metal.
+
+## c-defects attempt 9 — 2026-09-01T09:57Z checkpoint
+
+Arrived 09:34Z to a **busy** mesh again: attempt 8 exited 09:21:56Z with `q16` still running and
+the driver adopted it, inside `zl7_llama_per_slot_controls_r1`. Killed nothing, queued nothing on
+top of the running test, and will not exit before it drains and is read.
+
+* **The D-C5/D-C8 gate is MET.** `zl9` landed 09:50:51Z (`1 passed`, 311.74 s) and completes area
+  4: ten claim-verdicts, five claims on two models, three fresh processes each, one production
+  tree. All thirty logs re-checked directly — `TT_FATAL`, `TT_THROW`,
+  `num_intersections == num_cores`, `must be interleaved`, `clash with L1 buffers`, `SKIPPED` —
+  **30 logs, 0 with any hit.** Six verdicts pass, four fail, and the four failures are two defects
+  that are not D-C5 or D-C8.
+* **The driver's standing clash warning is a pre-fix account, and no silicon was spent on it.**
+  `c-exec-llama` measured "a prefill after a decode clashes, so the clash blocks serving" at
+  `2b463f17fcd`; the two fixes are `32e552bb0b2` and `faec6e59938`, both later. At HEAD,
+  `y4`–`y6` (`test_executor_repeated_startup_and_cleanup`, three prefill-then-decode cycles per
+  run) pass 3/3 with **0** clash lines, and `y1`–`y3` (the 110-second decode-then-prefill
+  reproduction) fail 3/3 on D-C16 with **0** clash lines.
+* **Qwen's near-zero-temperature residual is now MEASURED, not hypothesised, and it cost no
+  silicon.** `d11_greedy_tie_probe.log` — same `_load`, same rows, same `tokens=[1]*32`,
+  `positions=[128]*32`, the gate's exact `T=0.02` policy — measures a top-two bfloat16 gap of
+  **zero at exactly three slots: 4, 12 and 21**. The gate misses `[4, 21]`. `torch.argmax` breaks a
+  zero gap by lowest index and a sampler does not. The report had already named this as the
+  measurement to take; it was on disk and nobody joined it to the gate result.
+* **A correction: the `T = 2.0` half of that test proves nothing.** Its call order is
+  `decode_logits`, `cold = decode_sampled(T=0.02)`, `hot = decode_sampled(T=2.0)` — so `hot` is the
+  **second** device sampling call in the process, which is what D-C12 corrupts. The same structure
+  in the tie probe reports `missed=True` in all 32 slots with float32 bit patterns for ids. "D4 is
+  confirmed twice" is withdrawn; D4 stands on the `T=0.02` direction alone, which suffices.
+* **D-C12's received explanation has a hole, and this repo's own linters widen it.** A stale
+  *address* cannot be the mechanism in a probe where every allocation is made and freed in the same
+  order each call; and `scripts/detect_smuggled_rta.py` / `scripts/detect_override_rebuild.py`,
+  run over **all 2 993** `ttnn/**/device/*.{cpp,hpp}` files, flag eight sites and **none in the
+  sampling chain**. The mechanism that fits is a **premature readback** masked on call 0 by the
+  compile stall. `tttv2_dc12_scratch/test_dc12_op_bisect.py` asks it directly with three reads of
+  the same output per call, and is queued as `q17` behind `q16`.
