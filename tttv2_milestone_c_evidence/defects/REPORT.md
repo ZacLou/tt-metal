@@ -2259,3 +2259,115 @@ git status --porcelain models/                                            -> emp
 ```
 
 **Zero changes to any `*_1d.py`. Zero changes under `models/common/llm_runtime/`.**
+
+---
+
+# Attempt 9, 2026-09-01 — the five workstreams, verified and closed
+
+**Base commit:** `4292d26e47faa07eb9679b001bcf99b45ed14b1d`. **Arrived:** 09:34Z, to a mesh
+**busy with this job's own work**: attempt 8's queue `q16` was still running (PID 228702, adopted
+by the driver when attempt 8 exited at 09:21:56Z), inside
+`zl7_llama_per_slot_controls_r1`. Nothing was killed and nothing was queued on top of it.
+**Zero `tt-smi` resets this attempt.**
+
+## The driver's standing clash warning is a pre-fix account, and the tree says so
+
+The job prompt opens with "THE LLAMA L1 ADDRESS CLASH HAS MOVED ON SINCE YOUR LAST ATTEMPT",
+citing `c1_completion_handoff.md`: the trigger is *a prefill after a decode in the same process*,
+it reproduces in ~110 s, and — the part that matters — *it blocks serving*, so `c-trace` and
+`c-perf-paired` are behind it.
+
+**Every part of that was measured before the fix.** `c-exec-llama` ran 2026-08-29 22:50Z to
+2026-08-30 00:02Z at `2b463f17fcd`; the two clash fixes are `32e552bb0b2` (2026-08-31 11:32) and
+`faec6e59938` (17:31). The prefill-after-decode shape has since been re-asked at HEAD, and it does
+not reproduce:
+
+| run | node | verdict | `grep -c 'clash with L1 buffers'` | log `# commit=` |
+| --- | --- | --- | --- | --- |
+| `y4_exec_repeat_cycles_r1` | `test_executor_repeated_startup_and_cleanup` | `1 passed` 199.68 s | **0** | `671802f94648` |
+| `y5_exec_repeat_cycles_r2` | same | `1 passed` 199.28 s | **0** | `671802f94648` |
+| `y6_exec_repeat_cycles_r3` | same | `1 passed` 199.83 s | **0** | `671802f94648` |
+| `y1`–`y3` | `test_executor_warmup_and_program_identity[decode_first]` | `1 failed` ×3 | **0** | `671802f94648` |
+
+`y4`–`y6` are three full startup/serve/cleanup cycles in one process — so prefill-after-decode
+twice per run — and they pass within half a second of each other. `y1`–`y3` are literally
+`warmup_model_decode` then `warmup_model_prefill`, the 110-second reproduction the handoff names,
+and they fail on **D-C16** (`chunk_start` alignment, host-side, raised before any device work) with
+zero clash lines.
+
+So no silicon was spent re-deriving the clash this attempt. What `c-exec-llama` handed over that
+*is* still live is D-C16 and the two items below.
+
+## Area 4 in one table, at one production tree, on both models
+
+The D-C5/D-C8 gate line is "both models' device sampling runs end to end, and area 4's five claims
+… are evaluated on silicon, three fresh processes each". Re-derived from the logs themselves —
+each log's own `# commit=` header, its pytest summary line, `grep -c 'clash with L1 buffers'`,
+`grep -cE 'TT_FATAL|TT_THROW'`, and `grep -c SKIPPED`:
+
+| claim | Qwen | Llama |
+| --- | --- | --- |
+| device greedy == host argmax | `zd1`–`zd3` **1 failed ×3**, slot `[4]` | `zd4`–`zd6` **1 passed ×3** |
+| no padded vocabulary id ever sampled (3 policies) | `zq1`–`zq3` **3 passed ×3** | `zl1`–`zl3` **3 passed ×3** |
+| `T = 0.02` collapses onto the host argmax | `zq4`–`zq6` **1 failed ×3**, slots `[4, 21]` | `zl4`–`zl6` **1 failed ×3**, slots `[2, 11]` |
+| a seeded slot repeats across runs | `zq10`–`zq12` **1 failed ×3** (D-C12) | `ze1`–`ze3` **1 failed ×3** (D-C12) |
+| per-slot heterogeneous controls | `zq7`–`zq9` **1 passed ×3** | `zl7`–`zl9` **1 passed** ×3 |
+
+**Thirty runs. Zero `TT_FATAL`, zero `TT_THROW`, zero `clash with L1 buffers`, zero `SKIPPED`.**
+Every run reaches its assertion, which is the thing D-C5 and D-C8 used to prevent: the selector
+matmul no longer refuses a width-sharded `in1` and no longer resolves a grid outside the loaded
+decode sub-device. The commits behind the thirty runs are `f61978825cda`, `671802f94648` and
+`4292d26e47fa` — three commits, one production tree (`git diff` over `models/` between
+`299440bb276` and HEAD touches one README and two test files and nothing else).
+
+Six of the ten verdicts pass and four fail. The four failures are **two** defects, neither of them
+D-C5 or D-C8, and both reported as failures rather than relaxed:
+
+* the greedy and `T = 0.02` residuals, which are bfloat16 ties — see below;
+* the two seeded-slot failures, which are D-C12.
+
+## The near-zero-temperature residual is a measured tie on Qwen, from evidence already on disk
+
+The report's own earlier entry called the tie story "a hypothesis with an arithmetic behind it,
+not a measurement", and said the measurement that would settle it is the top-two gap at exactly
+the missed slots. **That measurement was already taken and nobody joined it to the gate result.**
+
+`logs/d11_greedy_tie_probe.log` runs the gate case's own `_load`, `_paged_config`,
+`_distinct_rows`, the same `tokens = [1] * 32`, the same `positions = [128] * 32` and the gate's
+exact `T = 0.02` policy, and prints the top-two gap per slot on the composed float32 logits:
+
+```text
+[cold] slot  4: gap=0     p(runner-up)@temp50=0.5
+[cold] slot 12: gap=0     p(runner-up)@temp50=0.5
+[cold] slot 21: gap=0     p(runner-up)@temp50=0.5
+[cold] the-32-smallest-gaps=[4, 12, 21, 10, 28, 5, 14, 3, ...]
+```
+
+**Exactly three Qwen slots have a top-two gap of zero — two ids attaining the row maximum in
+bfloat16 — and they are slots 4, 12 and 21.** The gate misses slots `[4, 21]`, byte-identically in
+three fresh processes. `torch.argmax` breaks a zero gap by lowest index; a sampler drawing from a
+softmax has a 50 % chance either way, so two of the three zero-gap slots disagreeing and one
+agreeing is the expected outcome and there is no fourth slot to explain. The greedy claim's single
+residual is the same slot 4, and the `[tie]` half of the same log measures it directly: `host 16 @
+15.375, device 17 @ 15.375, equal=True, gap=0.0, ids sharing the row maximum=2`.
+
+**So on Qwen the residual is the draw meeting the numeric floor of bfloat16 logits, measured, not
+inferred.** The claim as *worded* — 32/32 — is still not met, and nothing was relaxed to make it
+met. Llama's `[2, 11]` gaps have never been measured; `tie_llama_r1`–`r3` in `q17` measure them.
+
+### And a correction the same log forces: the `T = 2.0` half of that test proves nothing
+
+This report earlier read "D4 is confirmed twice" from the pairing `T = 0.02` agrees 30/32 while
+`T = 2.0` agrees 0/32. **Look at the order of calls in the test** (`test_step7_coverage_wh_galaxy.py`
+`..._near_zero_temperature...`): `decode_logits` (no sampling), then `cold = decode_sampled(T=0.02)`,
+then `hot = decode_sampled(T=2.0)`. `hot` is the **second device sampling call in the process** —
+which is exactly what D-C12 corrupts. `d11_greedy_tie_probe.log` shows the same structure failing
+the same way: its `[tie]` half (first sampling call) is sane, and its `[cold]` half (second call)
+reports `missed=True` in **all 32 slots** with device ids like `3212836881` and `1077395535` —
+float32 bit patterns, not tokens.
+
+`T = 2.0`'s 0/32 is therefore not evidence about the reciprocal-temperature convention. **D4 is
+still confirmed, on the `T = 0.02` direction alone**, and that direction is sufficient: 30 of 32
+slots landing on the argmax cannot happen under the inverted convention, which flattens the
+distribution over 32 candidates and would make even 30 agreements a ~`1/32**30` event. The
+two-directional reading is withdrawn; the one-directional one stands.

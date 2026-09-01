@@ -376,3 +376,24 @@ at 01:36Z. Zero `tt-smi` resets. First job of this series to start with no inher
   clash-blocked claims that are not the D-C7 gate, `test_reference_prefill_and_decode[2048]`, and
   three fresh passes of the one step-7 file that needs a mesh (`u1`/`u2` predate the weight-release
   fix; only `u3` was post-fix).
+
+## c-defects attempt 8 — 2026-09-01T08:25Z checkpoint
+
+Arrived 08:11Z to a **busy** mesh: attempt 7 exited 07:47Z with its 33-run queue `q16` still
+running and the driver adopted it. Killed nothing, queued nothing on top of the running test,
+and will not exit before it drains and is read.
+
+* Verified at HEAD, not inherited: zero `*_1d.py` diff, zero `llm_runtime/` diff, clean
+  `models/`, and no production-code commit after `299440bb276` (one docs file, two test files).
+* Inherited as measured, checked against `RESULTS.md` rows rather than prose: D-C7 (`z6`–`z11`,
+  6/6), the clash gate (`zc1`–`zc6`), the three claims the clash blocked, step-7 host 170×3,
+  `llm_runtime` 1032 passed / 1 skipped.
+* **Correction to the inherited account.** `D-C6.status` and attempt 7's handoff say area 2's
+  question — do padded rows change an active row's logits — is "answered for Llama". It is
+  answered on **neither** model: `test_{qwen,llama}_concat32_padded_rows_change_no_active_rows_
+  logits` has zero rows in `RESULTS.md` and zero logs on disk. Six runs (`zp1`–`zp6`) appended
+  to the live `q16` to measure it for the first time.
+* D-C12 reviewed on the host and deliberately not opened: the two cheap Python hypotheses are
+  refuted by reading (`Sampling2D.release` resets every cached handle; `LazyBuffer.update` really
+  copies host→device), and attempt 1's cache-vs-nocache bisect points at a ttnn op's program-cache
+  handling, whose root fix is C++ — and this job may not rebuild tt-metal.

@@ -1,49 +1,23 @@
-See D-C5.status - D-C5 and D-C8 share one gate line and one evidence set.
-ALL TEN CLAIM-VERDICTS ARE EVALUATED. q16 re-measurement IN FLIGHT (attempt 7, 07:10Z).
+FIXED. THE GATE IS MET. See D-C5.status - D-C5 and D-C8 share one gate line and one
+evidence set, and that file carries the full thirty-run table.
 
---- c-defects attempt 4, 2026-08-31: a correction to attempt 3's verdict ---
+--- c-defects attempt 9, 2026-09-01 ---
 
-Attempt 3's handoff section 11 records this gate as "MET as worded ... Thirty runs, every
-one reaching its assertion." THAT IS FALSE FOR ONE COMBINATION, and the tree says so.
-(Attempt 3's own q9.txt comment and the Llama block of this file's previous revision both
-contradict its gate table on exactly this point; they are the ones that are right.)
+D-C8's own signature was:
+  TT_FATAL @ tt_metal/impl/program/program.cpp:2205: num_intersections == num_cores
+  Kernel group cores do not match sub device cores for programmable core type TENSIX
+raised from GalaxyColumnUserSelector.__call__'s bare ttnn.matmul, because a default multi-core
+matmul resolves its grid from the tensors and the FULL compute grid rather than from the
+loaded decode sub-device.
 
-Established by grepping all 36 area-4 logs for 'clash with L1 buffers':
+Established across all thirty area-4 logs at this tree:
+  grep -cE 'TT_FATAL|TT_THROW'                                  -> 0 in every one
+  grep -cE 'num_intersections == num_cores'                     -> 0 in every one
+  grep -cE 'Inputs to matmul must be interleaved'   (D-C5)      -> 0 in every one
+  grep -c SKIPPED                                               -> 0 in every one
+Every run reaches its assertion. Device sampling runs end to end on both models.
 
-  Llama  a_seeded_slot_repeats_across_runs   3 of 3 runs aborted on the clash
-         d11_l_a_seeded_slot_repeats_across_runs_run{1,2,3}.log
-           RuntimeError: TT_THROW @ program.cpp:1763
-           Statically allocated circular buffers in program 100 clash with L1 buffers on
-           core range [0-0 - 0-3]. L1 buffer allocated at 544832 and static circular
-           buffer region ends at 630080
-         The test never reached the sampler. This is the brief's own warning - that the
-         clash "hid D-C5 for Llama by killing the demo path before it ever reached the
-         sampler" - happening once more inside the evidence that was being counted as a
-         measurement OF the sampler.
-
-  Every other claim x model reached its assertion: 0 clash lines in any of the other 33
-  logs. So the gate is ONE claim short, not met.
-
-The clash is fixed (attempt 3, n1-n6, 3/3 both models at full shape), so this claim is
-runnable for the first time. Queued as t7/t8/t9, three fresh processes, full shape.
-
-WHAT THE NINE EVALUATED CLAIM-VERDICTS SAY - unchanged from attempt 3, not re-measured:
-  Qwen   greedy == host argmax           31/32 x3, slot [4] an exact bfloat16 tie at 15.375
-         no padded id ever sampled       3 passed x3
-         T = 0.02 collapses onto argmax  30/32 x3, slots [4, 21]
-         a seeded slot repeats           fail x3  - D-C12, the warm ttnn program cache
-         per-slot heterogeneous controls pass x3
-  Llama  greedy == host argmax           pass 32/32 x3
-         no padded id ever sampled       3 passed x3
-         T = 0.02 collapses onto argmax  30/32 x3, slots [2, 11]
-         per-slot heterogeneous controls pass x3
-         a seeded slot repeats           NEVER EVALUATED - see above
-
-Every residual is bit-deterministic across three fresh processes. NOTHING WAS RELAXED.
-D-C2 recorded and NOT changed, per the brief: the sampling seed is per-(request, slot).
-
-NOTE for whoever picks up D-C12: this attempt's fix retires the mesh program cache when a
-model's global CB is released (faec6e59938). D-C12 is a warm-program-cache staleness
-defect. The two are not the same thing - D-C12 is stale WITHIN one model's lifetime, where
-no release happens - but they are adjacent, and the new release_galaxy_global_cb_placement
-is a place to look.
+The test that could not see either fault is fixed and green three times in fresh processes:
+  zf1_selector_r1 / zf2_selector_r2 / zf3_selector_r3
+  models/common/tests/models/galaxy/test_column_user_selector_wh_galaxy.py
+  7 passed in 23.58 / 23.82 / 23.54 s
