@@ -5,13 +5,13 @@
 
 Multi-turn prefill resumes at the KV offset the previous turn ended on. That offset decides which
 chip holds the chunk's first token, and both KDA sequence-parallel combinators
-(`convolution_halo`, `_distributed_affine_prefix`) compose their carries walking chips in device
+(`convolution_halo`, `_distributed_affine_prefix`) compose `KdaState` walking chips in device
 index order. When the two disagree, KDA integrates the tokens in the wrong order.
 
 The test feeds the SAME 5120 tokens for every offset. Only the chip layout changes, taken from
 `rotated_chip_positions`, which is what the MLA KV writer requires once a chunk starts mid-slab.
 The reference is those tokens in true sequence order. So any PCC drop here is ordering and nothing
-else: same weights, same maths, same tokens, same starting carry.
+else: same weights, same maths, same tokens, same starting `KdaState`.
 
 Three offsets, one per row of the ladder:
 
@@ -40,6 +40,7 @@ from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KDA_PLACEMENTS,
     random_weights,
+    reconstruct_convolution_at_sp_rank,
     reconstruct_sp_tp_tensor,
     reconstruct_state_at_sp_rank,
     sp_sequence,
@@ -160,15 +161,28 @@ def test_kda_resumes_at_offset(mesh_device: ttnn.MeshDevice, device_params, offs
         sp,
         chunk_local,
     )
-    actual_carry = reconstruct_state_at_sp_rank(state.recurrent, mesh_device, SP_AXIS, TP_AXIS, sp - 1)
+    # Both halves of `KdaState`. `KdaState.convolution` is produced by `convolution_halo`, one of the
+    # two combinators at issue, so checking only `KdaState.recurrent` would leave half the mechanism
+    # untested.
+    actual_recurrent = reconstruct_state_at_sp_rank(state.recurrent, mesh_device, SP_AXIS, TP_AXIS, sp - 1)
+    local_width = (config.num_heads // tuple(mesh_device.shape)[TP_AXIS]) * config.head_k_dim
+    actual_conv = reconstruct_convolution_at_sp_rank(
+        state.convolution, mesh_device, SP_AXIS, TP_AXIS, sp - 1, local_width
+    )
+    expected_conv = torch.cat(
+        (expected_state.q_convolution, expected_state.k_convolution, expected_state.v_convolution), dim=-1
+    )
 
     output_pcc = _pcc(expected_output.float(), actual_output.float())
-    carry_pcc = _pcc(expected_state.recurrent.float(), actual_carry.float())
+    recurrent_pcc = _pcc(expected_state.recurrent.float(), actual_recurrent.float())
+    conv_pcc = _pcc(expected_conv.float(), actual_conv.float())
     starts_on = min(range(sp), key=lambda c: min(rotated_chip_positions(offset, sp, chunk_local)[c]))
     logger.info(
         f"resume offset {offset} (% {chunk_local} = {offset % chunk_local}, starts on chip {starts_on}): "
-        f"output pcc {output_pcc:.6f}  carry pcc {carry_pcc:.6f}  (bar {PCC})"
+        f"output pcc {output_pcc:.6f}  KdaState.recurrent pcc {recurrent_pcc:.6f}  "
+        f"KdaState.convolution pcc {conv_pcc:.6f}  (bar {PCC})"
     )
 
     assert output_pcc >= PCC, f"offset {offset}: output pcc {output_pcc:.6f} < {PCC}"
-    assert carry_pcc >= PCC, f"offset {offset}: carry pcc {carry_pcc:.6f} < {PCC}"
+    assert recurrent_pcc >= PCC, f"offset {offset}: KdaState.recurrent pcc {recurrent_pcc:.6f} < {PCC}"
+    assert conv_pcc >= PCC, f"offset {offset}: KdaState.convolution pcc {conv_pcc:.6f} < {PCC}"
