@@ -1,0 +1,71 @@
+OPEN - REDUCED, NOT FIXED. Two owners, neither of them a further attempt of c-defects.
+
+--- c-defects attempt 10, 2026-09-01 ---
+
+D-C17: `GalaxyDirectRunner` DECODES AT A POSITION PAST `max_seq_len` AND RETURNS
+GARBAGE INSTEAD OF REFUSING.
+
+This is c-exec-llama's third handed-over defect ("test_reference_prefill_and_decode at
+2048 returns non-finite decode logits - in the REFERENCE path, GalaxyDirectRunner").
+Shared Galaxy code, so c-defects' to triage. Full write-up: REPORT.md, "Attempt 10".
+
+FINDING 1 - THE RUNS THAT WERE MEANT TO MEASURE IT DO NOT TOUCH THE DEVICE.
+  zr1/zr2/zr3 (logs/zr{1,2,3}_ref2048_r*.log): three fresh processes, `1 failed` each,
+  170.90/165.38/168.46 s. All three print
+
+    [reference] loading tttv2_milestone_c_evidence/exec_llama/reference/llama_prefill2048_layers0.pt
+
+  `_reference_prefill` in test_executor_wh_galaxy.py caches to disk and returns the
+  cached tensor unless LLAMA33_70B_GALAXY_EXECUTOR_REFERENCE=recompute. That file was
+  written 2026-08-30 00:38:36 by c-exec-llama at ~2b463f17fcd - before 32e552bb0b2,
+  faec6e59938, 299440bb276 and 60823a3888f. md5 5a59f74f3ddd88121fe86234d706986c.
+  So three "fresh processes" are one torch.load of one stale file three times, and the
+  byte-identical failure is evidence about a file, not about this tree.
+  The inherited artifacts are preserved as *.as-inherited-20260830.pt.
+  zs1-zs3 (2048) and zs4-zs6 (512 control) are queued with recompute forced.
+
+  GENERALISES: every executor-vs-reference comparison in that file - prefill PCC, decode,
+  KV PCC - is against undated, untracked artifacts from four fixes back. c-signoff should
+  know. This is not a c-defects fix; the file is c-exec-llama's.
+
+FINDING 2 - WHAT IS IN THE ARTIFACT (host-side, no device):
+                  128            512            2048
+  prefill_logits  finite         finite         finite  [-6.94, 17.88]
+  kv first/last   finite, sane   finite, sane   finite, sane
+  decode_logits   [-19.5, 18.0]  [-19.5, 19.5]  GARBAGE: 128233/128256 columns > 1e3,
+                                                448 entries +/-inf, finite max 5.65e19
+  All 32 rows garbage at 2048; rows 1..31 byte-identical to each other, row 0 different.
+  Magnitudes cluster at k * 2^63 - a wrecked exponent, not numerical drift.
+
+THE MECHANISM.
+  `_reference_prefill` decodes at positions[0] = length. Test constants: _MAX_SEQ_LEN
+  2048, _BLOCK_SIZE 32 -> blocks_per_user 64, page table [32, 64]. At length 2048 the
+  decode position EQUALS max_seq_len: the last addressable position is 2047 and block
+  index 2048 // 32 = 64 is column 64 of a 64-wide table. At 128 and 512 there are 60 and
+  48 spare blocks - which is the pattern the table above shows.
+
+  GalaxyDirectRunner.generate guards it (direct_runner.py:645,
+  `if max(positions) >= self.max_seq_len: break`). decode_logits, decode_sampled and
+  _stage_positions do NOT: _decode_device_logits validates len(tokens) (:552) and
+  _stage_positions validates len(positions) (:332); neither validates a position VALUE.
+  A caller decoding at position >= max_seq_len gets garbage instead of an exception, and a
+  serving system reaching its context limit does exactly that.
+
+THE FIX, not committed: one check in `_stage_positions`, beside the length check it
+already owns, in the same message style. self.max_seq_len is already an attribute and
+generate already encodes the comparison, so nothing new must be known by anything.
+
+WHY IT IS NOT COMMITTED HERE. (a) All eight of this brief's gates are qualified at
+production code byte-identical from 299440bb276 to HEAD, and that identity is what makes
+the step-7 host set one qualification rather than three fragments; committing a production
+change moves HEAD off it and the brief requires re-qualification on both models, ~6 device
+hours. (b) The fix converts a silent wrong answer into a refusal, so
+test_reference_prefill_and_decode[2048] stays RED - it asks for a position that does not
+exist. Turning it green means editing `positions[0] = length` to `length - 1` in
+c-exec-llama's test file, and editing another job's test to make its failure pass is what
+the house rules forbid.
+
+OWNERS.
+  the missing bound          -> whoever owns models/common/models/galaxy/direct_runner.py
+  positions[0] = length      -> c-exec-llama (test_executor_wh_galaxy.py)
+  the undated cached reference -> c-exec-llama, and c-signoff should see it

@@ -1,4 +1,18 @@
-FIXED (mechanism qualified on silicon at a one-layer subset); full-shape 3x2 qualification IN FLIGHT
+FIXED and QUALIFIED at the full shape on both models.
+
+--- header corrected by c-defects attempt 10, 2026-09-01T10:45Z ---
+The "full-shape 3x2 qualification IN FLIGHT" clause below is withdrawn; the runs landed and
+are read. Qwen at the full shape, three fresh processes, commit faec6e59938:
+  t1/t2/t3_qwen_two_pools_r*   1 passed   366.39 / 269.19 / 274.17 s
+Llama at the same commit failed three times and NOT on L1 - that is D-C15 (DRAM weight
+retention), fixed at 299440bb276 and qualified after it:
+  z6/z8/z9_llama_two_pools_r*  1 passed   797.78 / 1150.68 / 820.22 s
+  z7/z10/z11_qwen_two_pools_r* 1 passed   445.81 / 437.29 / 272.24 s
+The clash-gate regression this file recorded as owed under the names q11 v1-v6 was taken
+under different names and is read: zc1/zc2/zc3 (Llama repeated_requests_and_deterministic_
+cleanup, 1 passed, 571.12/282.62/222.86 s, 0 clash lines) and zc4/zc5/zc6 (the same node on
+Qwen, 1 passed, 302.74/144.62/143.75 s), which is the both-models proof the brief requires.
+Nothing about the mechanism below is changed.
 
 --- c-defects attempt 4, 2026-08-31 ---
 

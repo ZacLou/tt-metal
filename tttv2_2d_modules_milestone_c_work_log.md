@@ -434,3 +434,49 @@ top of the running test, and will not exit before it drains and is read.
   sampling chain**. The mechanism that fits is a **premature readback** masked on call 0 by the
   compile stall. `tttv2_dc12_scratch/test_dc12_op_bisect.py` asks it directly with three reads of
   the same output per call, and is queued as `q17` behind `q16`.
+
+## `c-defects` attempt 10 — 2026-09-01
+
+**Arrival 10:32Z.** 32/32 boards; the only thing on the mesh was this job's own `q16` (PID 228702,
+started by attempt 7, adopted across attempts 8 and 9), on `zr2`. Zero resets this attempt. Nothing
+discarded on dead-mesh grounds.
+
+**Attempt 9's handoff reconciled against the tree.** Its 10:02Z status table called four nodes IN
+FLIGHT; three had landed. `zm1`-`zm6` all `1 passed` (Llama cross-slot 309.40/333.24/439.24 s,
+Llama chunked prefill 303.64/228.93/249.68 s) — so the gate line "the three claims the Llama clash
+blocked are measured" is now met with **all six runs at HEAD**, not with older-commit runs plus one.
+`u4`/`u5`/`u6` landed `3 passed` each (12.24/12.00/12.07 s), completing the device half of the
+step-7 gate at HEAD. Nothing attempt 9 claimed was contradicted.
+
+**All eight of the brief's Finish-condition gates re-derived from the logs, not from status pages** —
+each log's own `# commit=`/`# node=` header, its pytest summary, and counts of `clash with L1
+buffers`, `SKIPPED`, `TT_FATAL|TT_THROW`. Two things this established that were not on record:
+
+* production code is **byte-identical from `299440bb276` to HEAD** (`git diff --name-only` over that
+  range touches, under `models/`, only `modules/README.md` and two device test files that each gain
+  one function and modify none) — which is what makes the step-7 host set, taken at two different
+  commits, **one** qualification rather than three fragments;
+* the brief's "162 tests at Milestone B" is the figure that is off, not an expectation: the seven
+  `test_step7_*.py` files are byte-identical to Milestone B and collect **170**.
+
+**D-C17 raised, reduced, and not fixed** — `c-exec-llama`'s third handed-over defect.
+`zr1`/`zr2`/`zr3` are `1 failed` in three fresh processes and **do not touch the device**:
+`_reference_prefill` caches to disk and all three print `[reference] loading …
+llama_prefill2048_layers0.pt`, a file written 2026-08-30 by `c-exec-llama` four fixes back. Read on
+the host, that artifact has sane prefill logits and sane KV at 2048 and garbage decode logits in all
+32 rows. The cause is visible in source: the test decodes at `positions[0] = length`, which at
+`length == _MAX_SEQ_LEN == 2048` is one past the last addressable position, and
+`GalaxyDirectRunner.generate` guards that condition (`direct_runner.py:645`) while `decode_logits`,
+`decode_sampled` and `_stage_positions` do not. Recorded `OPEN — REDUCED, NOT FIXED` with the
+one-check fix and two named owners; not committed, because committing it moves HEAD off the tree all
+eight gates are qualified at, and because the fix leaves the test red (it asks for a position that
+does not exist) and turning it green means editing another job's test.
+
+**Stale status headers corrected:** `D-C14.status` and `D-C15.status` both still said IN FLIGHT; the
+runs behind them have landed and are read (`t1`-`t3`, `z6`-`z11`, `zg1`-`zg6`, `zc1`-`zc6`; 0 `Out
+of Memory`, 0 `TT_FATAL`, 0 `TT_THROW` across twelve logs).
+
+**Queued this attempt** (appended to the live `q16`, inode preserved): `zs1`-`zs3` and `zs4`-`zs6`,
+`test_reference_prefill_and_decode` at 2048 and 512 with
+`LLAMA33_70B_GALAXY_EXECUTOR_REFERENCE=recompute`, to take D-C17's measurement on silicon instead of
+off a stale file. The three inherited artifacts are preserved as `*.as-inherited-20260830.pt`.

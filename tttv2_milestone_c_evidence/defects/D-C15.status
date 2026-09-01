@@ -1,5 +1,13 @@
-FIXED (mechanism qualified on silicon at the full 80-layer shape, both arms, one process);
-three-fresh-process gate runs IN FLIGHT
+FIXED and QUALIFIED. The three-fresh-process gate runs have landed and are read.
+
+--- header corrected by c-defects attempt 10, 2026-09-01T10:45Z ---
+The "three-fresh-process gate runs IN FLIGHT" clause is withdrawn:
+  z6/z8/z9_llama_two_pools_r*   1 passed  797.78 / 1150.68 / 820.22 s  (Llama, the arm that failed)
+  z7/z10/z11_qwen_two_pools_r*  1 passed  445.81 /  437.29 / 272.24 s  (Qwen, unmoved)
+  zg1-zg3 / zg4-zg6             1 passed x3 each - test_<model>_a_closed_model_returns_its_
+                                device_weights, the direct assertion of the contract
+All twelve logs carry 0 `Out of Memory`, 0 TT_FATAL and 0 TT_THROW. Nothing about the
+mechanism below is changed.
 
 --- c-defects attempt 6, 2026-08-31 ---
 

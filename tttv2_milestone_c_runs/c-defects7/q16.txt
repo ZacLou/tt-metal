@@ -1,0 +1,91 @@
+# c-defects attempt 7, queue 16 - bring the WHOLE of area 4 to ONE commit, on both
+# models, at HEAD (671802f9464; production code identical to 299440bb276 - every
+# commit since touches only evidence, docs and test files).
+#
+# Already measured at 299440bb276 and NOT repeated here:
+#   greedy vs host argmax        zd1-zd3 (Qwen, 1 failed x3) / zd4-zd6 (Llama, 1 passed x3)
+#   a seeded slot repeats, Llama ze1-ze3 (1 failed x3, D-C12)
+# Everything below was last measured at attempt 3's commits (d40b2093783/32e552bb0b2),
+# BEFORE the close()-releases-weights fix (299440bb276) and the program-cache retirement
+# (faec6e59938), both of which change teardown on every one of these paths.
+#
+# Cheapest useful thing on the mesh, first, per the house rules.
+p0_partition|900|models/common/tests/models/galaxy/test_partition_wh_galaxy.py|
+# --- area 4, Qwen: the four claim-verdicts not yet at this commit ---
+zq1_qwen_padded_vocab_r1|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_no_padded_vocabulary_id_is_ever_sampled|
+zq2_qwen_padded_vocab_r2|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_no_padded_vocabulary_id_is_ever_sampled|
+zq3_qwen_padded_vocab_r3|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_no_padded_vocabulary_id_is_ever_sampled|
+zq4_qwen_near_zero_temp_r1|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_near_zero_temperature_collapses_onto_the_host_argmax|
+zq5_qwen_near_zero_temp_r2|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_near_zero_temperature_collapses_onto_the_host_argmax|
+zq6_qwen_near_zero_temp_r3|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_near_zero_temperature_collapses_onto_the_host_argmax|
+zq7_qwen_per_slot_controls_r1|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_per_slot_heterogeneous_sampling_controls|
+zq8_qwen_per_slot_controls_r2|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_per_slot_heterogeneous_sampling_controls|
+zq9_qwen_per_slot_controls_r3|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_per_slot_heterogeneous_sampling_controls|
+zq10_qwen_seeded_slot_r1|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_seeded_slot_repeats_across_runs|
+zq11_qwen_seeded_slot_r2|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_seeded_slot_repeats_across_runs|
+zq12_qwen_seeded_slot_r3|1800|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_seeded_slot_repeats_across_runs|
+# --- area 4, Llama: the three claim-verdicts not yet at this commit ---
+zl1_llama_padded_vocab_r1|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_no_padded_vocabulary_id_is_ever_sampled|
+zl2_llama_padded_vocab_r2|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_no_padded_vocabulary_id_is_ever_sampled|
+zl3_llama_padded_vocab_r3|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_no_padded_vocabulary_id_is_ever_sampled|
+zl4_llama_near_zero_temp_r1|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_near_zero_temperature_collapses_onto_the_host_argmax|
+zl5_llama_near_zero_temp_r2|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_near_zero_temperature_collapses_onto_the_host_argmax|
+zl6_llama_near_zero_temp_r3|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_near_zero_temperature_collapses_onto_the_host_argmax|
+zl7_llama_per_slot_controls_r1|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_per_slot_heterogeneous_sampling_controls|
+zl8_llama_per_slot_controls_r2|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_per_slot_heterogeneous_sampling_controls|
+zl9_llama_per_slot_controls_r3|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_per_slot_heterogeneous_sampling_controls|
+# --- the two claims the Llama L1 address clash blocked that are NOT the D-C7 gate,
+#     re-measured under the changed close() ---
+zm1_llama_cross_slot_r1|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_write_for_one_user_never_appears_in_another_users_blocks|
+zm2_llama_cross_slot_r2|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_write_for_one_user_never_appears_in_another_users_blocks|
+zm3_llama_cross_slot_r3|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_write_for_one_user_never_appears_in_another_users_blocks|
+zm4_llama_chunked_prefill_r1|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_chunked_prefill_matches_a_single_uncached_prefill|
+zm5_llama_chunked_prefill_r2|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_chunked_prefill_matches_a_single_uncached_prefill|
+zm6_llama_chunked_prefill_r3|2700|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_chunked_prefill_matches_a_single_uncached_prefill|
+# --- c-exec-llama's third handed-over defect, the only one of the three that IS shared
+#     Galaxy code: non-finite DECODE logits at 2048 through GalaxyDirectRunner.
+#     Not in this brief's finish condition; measured because it is cheap and it is mine.
+zr1_ref2048_r1|1800|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_reference_prefill_and_decode[wormhole_b0-2048-device_params0-mesh_device0]|
+zr2_ref2048_r2|1800|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_reference_prefill_and_decode[wormhole_b0-2048-device_params0-mesh_device0]|
+zr3_ref2048_r3|1800|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_reference_prefill_and_decode[wormhole_b0-2048-device_params0-mesh_device0]|
+# Appended 07:20Z by attempt 7 (>> preserves the inode, so the live queue's fd sees it).
+# test_step7_page_table_placement_wh_galaxy.py is the one step-7 file that needs a mesh, and
+# the glob in the brief's regression rule covers it. u1/u2 ran at faec6e59938 - BEFORE the
+# close()-releases-weights fix - and only u3 is post-fix. Three fresh processes at HEAD, 12 s each.
+u4_s7_page_table_placement_h1|900|models/common/tests/models/galaxy/test_step7_page_table_placement_wh_galaxy.py|
+u5_s7_page_table_placement_h2|900|models/common/tests/models/galaxy/test_step7_page_table_placement_wh_galaxy.py|
+u6_s7_page_table_placement_h3|900|models/common/tests/models/galaxy/test_step7_page_table_placement_wh_galaxy.py|
+# Appended 08:25Z by attempt 8 (>> preserves the inode; the live queue's fd sees it).
+# AREA 2's REAL QUESTION, never asked on EITHER model. The brief's section 4 says that if the
+# D-C6 overflow is fixed, "area 2's real question becomes askable for the first time: do padded
+# rows change an active row's logits at active batch 16, 31 and 32?" The overflow IS fixed
+# (60823a3888f) and this node has ZERO runs in RESULTS.md - Milestone B's six attempts
+# (a3_{q,l}_concat_active{16,31,32}) all died on validate_circular_buffer_region before a single
+# row's logits could be read. D-C6.status currently says the question is "answered for Llama";
+# that is wrong and these runs are how I establish what is true.
+# Whole node, all three active levels, three fresh processes per model.
+zp1_qwen_concat_padded_rows_r1|2700|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_concat32_padded_rows_change_no_active_rows_logits|
+zp2_qwen_concat_padded_rows_r2|2700|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_concat32_padded_rows_change_no_active_rows_logits|
+zp3_qwen_concat_padded_rows_r3|2700|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_concat32_padded_rows_change_no_active_rows_logits|
+zp4_llama_concat_padded_rows_r1|3300|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_padded_rows_change_no_active_rows_logits|
+zp5_llama_concat_padded_rows_r2|3300|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_padded_rows_change_no_active_rows_logits|
+zp6_llama_concat_padded_rows_r3|3300|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_padded_rows_change_no_active_rows_logits|
+# Appended 10:42Z by attempt 10 (>> preserves the inode; the live queue's fd sees it).
+# zr1-zr3 DO NOT MEASURE THIS TREE. `_reference_prefill` in test_executor_wh_galaxy.py caches
+# its result to tttv2_milestone_c_evidence/exec_llama/reference/llama_prefill<L>_layers0.pt and
+# returns the cached tensor unless LLAMA33_70B_GALAXY_EXECUTOR_REFERENCE=recompute. zr1's log
+# says "[reference] loading ...llama_prefill2048_layers0.pt" - the file was written 2026-08-30
+# 00:38 by c-exec-llama at ~2b463f17fcd, BEFORE 32e552bb0b2, faec6e59938, 299440bb276 and
+# 60823a3888f. So the non-finite decode logits c-exec-llama handed over are a property of a
+# stale artifact, and three identical failures through torch.load are one measurement of one
+# file, not three fresh processes on silicon. These runs force the device computation.
+# The inherited .pt files are preserved as *.as-inherited-20260830.pt (md5 recorded in REPORT.md).
+zs1_ref2048_recompute_r1|2700|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_reference_prefill_and_decode[wormhole_b0-2048-device_params0-mesh_device0]|LLAMA33_70B_GALAXY_EXECUTOR_REFERENCE=recompute
+zs2_ref2048_recompute_r2|2700|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_reference_prefill_and_decode[wormhole_b0-2048-device_params0-mesh_device0]|LLAMA33_70B_GALAXY_EXECUTOR_REFERENCE=recompute
+zs3_ref2048_recompute_r3|2700|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_reference_prefill_and_decode[wormhole_b0-2048-device_params0-mesh_device0]|LLAMA33_70B_GALAXY_EXECUTOR_REFERENCE=recompute
+# The 512 control, same forcing. If 512 recomputes clean at HEAD and 2048 does not, the defect
+# is length-dependent in the CURRENT tree; if both are clean, the inherited artifact is the
+# whole of what c-exec-llama saw and there is no defect at HEAD to name.
+zs4_ref512_recompute_r1|2700|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_reference_prefill_and_decode[wormhole_b0-512-device_params0-mesh_device0]|LLAMA33_70B_GALAXY_EXECUTOR_REFERENCE=recompute
+zs5_ref512_recompute_r2|2700|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_reference_prefill_and_decode[wormhole_b0-512-device_params0-mesh_device0]|LLAMA33_70B_GALAXY_EXECUTOR_REFERENCE=recompute
+zs6_ref512_recompute_r3|2700|models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py::test_reference_prefill_and_decode[wormhole_b0-512-device_params0-mesh_device0]|LLAMA33_70B_GALAXY_EXECUTOR_REFERENCE=recompute

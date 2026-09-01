@@ -2456,3 +2456,148 @@ tighter-than-bfloat16 accumulation in the concat-32 reduction, or a discriminato
 logit difference instead of matching an argmax. The second is a test change that would weaken the
 claim, so it is not this job's to make; it is a question for whoever owns the gate wording, and it
 is now on record with the numbers behind it. **D-C6 stays `DEFERRED`.**
+
+---
+
+# Attempt 10, 2026-09-01 — the gate ledger re-derived, and D-C17
+
+## Arrival, and what was inherited as measured rather than re-measured
+
+At 10:32Z the mesh held exactly one thing: this job's own queue `q16` (PID 228702, started by
+attempt 7, adopted by the driver across attempts 8 and 9), on `zr2`. All 32 boards on the bus, zero
+`tt-smi` resets. Nothing was discarded on dead-mesh grounds: every `RESULTS.md` row from 07:22Z to
+10:41Z carries a pytest summary, and there is no `rc=124`-then-seconds-long-failure tail anywhere in
+the range.
+
+Attempt 9's handoff was stamped 10:02Z and listed four queue nodes as IN FLIGHT. Three of the four
+had landed by the time I read it, so its status table was stale in the job's own favour — but in
+this case the news is good rather than bad:
+
+| attempt 9 said | the tree says |
+| --- | --- |
+| `zm1`-`zm6` IN FLIGHT | all six **`1 passed`**: cross-slot 309.40/333.24/439.24 s, chunked prefill 303.64/228.93/249.68 s |
+| `zr1`-`zr3` IN FLIGHT | all three **`1 failed`**, 170.90/165.38/168.46 s — and see D-C17 below, because they are not device measurements at all |
+| `u4`-`u6` IN FLIGHT | `u4`/`u5` **`3 passed`** 12.24/12.00 s |
+| `zp1`-`zp6` IN FLIGHT | still queued |
+
+Attempt 9 recorded the gate line "the three claims the clash blocked are measured" as MET partly on
+runs at older commits plus `zm1` alone. **It is now met with all six `zm` runs at HEAD** — a
+stronger record than the one it claimed. Nothing it wrote has been contradicted by the tree.
+
+## The eight gates, re-derived from the logs rather than from any status page
+
+I rebuilt the whole ledger from the log files: each log's own `# commit=` and `# node=` headers, its
+final pytest summary, and counts of `clash with L1 buffers`, `SKIPPED` and `TT_FATAL|TT_THROW`. No
+silicon was spent producing this table. Merge base used throughout:
+`6af44349413ca6ce2c0d98f5b26dd2898dc1f067`.
+
+Two things this re-derivation established that were not on record:
+
+**1. The step-7 host-suite gate is stronger than it looked, and the reason is a commit range.** The
+three fresh-process passes are `z3_*_p1` (at `299440bb276`) and `zh_*_p2`/`zh_*_p3` (at
+`f61978825cda`), which are two different commits — normally a reason to distrust the set.
+`git diff --name-only 299440bb276..HEAD` answers it: over that whole range the only file under
+`models/` that is not a test file is `modules/README.md`. **Production code is byte-identical from
+`299440bb276` through HEAD**, so all three passes are at HEAD's production code and the set is one
+qualification, not three fragments. The two device test files that do change in the range
+(`test_step7_coverage_wh_galaxy.py`, both models) gain one new function each and modify none.
+
+**2. The brief's "162 tests at Milestone B" figure is the thing that is off, not an expectation.**
+`git diff 6af44349413..HEAD -- 'models/common/tests/models/galaxy/test_step7_*.py'` is **empty** —
+the seven files are byte-identical to Milestone B — and they collect 34+32+37+18+12+29+8 = **170**.
+A count cannot have drifted in files that did not change, so the discrepancy is in the brief.
+
+## D-C17 — `GalaxyDirectRunner` decodes at a position past `max_seq_len` and returns garbage instead of refusing
+
+This is `c-exec-llama`'s third handed-over defect — "`test_reference_prefill_and_decode` at 2048
+returns non-finite decode logits, in the REFERENCE path, `GalaxyDirectRunner`". It is shared Galaxy
+code and therefore this job's. It reduces to two findings, and the first one has to come first.
+
+### The runs that were supposed to measure it do not touch the device
+
+`zr1`, `zr2`, `zr3` are three fresh processes, `1 failed` each, within 5.5 s of one another. Read as
+a device result that is a textbook deterministic defect. It is not a device result.
+`_reference_prefill` in `test_executor_wh_galaxy.py` **caches to disk** and returns the cached
+tensor unless `LLAMA33_70B_GALAXY_EXECUTOR_REFERENCE=recompute`:
+
+```
+$ grep '\[reference\]' logs/zr{1,2,3}_ref2048_r*.log
+[reference] loading tttv2_milestone_c_evidence/exec_llama/reference/llama_prefill2048_layers0.pt
+```
+
+— the same line in all three. That file was written **2026-08-30 00:38:36** by `c-exec-llama` at
+around `2b463f17fcd`, which is *before* `32e552bb0b2` (global-CB address), `faec6e59938` (program
+cache outliving the model), `299440bb276` (DRAM weight release) and `60823a3888f` (the concat-32
+recipe). `md5 5a59f74f3ddd88121fe86234d706986c`. So the three "fresh processes" are **one
+`torch.load` of one stale file, three times**, and they say nothing whatever about this tree. The
+three inherited artifacts are preserved as `*.as-inherited-20260830.pt` before anything overwrites
+them, and `zs1`-`zs3` (2048) and `zs4`-`zs6` (512, the control) are queued with
+`LLAMA33_70B_GALAXY_EXECUTOR_REFERENCE=recompute` to take the measurement for real.
+
+**This generalises beyond one node, and `c-signoff` should know.** Every executor-vs-reference
+comparison in that file — prefill PCC, decode, KV PCC — is against artifacts computed on
+2026-08-30 at a commit four fixes back, with no commit stamp inside the file and the file untracked
+by git. A comparison whose reference is a stale undated artifact can go green for the wrong reason
+as easily as red.
+
+### What is actually in the artifact, and what asks for it
+
+Read on the host, no device (`python -c 'torch.load(...)'`):
+
+| tensor | at 128 | at 512 | at 2048 |
+| --- | --- | --- | --- |
+| `prefill_logits` | finite, `[-13.81, 31.13]` | finite, `[-9.75, 24.13]` | finite, `[-6.94, 17.88]` |
+| `kv_first_k/v`, `kv_last_k/v` | finite, sane | finite, sane | **finite, sane** (`k` `[-13.75, 14.25]`, `v` `[-3.47, 2.44]`) |
+| `decode_logits` | finite, `[-19.50, 18.00]` | finite, `[-19.50, 19.50]` | **garbage: 128 233 of 128 256 columns exceed 1e3; 448 entries are ±inf; finite max 5.65e19** |
+
+So at 2048 the prefill is right and the KV it wrote is right, and the *first decode step* is wrong —
+in **all 32 rows**, with rows 1..31 byte-identical to each other and row 0 different. Every value
+has its low 16 float32 bits zero (bfloat16 promoted, as expected) and the magnitudes cluster at
+`k · 2^63` for small `k`, which is a wrecked exponent rather than a numerical drift.
+
+`_reference_prefill` decodes at `positions[0] = length`. The test's constants are
+`_MAX_SEQ_LEN = 2048`, `_BLOCK_SIZE = 32`, so `blocks_per_user = 64` and the page table is
+`[32, 64]`. At `length == 2048` the decode position **equals** `max_seq_len`: the last addressable
+position is 2047, and block index `2048 // 32 = 64` is column 64 of a 64-wide page table. At 128 and
+512 there are 60 and 48 spare blocks and nothing is out of range — which is exactly the pattern the
+table above shows.
+
+### The defect, stated as a property of the shared runner
+
+`GalaxyDirectRunner.generate` guards this condition — `direct_runner.py:645`,
+`if max(positions) >= self.max_seq_len: break`. **`decode_logits`, `decode_sampled` and
+`_stage_positions` do not.** `_decode_device_logits` validates `len(tokens)` (line 552) and
+`_stage_positions` validates `len(positions)` (line 332); neither validates a position *value*. An
+out-of-range position is staged, `prepare_decode_rot_mats` builds rotary matrices for it, and the
+paged attention indexes past the page-table row. **A caller that decodes at
+`position >= max_seq_len` gets garbage logits instead of an exception.** A serving system reaching
+its context limit does exactly this.
+
+The smallest fix that respects the boundary is one check in `_stage_positions`, beside the length
+check it already owns, in the same message style — the bound is already a `GalaxyDirectRunner`
+attribute (`self.max_seq_len`) and `generate` already encodes the comparison, so nothing new needs
+to be known by anything.
+
+### Why attempt 10 reduced it and did not commit the check
+
+Because of what it would cost, and the cost is not the fix. This job's eight gates are all qualified
+at production code that is byte-identical from `299440bb276` to HEAD; that identity is what makes
+the step-7 host set above one qualification instead of three fragments, and it is what lets thirty
+area-4 runs taken across `f61978825cda` and `671802f94648` be read as one table. Committing any
+production change moves HEAD off that tree, and the brief requires every fix to be re-qualified on
+**both** models — which for these gates is roughly six device-hours on top of a queue tail that is
+already several hours deep, at an attempt whose one outstanding instruction is to finish and be read.
+
+**And there is a second reason, which is the honest one.** The fix converts a silent wrong answer
+into a refusal. `test_reference_prefill_and_decode[2048]` would then fail with `ValueError:
+position 2048 is not addressable in a 2048-token cache` instead of an `isfinite` assertion — still
+red, because the test asks for a position that does not exist. Making it green means changing
+`positions[0] = length` to `length - 1` in `test_executor_wh_galaxy.py`, and that file is
+`c-exec-llama`'s. Editing another job's test to turn its failure green is precisely what the house
+rules forbid.
+
+So D-C17 is recorded `OPEN — REDUCED, NOT FIXED`, with the mechanism, the line numbers, the
+one-check fix, and both owners named: the `direct_runner` check belongs to whoever owns
+`models/common/models/galaxy/direct_runner.py`, and the `positions[0] = length` call belongs to
+`c-exec-llama`. `zs1`-`zs6` will say whether the garbage reproduces on silicon at HEAD; the
+reduction stands either way, because the missing bound is visible in the source.
