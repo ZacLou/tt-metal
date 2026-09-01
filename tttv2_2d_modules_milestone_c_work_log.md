@@ -343,3 +343,36 @@ on an API slip — `ttnn.get_memory_view` returns a `MemoryView`, and the blocks
   `chunk_start` alignment is `llm_runtime/warmup.py:700` assuming a block-aligned prefix is a valid
   chunk start (32 vs Galaxy's 128), and the `page_table width` failure is a stale table after a pool
   shrink. Reductions written; `llm_runtime` not touched, per this brief.
+
+## 2026-09-01 07:07Z — `c-defects` attempt 7 opens
+
+Arrived on an **idle** mesh, 32/32 boards on the bus, with attempt 6's 53-run chain fully drained
+at 01:36Z. Zero `tt-smi` resets. First job of this series to start with no inherited queue running.
+
+- **Reconciled attempt 6's 01:14Z handoff against the tree.** Five runs landed after it wrote, and
+  one answers its own open question: `test_executor_repeated_startup_and_cleanup` — the direct test
+  of whether serving is unblocked, which failed **3/3** on the L1 address clash at `2b463f17fcd` —
+  **passes 3/3 in fresh processes at HEAD** (`y4`/`y5`/`y6`, 199.68 / 199.28 / 199.83 s, **0**
+  `clash with L1 buffers` lines each, all three logs stamped `# commit=671802f9464`). The received
+  claim that the clash blocks serving is a **pre-fix** claim and is now refuted on silicon.
+- **Verified the two no-silicon gates by inspection:** zero changes to any `*_1d.py`, zero changes
+  under `models/common/llm_runtime/`, and no uncommitted change to `models/` at all.
+- **Established that attempt 6's device results are results about HEAD.** Every commit after
+  `299440bb276` touches only evidence, one README, and the two step-7 coverage test files — no
+  production source. The logs' own `# commit=` headers read `d2d6c424030` / `874a0e9da75` /
+  `f61978825cd`, not `299440bb276` as attempt 6's prose says; the prose is loose, the conclusion is
+  unaffected, and the runs are *closer* to HEAD than claimed.
+- **D-C16 opened and reduced, not fixed.** Attempt 6's §28 called the `chunk_start` alignment defect
+  "D-C13", which collides with the superseded global-CB fragmentation OOM in `D-C7.status`. Renamed.
+  Qualified 3/3 at HEAD (`y1`/`y2`/`y3`, byte-identical at `attention_2d.py:908`), with every link
+  in the chain verified in the source: `warmup.py:700` hard-codes `cached_tokens=layout.block_size`
+  (32), `plan.py:163` validates only *block* alignment, `plan.py:381/403` carries it through as
+  `chunk_start_idx`, and Galaxy's `chunk_alignment` is 128 — and *is* the flash-SDPA chunk size, so
+  lowering it would be relaxing a real constraint. The fix belongs in `llm_runtime`, which this
+  brief forbids; the reduction is the deliverable and the job stopped at it.
+- **Queued `q16`, 33 runs**, whose only purpose is to bring **the whole of area 4 to one commit on
+  both models**. Seven of area 4's ten claim-verdicts were last measured at attempt 3's commits,
+  before both teardown fixes; the three already at the fixed commit are not repeated. Plus the two
+  clash-blocked claims that are not the D-C7 gate, `test_reference_prefill_and_decode[2048]`, and
+  three fresh passes of the one step-7 file that needs a mesh (`u1`/`u2` predate the weight-release
+  fix; only `u3` was post-fix).

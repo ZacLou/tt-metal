@@ -2200,3 +2200,62 @@ it exited at 2026-08-30T00:02Z at `2b463f17fcd`, while `32e552bb0b2` landed 2026
 has re-asked them at HEAD. `q12.txt` queues that question: three fresh processes each of
 `test_executor_warmup_and_program_identity[decode_first]` and
 `test_executor_repeated_startup_and_cleanup`, ~110–190 s apiece.
+
+---
+
+# Attempt 7, 2026-09-01 — the five workstreams, closed out
+
+**Base commit:** `671802f946482360c31c220f4cfbf704c7969334`. **Arrived:** 07:07Z, on an idle
+mesh with 32/32 boards on the bus and attempt 6's 53-run chain fully drained. **Zero `tt-smi`
+resets run by this attempt.**
+
+## What landed after attempt 6 stopped writing, and what it changes
+
+Attempt 6's handoff is stamped 01:14Z; its chain drained at 01:36Z. Five runs landed in
+between, and one of them answers the question that attempt 6 left open.
+
+| run | attempt 6 said | measured |
+| --- | --- | --- |
+| `y2`, `y3` | queued | **1 failed** ×2, 219.14 / 197.25 s, same `chunk_start` line |
+| `y4`, `y5`, `y6` | queued | **1 passed ×3**, 199.68 / 199.28 / 199.83 s, **0 clash lines each** |
+
+`y4`–`y6` are `test_executor_repeated_startup_and_cleanup` — three startup/serve/cleanup cycles
+in one process. At `2b463f17fcd` that node failed **3/3** on
+`TT_THROW … Statically allocated circular buffers … clash with L1 buffers … L1 buffer allocated
+at 542016`. At HEAD it **passes 3/3 in three fresh processes**, within half a second of each
+other, with zero clash lines. All three logs carry
+`# commit=671802f946482360c31c220f4cfbf704c7969334` in their header.
+
+**So the claim that the L1 address clash blocks serving is a pre-fix claim, and it is now
+refuted on silicon at HEAD.** `c-exec-llama` measured it at `2b463f17fcd` and exited at
+2026-08-30T00:02Z; the clash fix landed at `32e552bb0b2` on 2026-08-31 at 11:32.
+
+## Why attempt 6's device results are results about HEAD
+
+Every commit after the last production-code change is evidence, documentation or a test
+addition:
+
+```
+git log --oneline --name-only 299440bb276..HEAD
+  671802f9464  evidence only
+  f61978825cd  evidence + status files only
+  874a0e9da75  models/common/modules/README.md (docs) + evidence
+  d2d6c424030  the two step-7 coverage TEST files (adds the close-contract test)
+```
+
+No file under `models/common/modules/` or `models/common/models/` other than a README changed
+after `299440bb276`. The logs bear this out directly: the D-C7 gate runs carry
+`# commit=d2d6c424030` / `874a0e9da75` and the regression runs carry `f61978825cd`, not
+`299440bb276` as attempt 6's prose says. The prose is loose and the conclusion is unaffected —
+they are all descendants of the fix with identical production code, and they are *closer* to
+HEAD than the handoff claims, not further.
+
+## The two gates that need no silicon
+
+```
+git diff --stat <milestone-b>..HEAD -- '*_1d.py'                          -> empty
+git diff --stat <milestone-b>..HEAD -- 'models/common/llm_runtime/'       -> empty
+git status --porcelain models/                                            -> empty
+```
+
+**Zero changes to any `*_1d.py`. Zero changes under `models/common/llm_runtime/`.**

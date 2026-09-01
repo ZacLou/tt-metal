@@ -1,6 +1,49 @@
-NOT MET as of attempt 4 arrival - one of the ten claim-verdicts was never evaluated.
-Closing run IN FLIGHT (q11 t7-t9).
+ALL TEN CLAIM-VERDICTS ARE EVALUATED ON SILICON AT THREE FRESH PROCESSES EACH.
+Re-measurement of the seven that were last measured before the two teardown fixes is
+IN FLIGHT (queue q16, attempt 7, from 2026-09-01T07:10Z).
 
+--- c-defects attempt 7, 2026-09-01: the state of the gate ---
+
+THE GATE: "both models' device sampling runs end to end, and area 4's five claims - greedy vs
+host argmax, the padded-vocabulary claim, seeded slot stability, the near-zero-temperature
+check for Milestone A's D4, and per-slot heterogeneous controls - are evaluated on silicon,
+three fresh processes each."
+
+Attempt 4 correctly recorded this as ONE claim-verdict short: Llama's seeded-slot claim had
+never reached its assertion, because the L1 address clash aborted all three of its runs before
+the sampler. That claim IS now evaluated. Attempt 6 measured it three times in fresh processes
+at f61978825cd (production code identical to 299440bb276):
+
+  ze1_llama_seeded_slot_r1   1 failed  301.09 s   0 'clash with L1 buffers' lines
+  ze2_llama_seeded_slot_r2   1 failed  308.77 s   0
+  ze3_llama_seeded_slot_r3   1 failed  352.00 s   0
+
+All three reach the assertion "a seeded stochastic decode did not repeat", and the second
+decode's observed[1] is full of float32 bit patterns read as int32 (3209869902 = 0xBF52..).
+That is D-C12, the warm-ttnn-program-cache staleness defect already qualified 3/3 on Qwen. The
+claim is EVALUATED and it FAILS. Nothing was relaxed; the failure is reported as a failure.
+
+SO LLAMA'S AREA-4 LEDGER AND QWEN'S ARE NOW IDENTICAL, CLAIM FOR CLAIM.
+
+WHY ATTEMPT 7 IS RE-MEASURING ANYWAY: the ten verdicts stand across THREE commits. Seven of
+them were last measured at attempt 3's d40b2093783/32e552bb0b2 - before the program-cache
+retirement (faec6e59938) and before close() started releasing layer weights (299440bb276),
+both of which change teardown on every one of these paths. q16 puts the whole of area 4 at
+one commit on both models. The three already at the fixed commit and NOT repeated:
+  greedy vs host argmax, Qwen    zd1/zd2/zd3   1 failed x3  (slot [4], the bfloat16 tie)
+  greedy vs host argmax, Llama   zd4/zd5/zd6   1 passed x3  32/32
+  a seeded slot repeats, Llama   ze1/ze2/ze3   1 failed x3  (D-C12)
+
+DEVICE SAMPLING END TO END, BOTH MODELS: the D-C5/D-C8 selector fix is qualified by
+test_column_user_selector_wh_galaxy.py 7 passed x3 (zf1/zf2/zf3, f61978825cd) - the composition
+test rewritten to build its input in the WIDTH_SHARDED layout the LM head actually emits, under
+a loaded decode sub-device, which is the layout that hid both defects. The earlier 6-passed
+runs on this branch predate test_column_user_selection_is_bit_exact; that is a test added, not
+an expectation changed.
+
+D-C2 IS RECORDED AND NOT CHANGED, per the brief: the sampling seed is per-(request, slot).
+
+RESULTS OF THE q16 RE-MEASUREMENT: see the section appended below when it lands.
 --- c-defects attempt 4, 2026-08-31: a correction to attempt 3's verdict ---
 
 Attempt 3's handoff section 11 records this gate as "MET as worded ... Thirty runs, every

@@ -1,0 +1,62 @@
+OPEN - REDUCED, NOT FIXED. The fix belongs in models/common/llm_runtime/, which this brief
+forbids this job to change ("If you believe otherwise, write the reduction and stop"). This
+file is the reduction, and this job has stopped at it.
+
+--- c-defects attempt 7, 2026-09-01 ---
+
+D-C16: THE COMMON RUNTIME'S PREFIX-CACHED WARMUP CASE IS BLOCK-ALIGNED, AND GALAXY NEEDS
+       CHUNK-ALIGNMENT.
+
+  ValueError: chunk_start must be non-negative and aligned to chunk_alignment
+  models/common/modules/attention/attention_2d.py:908
+
+NAMING: attempt 6's handoff section 28 calls this "D-C13". D-C13 is already taken - it is the
+superseded global-CB fragmentation OOM recorded in D-C7.status. This defect is D-C16.
+
+MEASURED AT HEAD (671802f9464), three fresh processes, byte-identical, same file and line:
+  y1_exec_warmup_df_r1   1 failed  561.12 s   logs/y1_exec_warmup_df_r1.log:2055
+  y2_exec_warmup_df_r2   1 failed  219.14 s   logs/y2_exec_warmup_df_r2.log:2055
+  y3_exec_warmup_df_r3   1 failed  197.25 s   logs/y3_exec_warmup_df_r3.log:2055
+  node: models/common/tests/models/llama33_70b_galaxy/test_executor_wh_galaxy.py
+        ::test_executor_warmup_and_program_identity[wormhole_b0-decode_first-...]
+  grep -c 'clash with L1 buffers' on all three: 0.
+
+THE MEASURED VALUES, read off y1_exec_warmup_df_r1.log:2038-2040:
+  PrefillMetadata(sequence_length=128, user_ids=(0,), chunk_start=32, prefix_user_id=0)
+  KVCacheBinding(... PagedKVMetadata(block_size=32, max_num_blocks=2048, ...))
+  Galaxy chunk_alignment = 128  (recipes.py:693; and it IS the flash-SDPA q_chunk_size /
+  k_chunk_size at recipes.py:651-652, so it is not an arbitrary constant)
+  32 % 128 = 32, so the validator refuses.
+
+THE CHAIN, every link verified in the source at HEAD:
+  llm_runtime/warmup.py:700        cached_tokens=layout.block_size          <- 32 on Galaxy,
+                                   hard-coded inside _build_plan, no config field reaches it
+  llm_runtime/prefill/plan.py:163  validates num_cached_tokens % block_size <- the RUNTIME's
+                                   own invariant is BLOCK alignment
+  llm_runtime/prefill/plan.py:381  absolute_start = num_cached_tokens + relative_start
+  llm_runtime/prefill/plan.py:403  chunk_start_idx=absolute_start           <- 32
+  modules/attention/attention_2d.py:906  chunk_start % recipe.chunk_alignment
+
+So the common runtime's default warmup plan assumes that any BLOCK-aligned prefix is a valid
+chunk start. On Galaxy the block size is 32 and the chunk alignment is 128, and it is not.
+
+WHOSE DEFECT IT IS: the module validator is correct and the shared Galaxy recipe is correct.
+The assumption is the runtime's, and the failing line is in llm_runtime. This is a RUNTIME
+defect and this brief's prohibition applies without qualification.
+
+WHAT WOULD FIX IT (for whoever owns llm_runtime; do NOT do these in c-defects):
+  a) _build_plan asks the model/layout for its chunk alignment rather than assuming the block
+     size - the topology-neutral form is a frozen config value on WarmupConfig, defaulting to
+     layout.block_size so every existing caller is preserved byte for byte; or
+  b) the model-owned executor supplies a warmup plan whose cached_tokens is a multiple of the
+     recipe's chunk_alignment. That is c-exec-llama's file, not this job's.
+
+WHAT I DID NOT DO: lowering Galaxy's chunk_alignment from 128 to 32 would make this green and
+would be relaxing a constraint to turn a failure green. It is also wrong on the merits -
+chunk_alignment IS the flash-SDPA chunk size. Not done.
+
+CONSEQUENCE, and it is narrower than it looks: this fails the PREFIX-CACHED warmup case, not a
+plain prefill after a decode. The direct test of whether serving is unblocked -
+test_executor_repeated_startup_and_cleanup, three startup/serve/cleanup cycles in one process -
+PASSES 3/3 at HEAD (y4/y5/y6, 199.68 / 199.28 / 199.83 s, 0 clash lines each). At 2b463f17fcd
+that node failed 3/3 on the L1 address clash. See llama-address-clash.status.
