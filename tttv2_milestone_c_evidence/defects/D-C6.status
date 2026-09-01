@@ -99,3 +99,47 @@ rather than matching an argmax - and the second weakens the claim, so it belongs
 the gate wording, not to this job.
 
 STILL DEFERRED.
+
+--- c-defects attempt 10, 2026-09-01: area 2's real question is ASKED, and on Qwen it PASSES ---
+
+STILL DEFERRED. The numerical claim above is unchanged and nothing here re-opens it. What
+changes is a claim this file made about a DIFFERENT question, which was never measured.
+
+THE CORRECTION. The attempt-6 block above says:
+
+    area 2's real question - do padded rows change an active row's logits at active batch
+    16, 31 and 32 - is therefore answered for Llama and NOT for Qwen.
+
+That is wrong, and it was wrong when written. It conflates two different tests. The length
+sweep (`test_<model>_concat32_matches_sequential_prefill_at_each_length`) compares concat-32
+against SEQUENTIAL prefill; the padding question is a different node,
+`test_<model>_concat32_padded_rows_change_no_active_rows_logits`, which holds the active rows
+fixed and changes ONLY the filler rows. Before 2026-09-01 that node had ZERO runs in
+RESULTS.md on EITHER model - Milestone B's six attempts (a3_{q,l}_concat_active{16,31,32}) all
+died inside validate_circular_buffer_region before a single row's logits could be read. So the
+question was answered for NEITHER model, and Llama's passing length sweep is not evidence
+about it.
+
+MEASURED, QWEN, three fresh processes, all three active levels, for the first time:
+  zp1_qwen_concat_padded_rows_r1   3 passed   590.75 s   commit c4605147cb94
+  zp2_qwen_concat_padded_rows_r2   3 passed   730.40 s   commit c27f187e5596
+  zp3_qwen_concat_padded_rows_r3   3 passed   508.97 s   commit c27f187e5596
+  params in each: active16, active31, active32
+  clash lines 0, TT_FATAL/TT_THROW 0, SKIPPED 0, validate_circular_buffer_region 0 - in all
+  three logs. HF_HOME=/localdev/ctr-apbernal/hf_data.
+  (Both commits' production code is byte-identical to HEAD; c27f187e5596 is evidence-only.)
+
+  => On Qwen, changing only the padding rows moves no active row's logits, at active batch 16
+     and 31, bit-exactly (the test uses torch.equal, not a tolerance). active32 is a control:
+     with 32 active rows there are no padding rows, so the two batches are identical.
+
+  This also independently confirms the L1 overflow is gone: zero validate_circular_buffer_region
+  lines in a node that could not survive that call at Milestone B.
+
+LLAMA: zp4/zp5/zp6 are the same node on Llama and are IN FLIGHT at the time of writing. This
+file will be wrong again if nobody records their outcome; see the attempt-10 handoff.
+
+WHAT THIS DOES AND DOES NOT CHANGE. It does not make concat-32 usable on Qwen: the length
+sweep still fails 3/3 at 128 and 3/3 at 256, so the DEFERRED call stands and nothing downstream
+may be built on concat-32 for Qwen. What it removes is a different worry - that padded rows
+contaminate active rows - which is now measured on Qwen and is absent.

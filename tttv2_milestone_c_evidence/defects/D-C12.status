@@ -1,0 +1,92 @@
+OPEN - REDUCED ON SILICON AT HEAD, TWO HYPOTHESES REFUTED, MECHANISM NOT YET NAMED.
+Not a finish-condition gate for this brief.
+
+--- c-defects attempt 10, 2026-09-01 ---
+
+D-C12: WITH THE ttnn PROGRAM CACHE WARM, ONLY THE FIRST DEVICE SAMPLING CALL IN A PROCESS
+       RETURNS ITS OWN ANSWER. LATER CALLS RETURN AN EARLIER CALL'S.
+
+WHY IT MATTERS HERE. It is what makes four of area 4's ten claim-verdicts fail - the seeded-slot
+claim on both models (zq10-zq12, ze1-ze3) and, per attempt 9's correction, the T=2.0 half of the
+near-zero-temperature test. D-C5 and D-C8 are fixed and their gate is met; this is what the
+now-reachable assertions land on.
+
+1. IT STILL REPRODUCES AT HEAD, and this had never been re-asked.
+   The qualifying runs were taken 2026-08-29 at dc7f62430c0 - before the program-cache
+   retirement (faec6e59938) and before close() released weights (299440bb276). Re-asked at
+   c27f187e5596, three fresh processes, 17.89 / 18.06 / 17.85 s
+   (logs/dc12_repeat_head_r{1,2,3}.log). All three [repeat] blocks are BYTE-IDENTICAL
+   (md5 42d42591e9d7becf580287d3143b94f9 over every `[repeat]` line, all three runs):
+
+     cache cleared before each call : call 0,1,2,3 all wrong=0/32   -> "does not reproduce here"
+     program cache warm            : call 0 wrong=0/32
+                                     call 1 wrong=32/32  expected 1, got 0
+                                     call 2 wrong=32/32  expected 2, got 0
+                                     call 3 wrong=32/32  expected 3, got 1
+   Every returned id is IN vocabulary (out-of-vocab=0), so this is a stale ANSWER, not garbage.
+
+2. IT IS NOT A PREMATURE READBACK. Attempt 9's hypothesis was that on a cache hit there is no
+   compile to stall the host, so the read races the still-running program. The bisect reads the
+   same output THREE times per call - read1 immediately as production does, read2 after
+   `ttnn.synchronize_device`, read3 after `reset_sub_device_stall_group()` and a synchronize:
+
+     mode=cache, every call, every run:   read1==read2 True   read2==read3 True
+
+   Twelve of twelve observations across three fresh processes. A race would show read1 != read2.
+   **The hypothesis is REFUTED and attempt 9's section 9 is withdrawn on this point.** The stale
+   value is committed in the buffer; no amount of synchronizing at the read changes it.
+
+3. IT IS NOT A MOVED ADDRESS. The bisect records every one of the thirteen ops' output buffer
+   addresses per call. Between call 0 and calls 1/2/3, in ALL THREE modes:
+
+     op00 from_torch   op04 interleaved_to_sharded  op05 topk    op06 all_gather
+     op07 all_gather   op08 typecast                op09 add     op10 untilize
+     op11 manual_seed  op12 sampling                              -> address SAME, every time
+     op01 sharded_to_interleaved, op02 matmul, op03 add           -> address DIFFERS
+
+   The three that move, move identically in the mode that produces CORRECT results, so address
+   movement is not the discriminator. The received "an address baked as a plain uint32 in cached
+   runtime args" story is refuted as the mechanism, which confirms attempt 9's negative source
+   reading (reduction/{topk,sampling,manual_seed} have no address() call between them).
+
+4. WHAT DOES DISCRIMINATE: A HOST READBACK BETWEEN THE OPS. mode=cache_sig is mode=cache plus
+   one host read of each intermediate between ops - nothing else differs, same cache, same
+   addresses. It is CORRECT in all four calls, three fresh processes:
+
+     mode=nocache   wrong_by_call=[[], [], [], []]
+     mode=cache     wrong_by_call=[[], [all 32], [all 32], [all 32]]
+     mode=cache_sig wrong_by_call=[[], [], [], []]
+
+   So observing the chain fixes it. The defect is sensitive to host/device synchronization
+   inserted BETWEEN the ops, and not to synchronization at the final read (point 2). That is the
+   signature of a missing dependency between two ops on a cache hit, not of a stale read.
+
+5. THE LAG IS NOT FIXED, and that is a clue rather than noise. r1 and r2 are byte-identical over
+   every `[bisect]` line (md5 e51eb22af29004593bd5caf645055ac7). r3 differs in exactly one cell:
+   call 3 returned call 2's answer ([2, 4750, ...]) where r1/r2 returned call 1's
+   ([1, 4749, ...]). So the PATTERN is deterministic 3/3 and the DEPTH of the lag varies. A
+   single stale buffer would lag by exactly one, always.
+
+6. ONE OBSERVATION TO HAND ON, not yet interpreted. `op11 manual_seed` and `op12 sampling` are
+   reported at the SAME output address (2990304) in every mode and every call. If those two
+   genuinely share a buffer, then the ordering between them is the dependency most likely to be
+   lost on a cache hit - and point 4 says a dependency is exactly what is missing. This is a
+   pointer for whoever picks it up, not a conclusion: the probe did not test it.
+
+WHAT WOULD SETTLE IT (not this job's - the ops are ttnn's, not shared Galaxy code):
+  a) run mode=cache with a bare `ttnn.synchronize_device()` between ops and NO readback. If that
+     alone fixes it, the missing thing is a barrier; if only the readback fixes it, it is the
+     buffer transfer, which is narrower.
+  b) bisect by inserting the sync at ONE op boundary at a time - thirteen 20-second arms - to
+     name the boundary. That is the cheapest remaining experiment on this defect and it has not
+     been run.
+
+WHAT WAS NOT DONE. Nothing was relaxed and no test was xfailed. The four area-4 verdicts that
+fail because of this are recorded as failures in the gate ledger.
+
+MEANWHILE, FOR CALLERS: `disable_and_clear_program_cache()` before each sampling call is correct
+and measured (mode=nocache, 4/4 calls, three fresh processes). It costs a full recompile per
+call, so it is a diagnosis, not a fix.
+
+Logs: logs/dc12_repeat_head_r{1,2,3}.log, logs/dc12_bisect_r{1,2,3}.log
+Probe (DIAGNOSTIC ONLY, never committed): tttv2_dc12_scratch/test_dc12_op_bisect.py

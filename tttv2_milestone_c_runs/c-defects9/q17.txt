@@ -1,0 +1,51 @@
+# c-defects attempt 9, queue 17. Queued only AFTER q16 drained (attempt 8's queue,
+# adopted by the driver). Nothing here is a finish-condition gate: the gates were met by
+# q16 and by evidence already on disk. These are the two measurements this job's own
+# report names as "the next thing to measure" and that nobody has taken.
+#
+# Cheapest useful thing on the mesh, first, per the house rules.
+p0b_partition|900|models/common/tests/models/galaxy/test_partition_wh_galaxy.py|
+# --- D-C12, op by op. No checkpoint, ~20 s per arm. The defect is qualified (only the
+#     FIRST device sampling call in a warm-cache process is correct; four consecutive
+#     calls are all correct with the cache cleared, 3 fresh processes,
+#     logs/d11_repeat_sample_probe_run{2,3,4}.log) but the stale OP has never been named.
+#     This records every intermediate's buffer ADDRESS and device-0 signature per call,
+#     so a moved address can be told from a stale value at a stable address.
+# First: does D-C12 still reproduce AT HEAD? The qualifying runs
+#   (d11_repeat_sample_probe_run{2,3,4}) were taken 2026-08-29 at dc7f62430c0 - BEFORE the
+#   program-cache retirement (faec6e59938) and before close() started releasing weights
+#   (299440bb276). Nobody has re-asked it since. 19 s per run, no checkpoint. If it no
+#   longer reproduces, four of area 4's ten claim-verdicts change meaning.
+dc12_repeat_head_r1|1800|tttv2_milestone_c_runs/c-defects/scratch/test_repeat_sample_probe.py|
+dc12_repeat_head_r2|1800|tttv2_milestone_c_runs/c-defects/scratch/test_repeat_sample_probe.py|
+dc12_repeat_head_r3|1800|tttv2_milestone_c_runs/c-defects/scratch/test_repeat_sample_probe.py|
+dc12_bisect_r1|1800|tttv2_dc12_scratch/test_dc12_op_bisect.py|
+dc12_bisect_r2|1800|tttv2_dc12_scratch/test_dc12_op_bisect.py|
+dc12_bisect_r3|1800|tttv2_dc12_scratch/test_dc12_op_bisect.py|
+# --- The near-zero-temperature residual, on the second model. On Qwen the two missed
+#     slots [4, 21] are two of the three slots where the top-two bfloat16 logits are
+#     EXACTLY equal (logs/d11_greedy_tie_probe.log: gap=0 at slots 4, 12, 21). Llama
+#     misses [2, 11] and its gaps have never been measured. Same probe, same inputs,
+#     TTTV2_TIE_PROBE_MODEL=llama.
+tie_llama_r1|2700|tttv2_milestone_c_runs/c-defects/scratch/test_greedy_tie_probe.py|TTTV2_TIE_PROBE_MODEL=llama
+tie_llama_r2|2700|tttv2_milestone_c_runs/c-defects/scratch/test_greedy_tie_probe.py|TTTV2_TIE_PROBE_MODEL=llama
+tie_llama_r3|2700|tttv2_milestone_c_runs/c-defects/scratch/test_greedy_tie_probe.py|TTTV2_TIE_PROBE_MODEL=llama
+# Appended 12:46Z by attempt 10 (>> preserves the inode; the live queue's fd sees it).
+# D-C18. zp4/zp5/zp6 ran test_llama_concat32_padded_rows_change_no_active_rows_logits three
+# times in fresh processes: 1 failed (slot 10, at active32) and 2 passed. A case that flips
+# across fresh processes is a defect by the house rules, not noise - but three 17-minute runs
+# bought one failure, two passes and NO magnitude, because the test asserts torch.equal and
+# prints nothing.
+# The active32 parametrization is DEGENERATE: GALAXY_PHYSICAL_BATCH - active == 0, so no filler
+# rows are appended and the two invocations it compares receive BYTE-IDENTICAL input. At that
+# level it is not a padding-isolation test at all; it is an accidental run-to-run
+# reproducibility test of GalaxyDirectRunner.prefill_batched.
+# This probe measures instead of sampling: one model load, FOUR invocations, all SIX pairwise
+# comparisons, with per-slot max|diff| and whether the argmax moved. It also separates
+# "invocation 0 is special" (D-C12's shape) from "each differs from the last".
+dc18_repeat_active32_r1|3600|tttv2_dc18_scratch/test_dc18_concat32_repeat_probe.py|TTTV2_DC18_ACTIVE=32 TTTV2_DC18_INVOCATIONS=4
+dc18_repeat_active32_r2|3600|tttv2_dc18_scratch/test_dc18_concat32_repeat_probe.py|TTTV2_DC18_ACTIVE=32 TTTV2_DC18_INVOCATIONS=4
+dc18_repeat_active32_r3|3600|tttv2_dc18_scratch/test_dc18_concat32_repeat_probe.py|TTTV2_DC18_ACTIVE=32 TTTV2_DC18_INVOCATIONS=4
+# The control: active16 is the level the committed test PASSES. Four invocations there says
+# whether it is genuinely reproducible or merely was not sampled enough to show it.
+dc18_repeat_active16_c1|3600|tttv2_dc18_scratch/test_dc18_concat32_repeat_probe.py|TTTV2_DC18_ACTIVE=16 TTTV2_DC18_INVOCATIONS=4

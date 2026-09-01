@@ -69,3 +69,43 @@ OWNERS.
   the missing bound          -> whoever owns models/common/models/galaxy/direct_runner.py
   positions[0] = length      -> c-exec-llama (test_executor_wh_galaxy.py)
   the undated cached reference -> c-exec-llama, and c-signoff should see it
+
+--- attempt 10, 12:20Z: MEASURED ON SILICON AT HEAD. The defect is real and it is not the file ---
+
+zs1_ref2048_recompute_r1, commit c27f187e5596, env
+LLAMA33_70B_GALAXY_EXECUTOR_REFERENCE=recompute, 303.44 s, clash 0, TT_FATAL/TT_THROW 0,
+SKIPPED 0. Its log prints
+
+    [reference] wrote .../exec_llama/reference/llama_prefill2048_layers0.pt
+
+- "wrote", not "loading", so the device computation ran - and it still fails, on
+test_executor_wh_galaxy.py:423, the decode_logits isfinite assertion. The prefill assertion on
+the line above PASSES.
+
+The freshly computed artifact was snapshotted before the next run overwrote it
+(llama_prefill2048_layers0.zs1-recomputed-at-HEAD.pt, md5 1e1104695c8e5261e7a03392da7b915a) and
+diffed against the inherited one (md5 5a59f74f3ddd88121fe86234d706986c):
+
+    prefill_logits   BIT-IDENTICAL between 2026-08-30 and HEAD   [-6.938, 17.875]
+    kv_last_k        BIT-IDENTICAL between 2026-08-30 and HEAD   [-13.750, 14.250]
+    decode_token     identical (7102)
+    decode_logits    garbage in BOTH, and NOT identical to each other:
+                       inherited : 448 non-finite entries, 32 rows, 128233/128256 columns >1e3
+                       recomputed: 448 non-finite entries, 32 rows, 128236/128256 columns >1e3
+                     rows 1..31 identical to each other in both
+
+WHAT THIS SETTLES.
+  1. The defect REPRODUCES AT HEAD on silicon. It is not an artifact of the stale file, and the
+     four fixes between 2026-08-30 and HEAD (32e552bb0b2, faec6e59938, 299440bb276, 60823a3888f)
+     did not touch it - prefill and KV come back bit-for-bit the same across all four.
+  2. Finding 1 above still stands and still matters: zr1/zr2/zr3 measured a FILE, and the fact
+     that the file happened to agree with silicon is luck, not method. The next such comparison
+     may not be lucky.
+  3. The garbage is NOT a fixed pattern - it differs between the two computations while
+     everything upstream of it is bit-identical. A wrong-but-deterministic arithmetic result
+     would repeat. Garbage that varies while its inputs do not is what reading unwritten or
+     out-of-range memory looks like, which is exactly what block index 2048 // 32 = 64 of a
+     64-wide page table would do.
+
+The reduction and the one-check fix are unchanged. zs2/zs3 complete the three fresh processes
+and zs4-zs6 are the 512 control.

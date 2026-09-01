@@ -1,0 +1,70 @@
+OPEN - MEASURED AS A FLIP, MAGNITUDE IN FLIGHT. Not a finish-condition gate.
+
+--- c-defects attempt 10, 2026-09-01 ---
+
+D-C18: `GalaxyDirectRunner.prefill_batched` IS NOT REPRODUCIBLE RUN TO RUN ON LLAMA, AND
+       THE TEST THAT CAUGHT IT WAS NOT LOOKING FOR THAT.
+
+HOW IT WAS FOUND. The brief's section 4 says that once D-C6's L1 overflow is fixed, "area 2's
+real question becomes askable for the first time: do padded rows change an active row's logits
+at active batch 16, 31 and 32?" Attempt 8 queued that node on both models - it had ZERO runs
+in RESULTS.md on either, because all of Milestone B's attempts died inside
+validate_circular_buffer_region before a row's logits could be read. Attempt 10 read the
+results:
+
+  QWEN  zp1/zp2/zp3   3 passed x3   590.75 / 730.40 / 508.97 s
+  LLAMA zp4           1 failed, 2 passed   1047.37 s   -> active32 FAILED, "active slots [10]
+                                                          moved when only the padding rows changed"
+        zp5           3 passed             1008.67 s
+        zp6           3 passed              820.67 s
+  All six logs: clash 0, TT_FATAL/TT_THROW 0, SKIPPED 0, validate_circular_buffer_region 0.
+
+THE ASSERTION MESSAGE IS MISLEADING, AND THE TEST IS DEGENERATE AT active32.
+
+    rows = _distinct_rows(length, active)
+    for filler in (rows[0][:1], rows[-1][:1]):
+        padded = list(rows) + [list(filler) for _ in range(GALAXY_PHYSICAL_BATCH - active)]
+
+At active == 32, `GALAXY_PHYSICAL_BATCH - active` is 0, so NO filler rows are appended and
+`padded` is `list(rows)` in BOTH iterations. The two invocations therefore receive
+BYTE-IDENTICAL input. Nothing about padding is under test at that level. What the test
+actually asserts there is that `prefill_batched` returns bit-identical logits when called
+twice with the same input, in two `GalaxyDirectRunner` contexts in one process.
+
+So the finding is NOT "padded rows contaminate active rows". It is:
+
+  On Llama, concat-32 prefill returned a different result for slot 10 on the second of two
+  identical invocations, in 1 of 3 fresh processes. On Qwen the same case passed 3/3.
+
+A case that flips across fresh processes is a defect and not noise - the house rules say so,
+and three of Milestone A's four defects presented as intermittent PASSES for exactly this
+reason. It is recorded as a defect.
+
+WHAT IS NOT YET KNOWN, and why three more of the same runs would not tell us. The committed
+test asserts `torch.equal` and prints nothing, so 51 minutes of silicon bought one failure, two
+passes, and no magnitude. A bfloat16-ulp difference and a wrong buffer read produce the same
+`torch.equal` verdict.
+
+THE MEASUREMENT, queued as dc18_repeat_active32_r1..r3 and dc18_repeat_active16_c1
+(tttv2_dc18_scratch/test_dc18_concat32_repeat_probe.py, DIAGNOSTIC ONLY, never committed):
+one model load, FOUR invocations, ALL SIX pairwise comparisons, reporting per-slot max|diff|
+and whether the argmax moved. Six comparisons per model load against the committed test's
+three per three processes. It separates three things the committed test cannot:
+  1. magnitude - one ulp (accumulation order) vs large (a wrong read);
+  2. whether invocation 0 is special, which is D-C12's shape ("only the FIRST device call in a
+     warm-cache process is correct") and would make D-C18 and D-C12 one defect;
+  3. whether the slot is fixed (geometry) or moves (a race).
+The active16 arm is the control: it is the level the committed test passes, and four
+invocations there says whether that is reproducibility or insufficient sampling.
+
+RELATION TO D-C6. Separate. D-C6's residual is concat-32 vs SEQUENTIAL prefill differing by
+5-18 bfloat16 ulps. D-C18 is concat-32 against ITSELF. D-C6 stays DEFERRED on its own
+evidence and this neither strengthens nor weakens it.
+
+CONSEQUENCE FOR THE MILESTONE, stated conservatively: none beyond what is already recorded.
+Concat-32 is not on Milestone C's critical path (prefill is sequential per row by the
+2026-08-28 scope decision) and nothing downstream may be built on concat-32 for Qwen already.
+D-C18 adds that concat-32 on LLAMA - whose length sweep passes at all five lengths - has a
+reproducibility question against it that the length sweep never asked.
+
+NOTHING WAS RELAXED AND NOTHING WAS XFAILED. zp4 is recorded as a failure.
