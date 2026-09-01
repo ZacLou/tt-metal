@@ -1,6 +1,6 @@
 # `c-defects` — completion handoff (attempt 9)
 
-**Last updated:** 2026-09-01T09:57Z — checkpoint 3. **The D-C5/D-C8 gate is now MET** (`zl9` landed 09:50:51Z, `1 passed`). **Attempt 8's queue `q16` is STILL
+**Last updated:** 2026-09-01T10:02Z — checkpoint 4. **The D-C5/D-C8 gate is now MET** (`zl9` landed 09:50:51Z, `1 passed`). **Attempt 8's queue `q16` is STILL
 RUNNING on the mesh** (PID 228702, adopted by the driver when attempt 8 exited at 09:21:56Z).
 I have not killed it and I will not exit before it drains, is read, and is written into this
 file, `RESULTS.md`, `REPORT.md` and the status files.
@@ -182,7 +182,76 @@ committed) asks both questions in one 20-second arm:
 Queued as `dc12_bisect_r1`-`r3` in `tttv2_milestone_c_runs/c-defects9/q17.txt`, to run **after**
 `q16` drains. Also queued: `tie_llama_r1`-`r3`, the same tie measurement on Llama.
 
-## 10. Work this attempt
+## 10. The brief's Finish condition, gate by gate
+
+| gate | state | evidence |
+| --- | --- | --- |
+| **D-C5 / D-C8** — device sampling end to end on both models, all five area-4 claims evaluated on silicon x3 fresh processes | **MET** 09:50:51Z | the thirty-run table in §7; 30 logs re-grepped for `TT_FATAL`, `TT_THROW`, `num_intersections == num_cores`, `must be interleaved`, `clash with L1 buffers`, `SKIPPED` -> **0 hits in any** |
+| **D-C7** — two models built, used and closed in one process, second creating its global CB, x3 | **MET** | `z6`/`z8`/`z9` Llama 797.78/1150.68/820.22 s, `z7`/`z10`/`z11` Qwen 445.81/437.29/272.24 s, all `1 passed`, 0 clash |
+| **Llama clash** — `*_repeated_requests_and_deterministic_cleanup` 3/3 for Llama | **MET** | `zc1`/`zc2`/`zc3` 571.12/282.62/222.86 s `1 passed`, 0 clash; `zc4`-`zc6` the same node on Qwen, to show the shared fix does not move Qwen |
+| **Llama clash** — the three claims it blocked, measured | **MET** | cross-slot `i1b`/`i2b`/`i3b` (and `zm1`-`zm3` re-asking at HEAD, `zm1` `1 passed` 309.40 s); chunked prefill `k1b`/`k2b`/`k3b` (`zm4`-`zm6` re-asking); two pools `z6`/`z8`/`z9` |
+| **D-C6** — fixed and qualified 128-2048 on both models, **or** `DEFERRED` with measurements + this handoff saying what C does not have | **MET as the brief allows** | `D-C6.status` = `DEFERRED` with the byte-level model-vs-silicon numbers; §12 below states what Milestone C does not have |
+| **step-7 host suite green, expectations unchanged** | **MET** | the seven host `test_step7_*.py` files are **byte-identical to Milestone B** (`git diff <mb>..HEAD` over them is empty) and all seven pass in **three** fresh processes with identical counts: 34/32/37/18/12/29/8 = **170**, plus `u1`-`u3` `3 passed` x3 for the one step-7 file that needs a mesh |
+| **`pytest models/common/tests/llm_runtime` = 1032 passed / 1 skipped** | **MET** | `zh_llm_runtime`, 212.08 s, `1032 passed, 1 skipped` |
+| **zero changes to any `*_1d.py`, zero under `models/common/llm_runtime/`** | **MET** | `git diff --stat <mb>..HEAD -- '*_1d.py'` empty; same for `models/common/llm_runtime/`; `git status --porcelain models/` clean |
+
+On the brief's "162 tests at Milestone B" figure: the seven files are byte-identical to Milestone
+B and collect 170, so the discrepancy cannot be a changed expectation — nothing in those files
+changed. The only test-side change since Milestone B in that directory is `step7_harness.py`, and
+its whole diff is retargeting one `monkeypatch.setattr` from `to_torch_auto_compose` to
+`compose_galaxy_sampled_tokens` (finding D-C9); it adds no parametrization.
+
+**I have not written the finish marker yet**, and will not until `q16` has fully drained and every
+one of its results is read and written down. That is the one instruction this job has broken six
+times.
+
+## 11. Workstream 5 — the two decision items, for a human. Not decided here.
+
+Full options tables are in `REPORT.md` §5. Condensed:
+
+**D-C1 — the decode page-table validator cannot separate a prefill-shaped table from a legitimate
+L1-sharded repeat.** Measured: a column-sharded decode table is device-locally `(8, 64)`, the
+replicated prefill table `(32, 64)`, and `32 % 8 == 0`; `_validate_decode_page_table` discriminates
+on the device-local row count alone, and both tables are DRAM-interleaved so `is_sharded()` does
+not separate them either. **A** leave it (a caller that passes the wrong table gets wrong attention
+silently); **B** require an L1 height-sharded table over exactly `rows / users_per_column` cores —
+the honest discriminator, but it makes the *passing* module expectation
+`test_decode_page_table_accepts_the_device_local_batch_and_its_core_repeats[16]/[32]` wrong;
+**C** add a mode tag to the page-table metadata — no expectation edited, larger blast radius across
+`GalaxyPagedKVContract`, `Attention2D` and both models. **Owner:** whoever owns the `Attention2D`
+paged-KV contract. **The question is one sentence:** is that expectation asserting a supported
+layout, or asserting today's behaviour? Four attempts have now declined to answer it themselves.
+
+**D-C4 — area 1's headline gate is unreachable as worded.** Both adaptors do
+`paged = paged_attention_config or default_paged_attention_config(params)`, so
+`paged_attention_config=None` means "the default pool", not "contiguous", and there is no argument
+to `from_pretrained` that yields `spec.paged_attention_config is None`. So "paged fill during
+prefill, then decode reading the same blocks, PCC >= 0.99 against the contiguous path" has no
+contiguous path to compare against. **A** add the missing adaptor argument (`paged=False`) — small,
+because `GalaxyDirectRunner` already has the contiguous branch and `test_bringup_wh_galaxy.py`
+already builds a contiguous cache; it restores the gate as worded; **B** re-word the gate to the
+two-pool comparison Milestone B substituted, which is measured and passing on both models but is a
+weaker claim about a stronger property; **C** both. **Owner:** the exit-gate wording owner together
+with the adaptor owner.
+
+## 12. What Milestone C does NOT have, carried forward (D-C6)
+
+D-C6's L1 overflow **is fixed** — `recipes.dense_matmul_output_blocks` (`60823a3888f`) re-blocks
+the 2D multicast matmul's output so its circular buffers stop growing with the batch, modelled
+against silicon to within 1 856 B at two lengths, and concat-32 prefill now places on this mesh for
+the first time. What is `DEFERRED` is the **numerical** claim on Qwen: concat-32 matches sequential
+prefill on Llama at 128/256/512/1024/2048 x3 each, and on Qwen only at 512 — failing 3/3 at 128
+(slots `[4, 11]`) and 3/3 at 256 (slot `[25]`), with 1024 and 2048 never run. The residual is
+**not** a tie (`logs/concat_tie_probe.log` refutes that) and not the overflow.
+
+**Consequence, stated plainly: nothing downstream may be built on concat-32 for Qwen.** Milestone
+C's prefill is sequential per row by the 2026-08-28 scope decision, and *that* is qualified on both
+models. Area 2's own question — do padded rows change an active row's logits at active batch 16, 31
+and 32 — is being asked for the first time on either model right now (`zp1`-`zp6`), because all
+eleven of Milestone B's concat-32 runs died inside `validate_circular_buffer_region` before a single
+row's logits could be read.
+
+## 13. Work this attempt
 
 * This file, rewritten at every checkpoint.
 * `tttv2_milestone_c_evidence/defects/REPORT.md` — a new "Attempt 9" section carrying §3, §7, §8
