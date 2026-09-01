@@ -589,7 +589,7 @@ def open_ring_joint_sdpa_runtime(
     trace_region_size: int = 0,
     topology: Topology = None,
     reserve_llk_kernel_config: bool = True,
-    num_global_semaphores: int = 2,
+    num_global_semaphores: int = 3,
 ):
     use_ring = mesh_config.sp_size > 2 if topology is None else topology == Topology.Ring
     fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
