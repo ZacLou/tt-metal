@@ -1,13 +1,13 @@
 # `c-defects` — completion handoff (attempt 10)
 
-**Last updated:** 2026-09-01T13:35Z — checkpoint 3, FINAL. Later than my last device result
+**Last updated:** 2026-09-01T13:38Z — checkpoint 3, FINAL. Later than my last device result
 (`dc18_repeat_active16_c1`, 13:32:14Z).
 
 **Base commit on arrival:** `c4605147cb949243e98707de74d9a70870813ba5`.
 **Branch:** `apbernal/tttv2_wh_glx_2d_modules_milestone_c`. **Job window:** started 10:32Z.
 
 **FINISH MARKER WRITTEN** — `tttv2_milestone_c_runs/state/c-defects.finished`:
-`FINISHED 2026-09-01T10:49:17Z 8a5c1d7ba80e00eb6ebbcbac60df8004ceb0884f`. Every one of the brief's
+`FINISHED 2026-09-01T13:37:21Z ee6b1bf8c5c7b080e028d0e0c40463f1331c118b` (refreshed to the final commit after both queues drained and the gates were re-checked; production code is byte-identical to the tree they were verified at — `git diff --name-only c4605147cb9..HEAD -- models/` is empty). Every one of the brief's
 eight Finish-condition gates has a log on disk behind it, and every one of those logs ran against
 production **and test** code byte-identical to HEAD. The machine-written ledger is
 `tttv2_milestone_c_evidence/defects/GATE_LEDGER_attempt10.txt`. **Blocked marker: not written, not
