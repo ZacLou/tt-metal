@@ -90,7 +90,7 @@ Tensor reduce_min(
 // Don't split below this many H tiles: extra dispatch and the partials round-trip cost more
 // than the added parallelism. TILE's un-split path is cheaper, so it needs a higher bar.
 static constexpr uint32_t k_min_ht_for_split_rm = 16;    // ~H >= 512 rows
-static constexpr uint32_t k_min_ht_for_split_tile = 32;  // ~H >= 1024 rows
+static constexpr uint32_t k_min_ht_for_split_tile = 16;  // ~H >= 1024 rows
 
 static constexpr uint32_t k_min_ht_per_slice_rm = 1;
 static constexpr uint32_t k_min_ht_per_slice_tile = 1;
