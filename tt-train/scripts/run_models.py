@@ -27,20 +27,13 @@ import plot_training_comparison
 from model_tracer.generic_ops_tracer import get_machine_info
 
 
-def _verify_path(path: str, *allowed_roots: str) -> str:
-    """Check if path is under one of the allowed roots to avoid security risk. Return absolute path."""
-    roots = [Path(root).absolute() for root in allowed_roots]
-    if not roots:
-        raise Exception("at least one allowed root is required")
+def _verify_path(path: str, allowed_root: str) -> str:
+    """Check if path is under allowed root to avoid security risk. Return absolute path."""
+    path = os.path.abspath(os.path.join(allowed_root, path))
+    if not path.startswith(allowed_root):
+        raise Exception(f"binary path must be under {allowed_root}: {path}")
 
-    # A relative path is resolved against each root in turn, so the first root wins. An absolute
-    # path only has to land inside one of them.
-    for root in roots:
-        candidate = Path(os.path.abspath(root / path))
-        if candidate.is_relative_to(root):
-            return str(candidate)
-
-    raise Exception(f"path must be under one of {[str(root) for root in roots]}: {path}")
+    return path
 
 
 def get_env(name: str, required=False) -> str | None:
@@ -105,25 +98,6 @@ def process_args(args: list[str]):
     return result
 
 
-def write_summary(markdown: str, summary_file: str) -> None:
-    """Append the summary markdown to summary_file, falling back to $GITHUB_STEP_SUMMARY."""
-    if summary_file:
-        summary_path = Path(summary_file)
-        summary_path.parent.mkdir(parents=True, exist_ok=True)
-    elif "GITHUB_STEP_SUMMARY" in os.environ:
-        summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
-    else:
-        return
-
-    try:
-        with open(summary_path, "a") as fh:
-            print(markdown, file=fh)
-    except OSError as err:
-        # $GITHUB_STEP_SUMMARY names a path on the Github runner, which an mpirun rank running on
-        # another host cannot reach. Losing the summary must not fail the run.
-        print(f"Could not write summary to {summary_path}: {err}")
-
-
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments"""
     tt_metal_runtime_root = get_env("TT_METAL_RUNTIME_ROOT", required=True)
@@ -140,13 +114,8 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         type=str,
         default="generated/tt-train-metrics",
-        help="Directory for generated logs and JSON (default: generated/tt-train-metrics)",
-    )
-    parser.add_argument(
-        "--summary-file",
-        type=str,
-        default="",
-        help="File to append the run summary markdown to. Defaults to $GITHUB_STEP_SUMMARY.",
+        help="Directory for generated logs, JSON, plots and summary.md. Relative paths resolve "
+        "against $TT_METAL_RUNTIME_ROOT (default: generated/tt-train-metrics)",
     )
     parser.add_argument(
         "--filter-filenames",
@@ -185,18 +154,11 @@ def main() -> int:
     arch_name = machine_info["board_type"]
     card_type = machine_info["device_series"]
 
-    # Multihost CI legs point --output-dir and --summary-file at the NFS scratch dir instead,
-    # because the mpirun rank runs on a worker whose tt-metal tree the container collecting the
-    # artifacts cannot see.
-    output_roots = [tt_metal_runtime_root]
-    if pipeline_dir := get_env("PIPELINE_DIR"):
-        output_roots.append(pipeline_dir)
-
-    # Verify the summary path up front so a bad one fails before the models run, not after.
-    summary_file = _verify_path(parsed_args.summary_file, *output_roots) if parsed_args.summary_file else ""
-
-    # Create output directory to store metrics
-    output_dir = Path(_verify_path(parsed_args.output_dir, *output_roots))
+    # Create output directory to store metrics. Unlike the binary/mgd paths from the config,
+    # --output-dir is supplied by whoever invokes this script, so it is not pinned to the
+    # runtime root: multihost CI points it at NFS scratch that both the mpirun rank and the
+    # container collecting the artifacts can reach.
+    output_dir = Path(tt_metal_runtime_root) / parsed_args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Collect model status
@@ -370,12 +332,14 @@ def main() -> int:
             ]
         )
 
-    # Show summary and write it out for the Github job summary
+    # Show summary and leave it in output_dir next to the metrics and plots, for CI to append
+    # to its job summary. Writing a file rather than $GITHUB_STEP_SUMMARY keeps this script
+    # usable from a multihost mpirun rank, which runs on a worker that cannot reach that path.
     df = pd.DataFrame(model_status)
     df_md = df.to_markdown(index=False)
     print("Summary:")
     print(df_md)
-    write_summary(df_md, summary_file)
+    (output_dir / "summary.md").write_text(df_md + "\n")
 
     # Return error code 1 if any tests have failed
     return 1 if any(s["run status"] == "❌" for s in model_status) else 0

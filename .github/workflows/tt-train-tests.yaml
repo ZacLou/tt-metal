@@ -208,6 +208,13 @@ jobs:
               --out /work/power_report.json \
               -- bash -c '${{ matrix.test-group.cmd }}'
 
+      # run_models.py writes the run table to its --output-dir rather than straight to
+      # $GITHUB_STEP_SUMMARY, so it stays usable from a multihost mpirun rank that cannot
+      # reach a path on the Github runner.
+      - name: Add run summary
+        if: ${{ !cancelled() && hashFiles('docker-job/generated/tt-train-metrics/summary.md') != '' }}
+        run: cat /work/generated/tt-train-metrics/summary.md >> $GITHUB_STEP_SUMMARY
+
       - name: Upload loss plot
         id: upload-loss-plot
         if: ${{ !cancelled() }}

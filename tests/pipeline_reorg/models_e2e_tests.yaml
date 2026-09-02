@@ -1756,24 +1756,14 @@
   team: models
 
 # ── TT-Train (Blackhole Galaxy) ───────────────────────────────────
-# Since mpirun runs in an environment separate from the CI, we cannot
-# pipe the summary data directly to $GITHUB_STEP_SUMMARY. Instead, we use
-# a shared NFS ($PIPELINE_DIR) to hold the markdown file, then pipe that to
-# $GITHUB_STEP_SUMMARY once mpirun exits.
+# mpirun runs the model on a worker whose tt-metal tree the CI container cannot see, so these
+# legs delegate to a tt-train script that stages the run's metrics, plots and summary off the
+# shared NFS scratch afterwards. See tt-train/scripts/ci/run_models_multihost.sh.
 
 - name: Galaxy TinyLlama 1.1B DDP=32 train e2e tests
   cmd: |
     export HF_HOME=/mnt/models/huggingface
-    SUMMARY="${PIPELINE_DIR}/tt_train_summary.md"
-    rc=0
-    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc "
-      ./tt-train/scripts/setup_pth.sh
-      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames tinyllama_1_1b_ddp32_shakespeare --output-dir ${PIPELINE_DIR}/tt-train-metrics --summary-file ${SUMMARY}
-    " || rc=$?
-    if [ -s "$SUMMARY" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-      cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
-    fi
-    exit $rc
+    tt-train/scripts/ci/run_models_multihost.sh tinyllama_1_1b_ddp32_shakespeare
   model: "[tt-train] tinyllama_1_1b_ddp32"
   skus:
     bh_sc1:
@@ -1803,16 +1793,7 @@
 - name: Galaxy Qwen 3 1.7B DDP=32 train e2e tests
   cmd: |
     export HF_HOME=/mnt/models/huggingface
-    SUMMARY="${PIPELINE_DIR}/tt_train_summary.md"
-    rc=0
-    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc "
-      ./tt-train/scripts/setup_pth.sh
-      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames qwen3_1_7b_ddp32_shakespeare --output-dir ${PIPELINE_DIR}/tt-train-metrics --summary-file ${SUMMARY}
-    " || rc=$?
-    if [ -s "$SUMMARY" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-      cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
-    fi
-    exit $rc
+    tt-train/scripts/ci/run_models_multihost.sh qwen3_1_7b_ddp32_shakespeare
   model: "[tt-train] qwen3_1_7b_ddp32_shakespeare"
   skus:
     bh_sc1:
@@ -1824,16 +1805,7 @@
 
 - name: Galaxy Tiny Deepseek v3 DDP=32 train e2e tests
   cmd: |
-    SUMMARY="${PIPELINE_DIR}/tt_train_summary.md"
-    rc=0
-    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc "
-      ./tt-train/scripts/setup_pth.sh
-      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames tiny_deepseek_v3_ddp32_char_shakespeare --output-dir ${PIPELINE_DIR}/tt-train-metrics --summary-file ${SUMMARY}
-    " || rc=$?
-    if [ -s "$SUMMARY" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-      cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
-    fi
-    exit $rc
+    tt-train/scripts/ci/run_models_multihost.sh tiny_deepseek_v3_ddp32_char_shakespeare
   model: "[tt-train] tiny_deepseek_v3_ddp32_char"
   skus:
     bh_sc1:
