@@ -269,16 +269,18 @@ def run_reduce_scatter_impl(
         # composite_reduce_scatter when the input-side alignment check is insufficient and only the
         # dispatch-side (per-device output) check fires.
         (4, [1, 1, 32, 64], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
-        # Starved-worker regression. Scattering on dim 1 divides Ht*Wt pages between the workers of
-        # one direction, so single-tile H and W leave 1-2 pages for 2 workers. The multi-worker path
-        # routes sends through a FabricMuxV2 mux core (a single worker drops the mux entirely), and
-        # that path DEADLOCKED on such a split -- silently, with no TT_FATAL and no watcher trip,
-        # requiring a board reset. reduce_scatter_default_workers now caps the worker count by the
-        # pages available to split, so these fall back to one worker and complete.
-        # The third case sits just above the boundary (4 pages) and always worked; it pins where the
-        # cap stops applying. Measured on an 8-device ring as [8,8,32,32] and [8,8,32,64] on dim 1;
-        # the split unit for dim 1 is Ht*Wt regardless of ring size, so these are the 4-device
-        # equivalents.
+        # Starved-worker regression. Scattering on dim 1 divides the Ht*Wt pages of one channel
+        # between num_links * workers-per-direction workers, so single-tile H and W can leave a
+        # worker with no pages at all. The multi-worker path routes sends through a FabricMuxV2 mux
+        # core (a single worker drops the mux entirely), and a worker with no pages DEADLOCKED there:
+        # its only fabric transaction was the end-of-batch increment, whose send path did not complete
+        # the eagerly staged mux connection, so the increment never left the staging slot and the peer
+        # waited on batch_ready_sem forever -- silently, no TT_FATAL, no watcher trip, board reset
+        # needed. Confirmed with tt-triage on an 8-device, 2-link ring as [8,8,32,32] and [8,8,32,64].
+        # Two fixes: the ring writer now flushes that send, and reduce_scatter_default_workers caps the
+        # worker count so no worker is left without a page.
+        # First case: 1 page, 2 workers -> falls back to one worker. Second: 2 pages, 2 workers -> one
+        # page each, runs the multi-worker mux path at the floor. Third: 4 pages, above the cap.
         (4, [4, 4, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (4, [4, 4, 32, 64], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (4, [4, 4, 64, 64], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
@@ -401,6 +403,13 @@ def test_reduce_scatter_async_4dev_ring(
         # composite_reduce_scatter when the input-side alignment check is insufficient and only the
         # dispatch-side (per-device output) check fires.
         (4, [1, 1, 32, 64], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, True),
+        # Starved-worker boundary, line topology. Same shapes as the ring cases above: scattering on
+        # dim 1 leaves 1, 2 and 4 pages for the workers to divide. The line path keeps a mux even with
+        # one worker and opens it with a blocking connect, so it never had the ring writer's staging
+        # deadlock; these pin that the worker cap applied to the line factory keeps working there.
+        (4, [4, 4, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        (4, [4, 4, 32, 64], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        (4, [4, 4, 64, 64], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
     ],
     ids=[
         "padded_dim_2_test_one",
@@ -415,6 +424,9 @@ def test_reduce_scatter_async_4dev_ring(
         "composite_rs_test_two",
         # "composite_rs_test_three",
         "composite_rs_test_four",
+        "starved_workers_1page",
+        "starved_workers_2page",
+        "starved_workers_boundary_4page",
     ],
 )
 @pytest.mark.parametrize(

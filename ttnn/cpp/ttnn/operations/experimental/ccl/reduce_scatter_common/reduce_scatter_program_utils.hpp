@@ -26,9 +26,27 @@ uint32_t reduce_scatter_core_count_per_link(
     uint32_t num_directions_per_link,
     uint32_t num_mux_cores_per_direction_per_link);
 
-// Pages the workers of one direction divide between them -- exactly the quantity
-// reduce_scatter_get_tile_offsets splits. Computable from the input alone, so the worker count can
-// be chosen with knowledge of how much work there actually is (see reduce_scatter_default_workers).
+// Per-device slice geometry of a reduce-scatter, derived from the input tensor, the scatter dim and
+// the ring size alone. This is the one place the batch/channel split is worked out; the staging
+// buffer sizing and the worker-count heuristic both read it from here so the two cannot drift.
+struct ReduceScatterSliceGeometry {
+    uint32_t normalized_dim;            // canonical 4D scatter dim (0 = batch, 1 = channel, 2/3 = Ht/Wt)
+    uint32_t input_tensor_B;            // batches in the input
+    uint32_t input_tensor_C;            // channels per batch in the input
+    uint32_t slice_B;                   // batches per device after the scatter
+    uint32_t slice_C;                   // channels per batch per device after the scatter
+    uint32_t output_num_pages;          // pages in one device's output
+    uint32_t output_batch_num_pages;    // pages in one output batch
+    uint32_t output_channel_num_pages;  // pages in one output channel
+};
+
+ReduceScatterSliceGeometry reduce_scatter_slice_geometry(
+    const ttnn::Tensor& input_tensor, uint32_t dim, uint32_t ring_size);
+
+// Pages the workers divide between them -- exactly the quantity reduce_scatter_get_tile_offsets
+// splits across num_links * num_workers_per_direction workers. Computable from the input alone, so
+// the worker count can be chosen with knowledge of how much work there actually is (see
+// reduce_scatter_default_workers).
 uint32_t reduce_scatter_splittable_pages(const ttnn::Tensor& input_tensor, uint32_t dim, uint32_t ring_size);
 
 // Selects the default number of workers per direction based on data size heuristics.

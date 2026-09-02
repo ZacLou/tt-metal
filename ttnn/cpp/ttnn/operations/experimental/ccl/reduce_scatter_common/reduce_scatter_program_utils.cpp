@@ -29,11 +29,14 @@ uint32_t reduce_scatter_core_count_per_link(
     return num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
 }
 
-uint32_t reduce_scatter_splittable_pages(const ttnn::Tensor& input_tensor, uint32_t dim, uint32_t ring_size) {
+ReduceScatterSliceGeometry reduce_scatter_slice_geometry(
+    const ttnn::Tensor& input_tensor, uint32_t dim, uint32_t ring_size) {
     const auto& shape = input_tensor.padded_shape();
     const auto [normalized_dim, input_tensor_C, input_tensor_B] =
         (shape.rank() == 2) ? reduce_scatter_map_2d_to_4d(dim) : reduce_scatter_map_nd_to_4d(shape, dim);
 
+    // Only the batch/channel divisions affect the per-channel page count; a scatter along Ht or Wt
+    // is absorbed into that count and needs no separate tracking here.
     uint32_t slice_B = input_tensor_B;
     uint32_t slice_C = input_tensor_C;
     if (normalized_dim == 0) {
@@ -42,10 +45,25 @@ uint32_t reduce_scatter_splittable_pages(const ttnn::Tensor& input_tensor, uint3
         slice_C /= ring_size;
     }
 
-    const uint32_t output_tensor_num_pages = input_tensor.buffer()->num_pages() / ring_size;
-    const uint32_t output_batch_num_pages = output_tensor_num_pages / slice_B;
+    const uint32_t output_num_pages = input_tensor.buffer()->num_pages() / ring_size;
+    const uint32_t output_batch_num_pages = output_num_pages / slice_B;
+    const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
+
+    return ReduceScatterSliceGeometry{
+        normalized_dim,
+        input_tensor_B,
+        input_tensor_C,
+        slice_B,
+        slice_C,
+        output_num_pages,
+        output_batch_num_pages,
+        output_channel_num_pages};
+}
+
+uint32_t reduce_scatter_splittable_pages(const ttnn::Tensor& input_tensor, uint32_t dim, uint32_t ring_size) {
+    const auto geometry = reduce_scatter_slice_geometry(input_tensor, dim, ring_size);
     // Mirrors reduce_scatter_get_tile_offsets: dim 0 splits batches, every other dim splits channels.
-    return (normalized_dim == 0) ? output_batch_num_pages : (output_batch_num_pages / slice_C);
+    return (geometry.normalized_dim == 0) ? geometry.output_batch_num_pages : geometry.output_channel_num_pages;
 }
 
 uint32_t reduce_scatter_default_workers(
@@ -98,22 +116,35 @@ uint32_t reduce_scatter_default_workers(
         }
     }
     // More than one worker per direction routes the sends through a FabricMuxV2 mux core (see
-    // reduce_scatter_minimal_async_program.cpp, which drops the mux only at worker_count == 1). That
-    // path deadlocks -- silently, with no TT_FATAL and no watcher trip -- when a worker is left with
-    // one page or fewer: measured on [8,8,32,32] and [8,8,32,64] scattering on dim 1, which hang with
-    // 2 workers and complete in ~11s with 1. Two pages per worker is the lowest count observed to
-    // work. Skipping the starved candidates keeps the op out of that regime; it is the same kind of
+    // reduce_scatter_minimal_async_program.cpp, which drops the mux only at worker_count == 1). The
+    // pages are divided across num_links * worker_count workers, and a split that leaves any of them
+    // with nothing to do wastes a core and a mux channel that move no data. It also deadlocked before
+    // the batch-ready flush fix in ring_reduce_scatter_minimal_async_writer.cpp: a worker that owned no
+    // pages never completed its eagerly staged mux connection, so its end-of-batch increment never left
+    // the staging slot and the peer waited on batch_ready_sem forever. tt-triage on [8,8,32,64]
+    // scattered on dim 1 over 2 links showed exactly that: the four zero-page writers parked on the
+    // wait, every one-page worker DONE, the mux cores waiting for their clients to close. Skipping the
+    // candidates that would starve a worker keeps the op out of that regime; it is the same kind of
     // narrowing as the core-count check below, which already falls back through {4, 2, 1}.
-    constexpr uint32_t MIN_PAGES_PER_WORKER = 2;
+    //
+    // One page per worker is the floor: it is the smallest unit the split can hand out, and the same
+    // shape family completes with it ([8,8,64,64] on dim 1 runs 4 workers at one page each).
+    constexpr uint32_t MIN_PAGES_PER_WORKER = 1;
     for (auto worker_count : candidate_worker_counts) {
+        // reduce_scatter_get_tile_offsets divides the pages across the workers of EVERY link
+        // (num_workers = num_links * num_workers_per_direction), so the starvation budget must
+        // count all of them, not just the workers of one link.
+        const uint32_t workers_sharing_pages = num_links * worker_count;
         if (splittable_pages.has_value() && worker_count > 1 &&
-            splittable_pages.value() < worker_count * MIN_PAGES_PER_WORKER) {
+            splittable_pages.value() < workers_sharing_pages * MIN_PAGES_PER_WORKER) {
             log_trace(
                 tt::LogOp,
-                "DEBUG: skipping worker_count {}: only {} splittable pages ({} needed)",
+                "DEBUG: skipping worker_count {} ({} workers over {} links): only {} splittable pages ({} needed)",
                 worker_count,
+                workers_sharing_pages,
+                num_links,
                 splittable_pages.value(),
-                worker_count * MIN_PAGES_PER_WORKER);
+                workers_sharing_pages * MIN_PAGES_PER_WORKER);
             continue;
         }
         uint32_t core_count =
@@ -154,19 +185,9 @@ RingIntermStagingParams reduce_scatter_ring_interm_staging_params(
     uint32_t dim,
     uint32_t ring_size,
     bool fp32_dest_acc_en) {
-    const auto& shape = input_tensor.padded_shape();
-
-    const auto [normalized_dim, input_tensor_C, input_tensor_B] =
-        (shape.rank() == 2) ? reduce_scatter_map_2d_to_4d(dim) : reduce_scatter_map_nd_to_4d(shape, dim);
-
-    // Only the batch/channel divisions affect output_channel_num_pages (per-channel tile count); the
-    // Ht/Wt scatter splits are absorbed into that count and don't need to be tracked separately.
-    uint32_t slice_B = input_tensor_B, slice_C = input_tensor_C;
-    if (normalized_dim == 0) {
-        slice_B /= ring_size;
-    } else if (normalized_dim == 1) {
-        slice_C /= ring_size;
-    }
+    const auto geometry = reduce_scatter_slice_geometry(input_tensor, dim, ring_size);
+    const uint32_t normalized_dim = geometry.normalized_dim;
+    const uint32_t slice_C = geometry.slice_C;
 
     const uint32_t single_tile_bytes = input_tensor.buffer()->page_size();
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
@@ -175,12 +196,7 @@ RingIntermStagingParams reduce_scatter_ring_interm_staging_params(
     const uint32_t max_dst_size = fp32_dest_acc_en ? 4u : 8u;
     const uint32_t tile_granularity = std::min(4u * num_tiles_to_write_per_packet, max_dst_size);
 
-    const uint32_t input_num_pages = input_tensor.buffer()->num_pages();
-    const uint32_t output_num_pages = input_num_pages / ring_size;
-    const uint32_t output_batch_num_pages = output_num_pages / slice_B;
-    const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
-
-    const uint32_t chunks_per_channel = (output_channel_num_pages + tile_granularity - 1) / tile_granularity;
+    const uint32_t chunks_per_channel = (geometry.output_channel_num_pages + tile_granularity - 1) / tile_granularity;
     const uint32_t total_chunks = ring_size * slice_C * chunks_per_channel;
     const uint32_t page_bytes = tile_granularity * single_tile_bytes;
 
