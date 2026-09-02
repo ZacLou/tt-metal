@@ -232,15 +232,14 @@ void kernel_main() {
 #endif
             ckl::eltwise_chain(
                 block_shape,
-                ckl::Optional<
-                    is_rmsnorm,  // RMSNORM: copy x (no mean subtraction)
-                    ckl::CopyTile<in_input, ckl::Dst::D0>>{},
-                ckl::Optional<
-                    !is_rmsnorm,  // LayerNorm: x - E[x] (reads dfb_ex_id; stripped under RMSNORM)
-                    ckl::BinaryFpu<
-                        ckl::BinaryFpuOp::Sub,
-                        in_input,
-                        ckl::input(dfb_ex_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None)>>{},
+#ifdef RMSNORM
+                ckl::CopyTile<in_input, ckl::Dst::D0>{},
+#else
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Sub,
+                    in_input,
+                    ckl::input(dfb_ex_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
+#endif
                 ckl::Optional<
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
                     ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, inb_input, ckl::DestReuseType::DEST_TO_SRCB>>{},
@@ -342,15 +341,14 @@ void kernel_main() {
 #endif
             ckl::eltwise_chain(
                 block_shape,
-                ckl::Optional<
-                    is_rmsnorm,  // RMSNORM: copy x (no mean subtraction)
-                    ckl::CopyTile<in_input, ckl::Dst::D0>>{},
-                ckl::Optional<
-                    !is_rmsnorm,  // LayerNorm: x - E[x] (reads dfb_ex_id; stripped under RMSNORM)
-                    ckl::BinaryFpu<
-                        ckl::BinaryFpuOp::Sub,
-                        in_input,
-                        ckl::input(dfb_ex_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None)>>{},
+#ifdef RMSNORM
+                ckl::CopyTile<in_input, ckl::Dst::D0>{},
+#else
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Sub,
+                    in_input,
+                    ckl::input(dfb_ex_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
+#endif
                 ckl::Optional<
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
                     ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, inb_input, ckl::DestReuseType::DEST_TO_SRCB>>{},
