@@ -377,8 +377,8 @@ void create_worker_kernel(
         const auto outgoing_router_direction =
             control_plane.routing_direction_to_eth_direction(forwarding_direction.value());
         worker_rt_args.push_back(outgoing_router_direction);
-        worker_rt_args.push_back(src_fabric_node_id.chip_id);
-        worker_rt_args.push_back(dst_fabric_node_id.chip_id);
+        worker_rt_args.push_back(*src_fabric_node_id.chip_id);
+        worker_rt_args.push_back(*dst_fabric_node_id.chip_id);
         worker_rt_args.push_back(*dst_fabric_node_id.mesh_id);
         worker_rt_args.push_back(mesh_shape[1]);
     }

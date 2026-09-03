@@ -257,7 +257,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
     auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;
-    uint32_t src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
+    uint32_t src_chip_id = *src_fabric_node_id.chip_id;
     uint32_t linearized_mesh_coord = ttnn::operations::ccl::common::get_linearized_index(mesh_coordinate, mesh_view);
 
     log_debug(
@@ -487,7 +487,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     for (const auto& coord : tensor_coords.coords()) {
         auto dest_fabric_node_id = mesh_device->get_fabric_node_id(coord);
         dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
-        dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);
+        dest_chip_id.push_back(*dest_fabric_node_id.chip_id);
     }
     log_debug(tt::LogOp, "dest_chip_id: {}", ttnn::operations::ccl::common::stringify(dest_chip_id));
     log_debug(tt::LogOp, "dest_mesh_id: {}", ttnn::operations::ccl::common::stringify(dest_mesh_id));

@@ -403,9 +403,9 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
             core_data.chip_id = local_device->id();
             core_data.core.core_x = local_core.core_coord.x;
             core_data.core.core_y = local_core.core_coord.y;
-            core_data.core.fabric_chip_id = local_node.chip_id;
+            core_data.core.fabric_chip_id = *local_node.chip_id;
             auto& peer = core_data.peers.emplace_back();
-            peer.fabric_chip_id = peer_node.chip_id;
+            peer.fabric_chip_id = *peer_node.chip_id;
             peer.core_x = peer_core.core_coord.x;
             peer.core_y = peer_core.core_coord.y;
         }

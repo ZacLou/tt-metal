@@ -107,7 +107,7 @@ std::map<ConnectionKey, ConnectionInfo> discover_connections(const std::vector<s
                         continue;
                     }
                     const auto& nlist = it->second;
-                    if (std::find(nlist.begin(), nlist.end(), cb.fid.chip_id) != nlist.end()) {
+                    if (std::find(nlist.begin(), nlist.end(), *cb.fid.chip_id) != nlist.end()) {
                         connections[{i, j}].links.push_back({ca.row, ca.col, cb.row, cb.col});
                     }
                 }

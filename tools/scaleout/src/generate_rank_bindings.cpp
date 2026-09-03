@@ -493,7 +493,7 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         if (emit_local_mesh_ids_for_mgd_partition && !global_to_local_mesh_for_output.contains(mesh_id_global)) {
             continue;
         }
-        tt::ChipId chip_id_from_fabric_node = static_cast<tt::ChipId>(fabric_node_id.chip_id);
+        tt::ChipId chip_id_from_fabric_node = static_cast<tt::ChipId>(*fabric_node_id.chip_id);
 
         std::optional<MeshGraphAndLocalMeshId> resolved =
             resolve_mesh_graph_for_global_mesh_id(mesh_graphs, mesh_id_global, per_part_local_to_global_mesh_ids);

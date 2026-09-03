@@ -1428,7 +1428,7 @@ void TestDevice::create_latency_sender_kernel(
         rt_args.push_back(num_hops);
     } else {
         // 2D: add device and mesh IDs (for Hybrid Mesh routing)
-        rt_args.push_back(dest_node.chip_id);
+        rt_args.push_back(*dest_node.chip_id);
         rt_args.push_back(dest_node.mesh_id.get());
     }
 
@@ -1531,7 +1531,7 @@ void TestDevice::create_latency_responder_kernel(
         rt_args.push_back(num_hops_back);
     } else {
         // 2D: add device and mesh IDs for sender (for Hybrid Mesh routing)
-        rt_args.push_back(sender_node.chip_id);
+        rt_args.push_back(*sender_node.chip_id);
         rt_args.push_back(sender_node.mesh_id.get());
     }
 

@@ -867,7 +867,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
                 writer_rt_args[rt_arg_index(WriterRtArg::NumGranularSends)] = num_granular;
                 writer_rt_args[rt_arg_index(WriterRtArg::DataValidGranularity)] = data_valid_granularity;
                 writer_rt_args[rt_arg_index(WriterRtArg::NeighborDeviceId)] =
-                    static_cast<uint32_t>(neighbor_node.chip_id);
+                    static_cast<uint32_t>(*neighbor_node.chip_id);
                 writer_rt_args[rt_arg_index(WriterRtArg::NeighborMeshId)] =
                     static_cast<uint32_t>(*neighbor_node.mesh_id);
                 writer_rt_args[rt_arg_index(WriterRtArg::OutputChunksPerStripe)] = output_chunks_per_stripe;

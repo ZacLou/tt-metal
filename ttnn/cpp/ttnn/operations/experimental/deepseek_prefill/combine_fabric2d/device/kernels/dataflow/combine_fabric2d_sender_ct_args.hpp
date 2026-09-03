@@ -43,7 +43,7 @@ struct SenderCtArgs {
         num_l1_slots(NUM_L1_SLOTS),
         token_size_bytes(op::token_size_bytes(tensor_args)),
         forwarding_metadata_size(FORWARDING_METADATA_SIZE),
-        peer_chip_id(static_cast<uint32_t>(self.downstream_node.chip_id)),
+        peer_chip_id(static_cast<uint32_t>(*self.downstream_node.chip_id)),
         peer_mesh_id(*self.downstream_node.mesh_id),
         ring_addr(l1.ring),
         pkt_hdr_ring_addr(l1.pkt_hdr_ring),

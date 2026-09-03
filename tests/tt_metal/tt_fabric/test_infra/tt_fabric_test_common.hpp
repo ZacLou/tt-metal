@@ -301,7 +301,7 @@ public:
 
     MeshCoordinate get_device_coord(const FabricNodeId& node_id) const override {
         const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
-        return mesh_graph.chip_to_coordinate(node_id.mesh_id, node_id.chip_id);
+        return mesh_graph.chip_to_coordinate(node_id.mesh_id, *node_id.chip_id);
     }
 
     uint32_t get_worker_noc_encoding(const tt::tt_metal::CoreCoord logical_core) const override {
@@ -328,7 +328,7 @@ public:
     }
 
     uint32_t get_worker_id(const FabricNodeId& node_id, tt::tt_metal::CoreCoord logical_core) const override {
-        return (*node_id.mesh_id << 12) | (node_id.chip_id << 8) | (logical_core.x << 4) | (logical_core.y);
+        return (*node_id.mesh_id << 12) | (*node_id.chip_id << 8) | (logical_core.x << 4) | (logical_core.y);
     }
 
     std::vector<FabricNodeId> get_local_node_ids() const override { return local_available_node_ids_; }
@@ -1060,8 +1060,8 @@ public:
         uint32_t mesh_width = mesh_shape_[EW_DIM];
 
         // Convert chip_id to row/col coordinates (row-major order)
-        uint32_t row = src_node.chip_id / mesh_width;
-        uint32_t col = src_node.chip_id % mesh_width;
+        uint32_t row = *src_node.chip_id / mesh_width;
+        uint32_t col = *src_node.chip_id % mesh_width;
 
         // Check if the device is on the outer ring (perimeter)
         bool is_perimeter = (row == 0) || (row == mesh_height - 1) || (col == 0) || (col == mesh_width - 1);
@@ -1081,24 +1081,24 @@ public:
             backward_chip_id = mesh_width;
         } else if (row == 0 && col == mesh_width - 1) {
             // Top-right corner (3): forward=7, backward=2
-            forward_chip_id = src_node.chip_id + mesh_width;
-            backward_chip_id = src_node.chip_id - 1;
+            forward_chip_id = *src_node.chip_id + mesh_width;
+            backward_chip_id = *src_node.chip_id - 1;
         } else if (row == mesh_height - 1 && col == mesh_width - 1) {
             // Bottom-right corner (15): forward=11, backward=14
-            forward_chip_id = src_node.chip_id - mesh_width;
-            backward_chip_id = src_node.chip_id - 1;
+            forward_chip_id = *src_node.chip_id - mesh_width;
+            backward_chip_id = *src_node.chip_id - 1;
         } else if (row == mesh_height - 1 && col == 0) {
             // Bottom-left corner (12): forward=13, backward=8
-            forward_chip_id = src_node.chip_id + 1;
-            backward_chip_id = src_node.chip_id - mesh_width;
+            forward_chip_id = *src_node.chip_id + 1;
+            backward_chip_id = *src_node.chip_id - mesh_width;
         } else if (row == 0 || row == mesh_height - 1) {
             // Top or bottom row (not corners): forward=right, backward=left
-            forward_chip_id = src_node.chip_id + 1;
-            backward_chip_id = src_node.chip_id - 1;
+            forward_chip_id = *src_node.chip_id + 1;
+            backward_chip_id = *src_node.chip_id - 1;
         } else if (col == mesh_width - 1 || col == 0) {
             // Right or left column (not corners): forward=up, backward=down
-            forward_chip_id = src_node.chip_id - mesh_width;
-            backward_chip_id = src_node.chip_id + mesh_width;
+            forward_chip_id = *src_node.chip_id - mesh_width;
+            backward_chip_id = *src_node.chip_id + mesh_width;
         } else {
             TT_THROW("Device {} should be on perimeter but logic error occurred", src_node.chip_id);
         }
@@ -1165,7 +1165,7 @@ public:
         } else if (pattern_type == HighLevelTrafficPattern::HalfRing) {
             num_forward_hops = tt::div_up(full_hop_count, 2);
             num_backward_hops = full_hop_count - num_forward_hops;
-            if (src_node_id.chip_id % 2 == 0) {
+            if (*src_node_id.chip_id % 2 == 0) {
                 std::swap(num_forward_hops, num_backward_hops);
             }
         } else {
@@ -1211,7 +1211,7 @@ public:
         } else if (pattern_type == HighLevelTrafficPattern::HalfRing) {
             num_forward_hops = tt::div_up(full_hop_count, 2);
             num_backward_hops = full_hop_count - num_forward_hops;
-            if (src_node_id.chip_id % 2 == 0) {
+            if (*src_node_id.chip_id % 2 == 0) {
                 std::swap(num_forward_hops, num_backward_hops);
             }
         } else {

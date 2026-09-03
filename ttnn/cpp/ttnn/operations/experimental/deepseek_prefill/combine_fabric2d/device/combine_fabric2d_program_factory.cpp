@@ -129,7 +129,7 @@ std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoor
     for (uint32_t row = 0; row < extent; row++) {
         ttnn::MeshCoordinate c = coord;
         c[static_cast<int32_t>(axis)] = row;
-        ids[row] = static_cast<uint32_t>(mesh->get_fabric_node_id(c).chip_id);
+        ids[row] = *mesh->get_fabric_node_id(c).chip_id;
     }
     return ids;
 }

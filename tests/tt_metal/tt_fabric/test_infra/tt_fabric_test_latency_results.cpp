@@ -380,8 +380,8 @@ void LatencyResultsManager::report_latency_results(
         sample_result.ftype = ftype_str;
         sample_result.ntype = ntype_str;
         sample_result.topology = topology_str;
-        sample_result.sender_device_id = sender_location.node_id.chip_id;
-        sample_result.responder_device_id = responder_location.node_id.chip_id;
+        sample_result.sender_device_id = *sender_location.node_id.chip_id;
+        sample_result.responder_device_id = *responder_location.node_id.chip_id;
         sample_result.sender_core_x = sender_location.core.x;
         sample_result.sender_core_y = sender_location.core.y;
         sample_result.responder_core_x = responder_location.core.x;
@@ -505,10 +505,10 @@ void LatencyResultsManager::report_latency_results(
     latency_summary.ftype = ftype_str;
     latency_summary.ntype = ntype_str;
     latency_summary.topology = topology_str;
-    latency_summary.sender_device_id = sender_location.node_id.chip_id;
+    latency_summary.sender_device_id = *sender_location.node_id.chip_id;
     latency_summary.sender_core_x = sender_location.core.x;
     latency_summary.sender_core_y = sender_location.core.y;
-    latency_summary.responder_device_id = responder_location.node_id.chip_id;
+    latency_summary.responder_device_id = *responder_location.node_id.chip_id;
     latency_summary.responder_core_x = responder_location.core.x;
     latency_summary.responder_core_y = responder_location.core.y;
     latency_summary.num_devices = num_devices;

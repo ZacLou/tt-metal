@@ -440,7 +440,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
             axis);
         TT_FATAL(dest_coord.has_value(), "ring neighbour {} hops away must exist", hops);
         const auto dest_node = mesh_device->get_fabric_node_id(*dest_coord);
-        dests.push_back(Dest{j, use_fwd ? 0u : 1u, hops, dest_node.chip_id, static_cast<uint32_t>(*dest_node.mesh_id)});
+        dests.push_back(Dest{j, use_fwd ? 0u : 1u, hops, *dest_node.chip_id, static_cast<uint32_t>(*dest_node.mesh_id)});
     }
     // On a 2D fabric, WE do not get to choose the direction. Our ring arithmetic above picks the shorter way round,
     // which for an even ring's antipode (and anywhere the table breaks a tie the other way) can disagree.
@@ -465,7 +465,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
             const auto neighbors = tt::tt_fabric::pipeline_get_chip_neighbors(self_node, *dir);
             const auto it = neighbors.find(*neighbor.mesh_id);
             const bool adjacent = it != neighbors.end() &&
-                                  std::find(it->second.begin(), it->second.end(), neighbor.chip_id) != it->second.end();
+                                  std::find(it->second.begin(), it->second.end(), *neighbor.chip_id) != it->second.end();
             TT_FATAL(
                 adjacent,
                 "reduce_scatter_minimal_direct: the {} ring neighbour (chip {}) is not one hop away in "

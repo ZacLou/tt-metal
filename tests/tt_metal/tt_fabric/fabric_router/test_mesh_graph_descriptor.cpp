@@ -1990,7 +1990,7 @@ TEST(MeshGraphDescriptorTests, PinningsParsing) {
     EXPECT_EQ(*pinning1.asic_positions[0].first, 1) << "First pinning should have tray_id 1";
     EXPECT_EQ(*pinning1.asic_positions[0].second, 1) << "First pinning should have asic_location 1";
     EXPECT_EQ(*pinning1.fabric_nodes[0].mesh_id, 0) << "First pinning should have mesh_id 0";
-    EXPECT_EQ(pinning1.fabric_nodes[0].chip_id, 0) << "First pinning should have chip_id 0";
+    EXPECT_EQ(*pinning1.fabric_nodes[0].chip_id, 0u) << "First pinning should have chip_id 0";
 
     // Check second pinning: (mesh 0, chip 31) -> (tray 4, location 1)
     const auto& pinning2 = pinnings.at(MeshId{0})[1];
@@ -1999,7 +1999,7 @@ TEST(MeshGraphDescriptorTests, PinningsParsing) {
     EXPECT_EQ(*pinning2.asic_positions[0].first, 4) << "Second pinning should have tray_id 4";
     EXPECT_EQ(*pinning2.asic_positions[0].second, 1) << "Second pinning should have asic_location 1";
     EXPECT_EQ(*pinning2.fabric_nodes[0].mesh_id, 0) << "Second pinning should have mesh_id 0";
-    EXPECT_EQ(pinning2.fabric_nodes[0].chip_id, 31) << "Second pinning should have chip_id 31";
+    EXPECT_EQ(*pinning2.fabric_nodes[0].chip_id, 31u) << "Second pinning should have chip_id 31";
 }
 
 TEST(MeshGraphDescriptorTests, PinningsMeshIdRegexRangeExpandsPerMesh) {
@@ -2035,9 +2035,9 @@ TEST(MeshGraphDescriptorTests, PinningsMeshIdRegexRangeExpandsPerMesh) {
         const auto& g = pinnings.at(MeshId{m}).front();
         ASSERT_EQ(g.fabric_nodes.size(), 2u);
         EXPECT_EQ(*g.fabric_nodes[0].mesh_id, m);
-        EXPECT_EQ(g.fabric_nodes[0].chip_id, 0u);
+        EXPECT_EQ(*g.fabric_nodes[0].chip_id, 0u);
         EXPECT_EQ(*g.fabric_nodes[1].mesh_id, m);
-        EXPECT_EQ(g.fabric_nodes[1].chip_id, 3u);
+        EXPECT_EQ(*g.fabric_nodes[1].chip_id, 3u);
         ASSERT_EQ(g.asic_positions.size(), 2u);
     }
 }
@@ -2075,7 +2075,7 @@ TEST(MeshGraphDescriptorTests, PinningsMeshIdRegexEvenOddParity) {
     // chip_id_regex "0-3" over a 2x2 (4-chip) mesh -> chips 0,1,2,3.
     ASSERT_EQ(pinnings.at(MeshId{0}).front().fabric_nodes.size(), 4u);
     for (uint32_t c = 0; c < 4; ++c) {
-        EXPECT_EQ(pinnings.at(MeshId{0}).front().fabric_nodes[c].chip_id, c);
+        EXPECT_EQ(*pinnings.at(MeshId{0}).front().fabric_nodes[c].chip_id, c);
     }
 }
 
@@ -2343,7 +2343,7 @@ TEST(MeshGraphDescriptorTests, PinningsAllToAll) {
 
     auto has_node = [&](uint32_t chip_id) {
         for (const auto& node : group.fabric_nodes) {
-            if (*node.mesh_id == 0 && node.chip_id == chip_id) {
+            if (*node.mesh_id == 0 && *node.chip_id == chip_id) {
                 return true;
             }
         }
@@ -2459,7 +2459,7 @@ TEST(MeshGraphDescriptorTests, PinningsRegexOverlappingMeshIdsExpandPerMesh) {
     for (const auto& [_, groups] : pinnings) {
         for (const auto& group : groups) {
             ASSERT_EQ(group.fabric_nodes.size(), 1u);
-            EXPECT_EQ(group.fabric_nodes[0].chip_id, 0u);
+            EXPECT_EQ(*group.fabric_nodes[0].chip_id, 0u);
             groups_per_mesh[*group.fabric_nodes[0].mesh_id]++;
         }
     }
@@ -2503,15 +2503,15 @@ TEST(MeshGraphDescriptorTests, PinningsLiteralMultiMeshSplitsByMesh) {
     ASSERT_EQ(mesh0.size(), 1u);
     ASSERT_EQ(mesh0[0].fabric_nodes.size(), 2u);
     EXPECT_EQ(*mesh0[0].fabric_nodes[0].mesh_id, 0u);
-    EXPECT_EQ(mesh0[0].fabric_nodes[0].chip_id, 0u);
+    EXPECT_EQ(*mesh0[0].fabric_nodes[0].chip_id, 0u);
     EXPECT_EQ(*mesh0[0].fabric_nodes[1].mesh_id, 0u);
-    EXPECT_EQ(mesh0[0].fabric_nodes[1].chip_id, 3u);
+    EXPECT_EQ(*mesh0[0].fabric_nodes[1].chip_id, 3u);
 
     const auto& mesh1 = pinnings.at(MeshId{1});
     ASSERT_EQ(mesh1.size(), 1u);
     ASSERT_EQ(mesh1[0].fabric_nodes.size(), 1u);
     EXPECT_EQ(*mesh1[0].fabric_nodes[0].mesh_id, 1u);
-    EXPECT_EQ(mesh1[0].fabric_nodes[0].chip_id, 0u);
+    EXPECT_EQ(*mesh1[0].fabric_nodes[0].chip_id, 0u);
 
     EXPECT_FALSE(pinnings.contains(MeshId{2}));
 }

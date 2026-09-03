@@ -92,12 +92,12 @@ std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(con
     std::map<MeshId, AdjacencyGraph<FabricNodeId>> adjacency_map;
 
     auto get_local_adjacents = [&](FabricNodeId fabric_node_id, MeshId mesh_id) {
-        auto adjacent_map = mesh_graph.get_intra_mesh_connectivity()[*mesh_id][fabric_node_id.chip_id];
+        auto adjacent_map = mesh_graph.get_intra_mesh_connectivity()[*mesh_id][*fabric_node_id.chip_id];
 
         std::vector<FabricNodeId> adjacents;
         for (const auto& [neighbor_chip_id, edge] : adjacent_map) {
             // Skip self-connections
-            if (neighbor_chip_id == fabric_node_id.chip_id) {
+            if (neighbor_chip_id == *fabric_node_id.chip_id) {
                 continue;
             }
             for (size_t i = 0; i < edge.connected_chip_ids.size(); ++i) {

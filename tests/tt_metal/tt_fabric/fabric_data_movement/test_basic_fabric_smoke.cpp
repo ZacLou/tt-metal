@@ -108,10 +108,10 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
         receiver_virtual_core.x,
         receiver_virtual_core.y,
         mesh_shape[1],
-        src_fabric_node_id.chip_id,
+        *src_fabric_node_id.chip_id,
         1, /* num_hops - simple for smoke */
         1, /* fwd_range */
-        dst_fabric_node_id.chip_id,
+        *dst_fabric_node_id.chip_id,
         *dst_fabric_node_id.mesh_id};
 
     auto worker_teardown_semaphore_id = tt_metal::CreateSemaphore(sender_program, sender_logical_core, 0);

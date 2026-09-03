@@ -107,19 +107,31 @@ using SwitchId = ttsl::StrongType<uint32_t, struct SwitchIdTag>;
 // Sentinel value indicating that TT_MESH_HOST_RANK environment variable is unset
 constexpr MeshHostRankId MESH_HOST_RANK_UNSET{UINT32_MAX};
 
-// Mesh-local logical chip id (row-major node within a single mesh), matching FabricNodeId::chip_id. The full
+// Mesh-local logical chip id (row-major node within a single mesh), the chip component of FabricNodeId. The full
 // FabricNodeId (mesh_id + chip_id) is only known once a logical MeshId is assigned, so pre-assignment contexts
-// carry just the chip id.
-using LogicalChipId = uint32_t;
+// carry just the chip id. Strongly typed so a logical chip id cannot be silently conflated with a physical chip
+// id, a mesh id, or a PGD grouping node id.
+using LogicalChipId = ttsl::StrongType<uint32_t, struct LogicalChipIdTag>;
+
+// Node id within one PGD grouping's adjacency graph (proto Instance.id). Distinct from LogicalChipId
+// (a mesh-local MGD chip) and from the physical AsicID a grouping node eventually maps to.
+using GroupingChipId = ttsl::StrongType<uint32_t, struct GroupingChipIdTag>;
+
+// Stable numeric handle of one resolved PGD grouping instance (groupings are otherwise identified by
+// their name/type strings).
+using PhysicalGroupingId = ttsl::StrongType<uint32_t, struct PhysicalGroupingIdTag>;
 
 /**
- * @brief Represents a fabric node identifier combining mesh ID and chip ID
+ * @brief Represents a fabric node identifier combining mesh ID and logical chip ID
  */
 class FabricNodeId {
 public:
+    explicit FabricNodeId(MeshId mesh_id_val, LogicalChipId chip_id_val);
+    // Transitional convenience: many call sites carry the row-major chip id as a raw integer
+    // (mesh-graph ChipId, MGD LocalNodeId). Prefer the LogicalChipId overload in new code.
     explicit FabricNodeId(MeshId mesh_id_val, std::uint32_t chip_id_val);
     MeshId mesh_id{0};
-    std::uint32_t chip_id = 0;
+    LogicalChipId chip_id{0};
 };
 
 bool operator==(const FabricNodeId& lhs, const FabricNodeId& rhs);
@@ -130,6 +142,8 @@ bool operator<=(const FabricNodeId& lhs, const FabricNodeId& rhs);
 bool operator>=(const FabricNodeId& lhs, const FabricNodeId& rhs);
 std::ostream& operator<<(std::ostream& os, const MeshId& mesh_id);
 std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id);
+std::ostream& operator<<(std::ostream& os, const LogicalChipId& chip_id);
+std::ostream& operator<<(std::ostream& os, const GroupingChipId& chip_id);
 
 }  // namespace tt::tt_fabric
 
@@ -152,6 +166,13 @@ struct fmt::formatter<tt::tt_fabric::MeshId> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const tt::tt_fabric::MeshId& mesh_id, format_context& ctx) const -> format_context::iterator;
+};
+
+template <>
+struct fmt::formatter<tt::tt_fabric::LogicalChipId> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const tt::tt_fabric::LogicalChipId& chip_id, format_context& ctx) const -> format_context::iterator;
 };
 
 namespace tt::tt_metal {

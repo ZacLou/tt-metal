@@ -275,7 +275,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
         num_packets,
         receiver_noc_encoding,
         time_seed,
-        mcast_start_id.chip_id,
+        *mcast_start_id.chip_id,
         *mcast_start_id.mesh_id};
 
     std::vector<uint32_t> mcast_header_rtas(4, 0);
@@ -475,10 +475,10 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
         receiver_virtual_core.x,
         receiver_virtual_core.y,
         mesh_shape[1],
-        src_fabric_node_id.chip_id,
+        *src_fabric_node_id.chip_id,
         num_hops,
         1 /* fwd_range */,
-        dst_fabric_node_id.chip_id,
+        *dst_fabric_node_id.chip_id,
         *dst_fabric_node_id.mesh_id};
 
     auto worker_teardown_semaphore_id = tt_metal::CreateSemaphore(sender_program, sender_logical_core, 0);
@@ -608,10 +608,10 @@ void run_unicast_test_bw_chips(
         receiver_virtual_core.x,
         receiver_virtual_core.y,
         mesh_shape[1],
-        src_fabric_node_id.chip_id,
+        *src_fabric_node_id.chip_id,
         num_hops,
         1 /* fwd_range */,
-        dst_fabric_node_id.chip_id,
+        *dst_fabric_node_id.chip_id,
         *dst_fabric_node_id.mesh_id};
 
     // Only add DRAM args if use_dram_dst is true
@@ -816,7 +816,7 @@ void RunTestUnicastRaw2D(
     if (ew_hops != 0) {
         dst_fabric_node_id = end_fabric_node_ids_by_dir[ew_dir][ew_hops - 1];
     }
-    dst_fabric_node_id.chip_id += device_offset * ew_dim * ns_hops;
+    dst_fabric_node_id.chip_id = tt::tt_fabric::LogicalChipId{*dst_fabric_node_id.chip_id + (device_offset * ew_dim * ns_hops)};
     auto dst_physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
     auto src_physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
 
@@ -984,10 +984,10 @@ void RunTestMCastConnAPI(
         receiver_virtual_core.x,
         receiver_virtual_core.y,
         mesh_shape[1],
-        src_fabric_node_id.chip_id,
+        *src_fabric_node_id.chip_id,
         1 /* fwd_start_distance */,
         fwd_hops /* fwd_range */,
-        left_fabric_node_id.chip_id,
+        *left_fabric_node_id.chip_id,
         *left_fabric_node_id.mesh_id};
 
     // append the EDM connection rt args for fwd connection
@@ -1011,7 +1011,7 @@ void RunTestMCastConnAPI(
         sender_runtime_args);
     sender_runtime_args.push_back(1); /* bwd_start_distance */
     sender_runtime_args.push_back(bwd_hops); /* bwd_range */
-    sender_runtime_args.push_back(right_fabric_node_id.chip_id);
+    sender_runtime_args.push_back(*right_fabric_node_id.chip_id);
     sender_runtime_args.push_back(*right_fabric_node_id.mesh_id);
 
     if (is_2d_fabric) {
@@ -1207,12 +1207,12 @@ void RunTest2DMCastConnAPI(
         south_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(south_fabric_node_id);
         if (south_branch_east_hops > 0) {
             south_east_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][south_branch_east_hops - 1];
-            south_east_fabric_node_id.chip_id += south_offset * ew_dim;
+            south_east_fabric_node_id.chip_id = tt::tt_fabric::LogicalChipId{*south_east_fabric_node_id.chip_id + (south_offset * ew_dim)};
             right_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(south_east_fabric_node_id);
         }
         if (south_branch_west_hops > 0) {
             south_west_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::W][south_branch_west_hops - 1];
-            south_west_fabric_node_id.chip_id += south_offset * ew_dim;
+            south_west_fabric_node_id.chip_id = tt::tt_fabric::LogicalChipId{*south_west_fabric_node_id.chip_id + (south_offset * ew_dim)};
             left_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(south_west_fabric_node_id);
         }
     }
@@ -1221,12 +1221,12 @@ void RunTest2DMCastConnAPI(
         north_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(north_fabric_node_id);
         if (north_branch_east_hops > 0) {
             north_east_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][north_branch_east_hops - 1];
-            north_east_fabric_node_id.chip_id += north_offset * ew_dim;
+            north_east_fabric_node_id.chip_id = tt::tt_fabric::LogicalChipId{*north_east_fabric_node_id.chip_id + (north_offset * ew_dim)};
             right_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(north_east_fabric_node_id);
         }
         if (north_branch_west_hops > 0) {
             north_west_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::W][north_branch_west_hops - 1];
-            north_west_fabric_node_id.chip_id += north_offset * ew_dim;
+            north_west_fabric_node_id.chip_id = tt::tt_fabric::LogicalChipId{*north_west_fabric_node_id.chip_id + (north_offset * ew_dim)};
             left_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(north_west_fabric_node_id);
         }
     }
@@ -1260,14 +1260,14 @@ void RunTest2DMCastConnAPI(
         for (size_t i = 0; i < end_fabric_node_ids_by_dir[RoutingDirection::E].size(); i++) {
             auto east_node = end_fabric_node_ids_by_dir[RoutingDirection::E][i];
             if (i < north_branch_east_hops) {
-                east_node.chip_id += north_offset * trunk_hop * ew_dim;
+                east_node.chip_id = tt::tt_fabric::LogicalChipId{*east_node.chip_id + (north_offset * trunk_hop * ew_dim)};
                 rx_physical_device_ids.push_back(control_plane.get_physical_chip_id_from_fabric_node_id(east_node));
             }
         }
         for (size_t i = 0; i < end_fabric_node_ids_by_dir[RoutingDirection::W].size(); i++) {
             auto west_node = end_fabric_node_ids_by_dir[RoutingDirection::W][i];
             if (i < north_branch_west_hops) {
-                west_node.chip_id += north_offset * trunk_hop * ew_dim;
+                west_node.chip_id = tt::tt_fabric::LogicalChipId{*west_node.chip_id + (north_offset * trunk_hop * ew_dim)};
                 rx_physical_device_ids.push_back(control_plane.get_physical_chip_id_from_fabric_node_id(west_node));
             }
         }
@@ -1280,14 +1280,14 @@ void RunTest2DMCastConnAPI(
         for (size_t i = 0; i < end_fabric_node_ids_by_dir[RoutingDirection::E].size(); i++) {
             auto east_node = end_fabric_node_ids_by_dir[RoutingDirection::E][i];
             if (i < south_branch_east_hops) {
-                east_node.chip_id += south_offset * trunk_hop * ew_dim;
+                east_node.chip_id = tt::tt_fabric::LogicalChipId{*east_node.chip_id + (south_offset * trunk_hop * ew_dim)};
                 rx_physical_device_ids.push_back(control_plane.get_physical_chip_id_from_fabric_node_id(east_node));
             }
         }
         for (size_t i = 0; i < end_fabric_node_ids_by_dir[RoutingDirection::W].size(); i++) {
             auto west_node = end_fabric_node_ids_by_dir[RoutingDirection::W][i];
             if (i < south_branch_west_hops) {
-                west_node.chip_id += south_offset * trunk_hop * ew_dim;
+                west_node.chip_id = tt::tt_fabric::LogicalChipId{*west_node.chip_id + (south_offset * trunk_hop * ew_dim)};
                 rx_physical_device_ids.push_back(control_plane.get_physical_chip_id_from_fabric_node_id(west_node));
             }
         }
@@ -1442,7 +1442,7 @@ void RunTest2DMCastConnAPI(
         receiver_noc_encoding,
         time_seed,
         ew_dim,
-        src_fabric_node_id.chip_id,
+        *src_fabric_node_id.chip_id,
         *mesh_id.value(),
         north_hops,
         (north_branch_west_hops << 16) | north_branch_east_hops,
@@ -1531,8 +1531,8 @@ void RunTest2DMCastConnAPI(
             {sender_logical_core},
             sender_runtime_args);
     }
-    sender_runtime_args.push_back(left_fabric_node_id.chip_id);
-    sender_runtime_args.push_back(right_fabric_node_id.chip_id);
+    sender_runtime_args.push_back(*left_fabric_node_id.chip_id);
+    sender_runtime_args.push_back(*right_fabric_node_id.chip_id);
     sender_runtime_args.push_back((west_hops << 16) | east_hops);
     if (west_hops > 0) {
         link_idx = get_forwarding_link_indices(src_fabric_node_id, left_fabric_node_id)[0];
@@ -1767,10 +1767,10 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
         receiver_virtual_core.x,
         receiver_virtual_core.y,
         mesh_shape[1],
-        src_fabric_node_id.chip_id,
+        *src_fabric_node_id.chip_id,
         start_distance,
         range,
-        last_recv_fabric_node_id.chip_id,
+        *last_recv_fabric_node_id.chip_id,
         *last_recv_fabric_node_id.mesh_id};
 
     // append the EDM connection rt args for fwd connection
@@ -2436,7 +2436,7 @@ void UDMFabricUnicastCommon(
         worker_mem_map.packet_payload_size_bytes,
         num_packets,
         time_seed,
-        dest_fabric_node_id.chip_id,
+        *dest_fabric_node_id.chip_id,
         dest_fabric_node_id.mesh_id.get(),
         req_notification_size_bytes};
 
@@ -2464,7 +2464,7 @@ void UDMFabricUnicastCommon(
             worker_mem_map_risc1.packet_payload_size_bytes,
             num_packets,
             time_seed,
-            dest_fabric_node_id.chip_id,
+            *dest_fabric_node_id.chip_id,
             dest_fabric_node_id.mesh_id.get(),
             req_notification_size_bytes};
 
@@ -2490,7 +2490,7 @@ void UDMFabricUnicastCommon(
         num_packets,
         time_seed,
         req_notification_size_bytes,
-        src_fabric_node_id.chip_id,
+        *src_fabric_node_id.chip_id,
         src_fabric_node_id.mesh_id.get()};
 
     auto receiver_kernel_risc0 = tt_metal::CreateKernel(
@@ -2517,7 +2517,7 @@ void UDMFabricUnicastCommon(
             num_packets,
             time_seed,
             req_notification_size_bytes,
-            src_fabric_node_id.chip_id,
+            *src_fabric_node_id.chip_id,
             src_fabric_node_id.mesh_id.get()};
 
         receiver_kernel_risc1 = tt_metal::CreateKernel(
@@ -2876,7 +2876,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType no
 
                 sender_runtime_args.push_back(receiver_virtual_core.x);
                 sender_runtime_args.push_back(receiver_virtual_core.y);
-                sender_runtime_args.push_back(dest_fabric_node_id.chip_id);
+                sender_runtime_args.push_back(*dest_fabric_node_id.chip_id);
                 sender_runtime_args.push_back(dest_fabric_node_id.mesh_id.get());
             }
             tt_metal::SetRuntimeArgs(programs[dev_idx], sender_kernel_risc0, sender_logical_core, sender_runtime_args);
@@ -2946,7 +2946,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType no
 
                     receiver_runtime_args.push_back(reader_sender_virtual_core.x);
                     receiver_runtime_args.push_back(reader_sender_virtual_core.y);
-                    receiver_runtime_args.push_back(reader_fabric_node_id.chip_id);
+                    receiver_runtime_args.push_back(*reader_fabric_node_id.chip_id);
                     receiver_runtime_args.push_back(reader_fabric_node_id.mesh_id.get());
                 }
                 tt_metal::SetRuntimeArgs(

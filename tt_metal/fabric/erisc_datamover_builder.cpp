@@ -897,10 +897,10 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // 1. If both nodes are on the same mesh, compare chip_ids
     // 2. If nodes are on different meshes, compare mesh_ids (since chip_ids can alias across meshes)
     auto peer_tie_break_id = (local_fabric_node_id.mesh_id == peer_fabric_node_id.mesh_id)
-                                 ? peer_fabric_node_id.chip_id
+                                 ? *peer_fabric_node_id.chip_id
                                  : *(peer_fabric_node_id.mesh_id);
     auto local_tie_break_id = (local_fabric_node_id.mesh_id == peer_fabric_node_id.mesh_id)
-                                  ? local_fabric_node_id.chip_id
+                                  ? *local_fabric_node_id.chip_id
                                   : *(local_fabric_node_id.mesh_id);
     bool is_handshake_master = local_tie_break_id < peer_tie_break_id;
 

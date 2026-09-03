@@ -107,9 +107,9 @@ std::pair<tt_fabric::MeshId, uint32_t> get_sender_receiver_chip_fabric_encoding(
         auto mesh_shape = control_plane.get_physical_mesh_shape(mesh_id);
         TT_FATAL(mesh_shape.dims() == 2, "1D Fabric requires a 2D mesh");
         MeshCoordinate sender_global_coord =
-            MeshCoordinate(sender_node_id.chip_id / mesh_shape[1], sender_node_id.chip_id % mesh_shape[1]);
+            MeshCoordinate(*sender_node_id.chip_id / mesh_shape[1], *sender_node_id.chip_id % mesh_shape[1]);
         MeshCoordinate recv_global_coord =
-            MeshCoordinate(recv_node_id.chip_id / mesh_shape[1], recv_node_id.chip_id % mesh_shape[1]);
+            MeshCoordinate(*recv_node_id.chip_id / mesh_shape[1], *recv_node_id.chip_id % mesh_shape[1]);
         TT_FATAL(
             sender_global_coord[0] == recv_global_coord[0] || sender_global_coord[1] == recv_global_coord[1],
             "Sender and receiver chips must be in the same row or column when using 1D Line Fabric");
@@ -122,9 +122,9 @@ std::pair<tt_fabric::MeshId, uint32_t> get_sender_receiver_chip_fabric_encoding(
                 std::abs(static_cast<int>(sender_global_coord[1]) - static_cast<int>(recv_global_coord[1])));
     }  // 2D/Mesh Fabric requires looking up "logical" encodings from the control plane
     if (is_sender) {
-        return {recv_node_id.mesh_id, recv_node_id.chip_id};
+        return {recv_node_id.mesh_id, *recv_node_id.chip_id};
     }
-    return {sender_node_id.mesh_id, sender_node_id.chip_id};
+    return {sender_node_id.mesh_id, *sender_node_id.chip_id};
 }
 
 // Validate the remote descriptor received from the peer against the local descriptor.

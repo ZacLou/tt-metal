@@ -30,6 +30,9 @@ FabricType operator&(FabricType lhs, FabricType rhs) {
 
 bool has_flag(FabricType flags, FabricType test) { return (flags & test) == test; }
 
+FabricNodeId::FabricNodeId(MeshId mesh_id_val, LogicalChipId chip_id_val) :
+    mesh_id(mesh_id_val), chip_id(chip_id_val) {}
+
 FabricNodeId::FabricNodeId(MeshId mesh_id_val, std::uint32_t chip_id_val) :
     mesh_id(mesh_id_val), chip_id(chip_id_val) {}
 
@@ -60,6 +63,16 @@ std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id) {
     return os;
 }
 
+std::ostream& operator<<(std::ostream& os, const LogicalChipId& chip_id) {
+    os << *chip_id;
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const GroupingChipId& chip_id) {
+    os << *chip_id;
+    return os;
+}
+
 }  // namespace tt::tt_fabric
 
 namespace std {
@@ -70,12 +83,17 @@ size_t hash<tt::tt_fabric::FabricNodeId>::operator()(const tt::tt_fabric::Fabric
 
 auto fmt::formatter<tt::tt_fabric::FabricNodeId>::format(
     const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) const -> format_context::iterator {
-    return fmt::format_to(ctx.out(), "(M{}, D{})", *node_id.mesh_id, node_id.chip_id);
+    return fmt::format_to(ctx.out(), "(M{}, D{})", *node_id.mesh_id, *node_id.chip_id);
 }
 
 auto fmt::formatter<tt::tt_fabric::MeshId>::format(const tt::tt_fabric::MeshId& mesh_id, format_context& ctx) const
     -> format_context::iterator {
     return fmt::format_to(ctx.out(), "{}", *mesh_id);
+}
+
+auto fmt::formatter<tt::tt_fabric::LogicalChipId>::format(
+    const tt::tt_fabric::LogicalChipId& chip_id, format_context& ctx) const -> format_context::iterator {
+    return fmt::format_to(ctx.out(), "{}", *chip_id);
 }
 
 namespace tt::tt_metal {

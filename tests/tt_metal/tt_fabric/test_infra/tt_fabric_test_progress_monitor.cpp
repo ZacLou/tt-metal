@@ -882,7 +882,7 @@ HungEndpointWireRecord to_wire_record(
     wire.flow_uid = rec.flow_uid;
     wire.role = static_cast<uint8_t>(rec.endpoint_id.role);
     wire.mesh_id = *rec.endpoint_id.node_id.mesh_id;
-    wire.chip_id = rec.endpoint_id.node_id.chip_id;
+    wire.chip_id = *rec.endpoint_id.node_id.chip_id;
     wire.core_x = rec.endpoint_id.logical_core.x;
     wire.core_y = rec.endpoint_id.logical_core.y;
     wire.config_idx = rec.endpoint_id.config_idx;
@@ -895,10 +895,10 @@ HungEndpointWireRecord to_wire_record(
     if (rec.flow_uid < flow_descriptors.size()) {
         const auto& fd = flow_descriptors[rec.flow_uid];
         wire.src_mesh_id = *fd.src_node_id.mesh_id;
-        wire.src_chip_id = fd.src_node_id.chip_id;
+        wire.src_chip_id = *fd.src_node_id.chip_id;
         if (!fd.dst_node_ids.empty()) {
             wire.dst_mesh_id = *fd.dst_node_ids[0].mesh_id;
-            wire.dst_chip_id = fd.dst_node_ids[0].chip_id;
+            wire.dst_chip_id = *fd.dst_node_ids[0].chip_id;
         }
     }
     return wire;

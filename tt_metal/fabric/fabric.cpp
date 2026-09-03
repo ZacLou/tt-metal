@@ -159,7 +159,7 @@ void append_fabric_connection_rt_args(
                 (std::find(
                      neighbor_mesh_chips->second.begin(),
                      neighbor_mesh_chips->second.end(),
-                     dst_fabric_node_id.chip_id) == neighbor_mesh_chips->second.end())) {
+                     *dst_fabric_node_id.chip_id) == neighbor_mesh_chips->second.end())) {
                 continue;
             }
 
@@ -299,7 +299,7 @@ std::vector<eth_chan_directions> get_neighbor_eth_directions(
     directions.reserve(FabricContext::routing_directions.size());
     for (const auto& direction : FabricContext::routing_directions) {
         auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, direction);
-        if (std::find(neighbors.begin(), neighbors.end(), dst_fabric_node_id.chip_id) != neighbors.end()) {
+        if (std::find(neighbors.begin(), neighbors.end(), *dst_fabric_node_id.chip_id) != neighbors.end()) {
             directions.push_back(control_plane.routing_direction_to_eth_direction(direction));
         }
     }
@@ -455,13 +455,13 @@ void append_routing_plane_connection_manager_rt_args_impl(
     if (fabric_context.is_2D_routing_enabled()) {
         auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
         worker_args.push_back(mesh_shape[1]);                     // ew_dim
-        worker_args.push_back(src_fabric_node_id.chip_id);        // my_chip_id
+        worker_args.push_back(*src_fabric_node_id.chip_id);        // my_chip_id
         worker_args.push_back(src_fabric_node_id.mesh_id.get());  // my_mesh_id
 
         // For each target, append dst_dev_id and dst_mesh_id (per-header)
         for (const auto& dst_node : dst_nodes) {
             // dst_dev_id
-            worker_args.push_back(static_cast<uint16_t>(dst_node.chip_id));
+            worker_args.push_back(static_cast<uint16_t>(*dst_node.chip_id));
             // dst_mesh_id
             worker_args.push_back(static_cast<uint16_t>(*dst_node.mesh_id));
         }
@@ -761,11 +761,11 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
     if (fabric_context.is_2D_routing_enabled()) {
         auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
         worker_args.push_back(mesh_shape[1]);                     // ew_dim
-        worker_args.push_back(src_fabric_node_id.chip_id);        // my_chip_id
+        worker_args.push_back(*src_fabric_node_id.chip_id);        // my_chip_id
         worker_args.push_back(src_fabric_node_id.mesh_id.get());  // my_mesh_id
 
         for (const auto& dst_node : dst_nodes) {
-            worker_args.push_back(static_cast<uint16_t>(dst_node.chip_id));
+            worker_args.push_back(static_cast<uint16_t>(*dst_node.chip_id));
             worker_args.push_back(static_cast<uint16_t>(*dst_node.mesh_id));
         }
     }

@@ -46,7 +46,7 @@ namespace detail {
         for (const auto& fnid : group.fabric_node_ids) {
             auto* pb_fnid = pb_group->add_fabric_node_ids();
             pb_fnid->set_mesh_id(*fnid.mesh_id);
-            pb_fnid->set_chip_id(fnid.chip_id);
+            pb_fnid->set_chip_id(*fnid.chip_id);
         }
     }
 
@@ -59,7 +59,7 @@ namespace detail {
             if (table.has_host(fnid) && exported_hosts.insert(fnid).second) {
                 auto* pb_host = pb.add_fabric_node_hosts();
                 pb_host->set_mesh_id(*fnid.mesh_id);
-                pb_host->set_chip_id(fnid.chip_id);
+                pb_host->set_chip_id(*fnid.chip_id);
                 pb_host->set_host_name(table.get_host(fnid));
             }
         }

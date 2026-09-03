@@ -138,14 +138,14 @@ TEST_F(BigMeshDualRankTest2x4, SystemMeshValidation) {
     EXPECT_THAT(col_counts, ::testing::AnyOf(ElementsAre(2, 2, 0, 0), ElementsAre(0, 0, 2, 2)));
 
     // Check fabric node IDs are set for all devices, globally.
-    EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(0, 0)).chip_id, 0);
-    EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(0, 1)).chip_id, 1);
-    EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(0, 2)).chip_id, 2);
-    EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(0, 3)).chip_id, 3);
-    EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(1, 0)).chip_id, 4);
-    EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(1, 1)).chip_id, 5);
-    EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(1, 2)).chip_id, 6);
-    EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(1, 3)).chip_id, 7);
+    EXPECT_EQ(*fabric_node_ids.at(MeshCoordinate(0, 0)).chip_id, 0);
+    EXPECT_EQ(*fabric_node_ids.at(MeshCoordinate(0, 1)).chip_id, 1);
+    EXPECT_EQ(*fabric_node_ids.at(MeshCoordinate(0, 2)).chip_id, 2);
+    EXPECT_EQ(*fabric_node_ids.at(MeshCoordinate(0, 3)).chip_id, 3);
+    EXPECT_EQ(*fabric_node_ids.at(MeshCoordinate(1, 0)).chip_id, 4);
+    EXPECT_EQ(*fabric_node_ids.at(MeshCoordinate(1, 1)).chip_id, 5);
+    EXPECT_EQ(*fabric_node_ids.at(MeshCoordinate(1, 2)).chip_id, 6);
+    EXPECT_EQ(*fabric_node_ids.at(MeshCoordinate(1, 3)).chip_id, 7);
 }
 
 TEST_F(BigMeshDualRankTest2x4, DistributedHostBuffer) {

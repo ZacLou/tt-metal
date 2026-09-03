@@ -1416,7 +1416,7 @@ TEST_F(ControlPlaneFixture, TestSerializeEthCoordinatesToFile) {
             << "Physical chip " << physical_chip_id << " should exist in the file";
 
         const auto& coord_array = chips_node[physical_chip_id];
-        ChipId logical_chip_id = fabric_node_id.chip_id;
+        ChipId logical_chip_id = *fabric_node_id.chip_id;
         MeshCoordinate expected_coord = mesh_graph.chip_to_coordinate(fabric_node_id.mesh_id, logical_chip_id);
 
         // Verify coordinate values match expected mesh coordinates
@@ -1727,7 +1727,7 @@ void validate_sp5_blitz_decode_pipeline_stages(
                             continue;
                         }
                         if (src_dir == EthDir::Z) {
-                            chip_z_neighbors[{*src_mesh, exit_fn.chip_id}].insert(*dst_mesh);
+                            chip_z_neighbors[{*src_mesh, *exit_fn.chip_id}].insert(*dst_mesh);
                         }
                     }
                 }

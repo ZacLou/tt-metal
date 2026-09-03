@@ -28,7 +28,7 @@ std::vector<uint8_t> serialize_router_port_directions_to_bytes(
         // Set fabric node id
         auto* proto_fabric_node = fabric_node_map->mutable_fabric_node();
         proto_fabric_node->set_mesh_id(*fabric_node_id.mesh_id);
-        proto_fabric_node->set_chip_id(fabric_node_id.chip_id);
+        proto_fabric_node->set_chip_id(*fabric_node_id.chip_id);
 
         // Process direction entries
         for (const auto& [direction, channels] : direction_map) {
@@ -75,7 +75,7 @@ RouterPortDirectionsData deserialize_router_port_directions_from_bytes(const std
 
         if (fabric_node_map.has_fabric_node()) {
             fabric_node_id.mesh_id = MeshId{fabric_node_map.fabric_node().mesh_id()};
-            fabric_node_id.chip_id = fabric_node_map.fabric_node().chip_id();
+            fabric_node_id.chip_id = LogicalChipId{fabric_node_map.fabric_node().chip_id()};
         }
 
         std::unordered_map<RoutingDirection, std::vector<chan_id_t>> direction_map;

@@ -211,7 +211,7 @@ public:
             compile_time_args.push_back(*grid_to_fabric_node_id_[i].mesh_id);
         }
         for (size_t i = 0; i < grids_.size(); ++i) {
-            compile_time_args.push_back(grid_to_fabric_node_id_[i].chip_id);
+            compile_time_args.push_back(*grid_to_fabric_node_id_[i].chip_id);
         }
 
         return compile_time_args;
@@ -231,7 +231,7 @@ public:
             compile_time_args.push_back(*grid_to_fabric_node_id_[i].mesh_id);
         }
         for (size_t i = 0; i < grids_.size(); ++i) {
-            compile_time_args.push_back(grid_to_fabric_node_id_[i].chip_id);
+            compile_time_args.push_back(*grid_to_fabric_node_id_[i].chip_id);
         }
 
         return compile_time_args;
@@ -323,7 +323,7 @@ public:
             if (i > 0) {
                 fabric_chip_ids_str += ", ";
             }
-            fabric_chip_ids_str += std::to_string(grid_to_fabric_node_id_[i].chip_id);
+            fabric_chip_ids_str += std::to_string(*grid_to_fabric_node_id_[i].chip_id);
         }
         fabric_chip_ids_str += "}";
         defines["FABRIC_CHIP_IDS"] = fabric_chip_ids_str;

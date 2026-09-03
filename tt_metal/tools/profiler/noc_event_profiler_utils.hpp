@@ -97,7 +97,7 @@ inline void dumpRoutingInfo(IDevice* device, const std::filesystem::path& output
     for (auto physical_chip_id : cluster.get_cluster_desc()->get_all_chips()) {
         auto fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(physical_chip_id);
         topology_json["device_id_to_fabric_node_id"][std::to_string(physical_chip_id)] = {
-            fabric_node_id.mesh_id.get(), fabric_node_id.chip_id};
+            fabric_node_id.mesh_id.get(), fabric_node_id.chip_id.get()};
     }
 
     topology_json["fabric_config"] =

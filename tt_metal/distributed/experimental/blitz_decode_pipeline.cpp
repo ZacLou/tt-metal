@@ -241,7 +241,7 @@ ResolvedBlitzDecodePipelineAllocation build_pipeline_allocation_from_topology(bo
     const auto num_meshes = mesh_ids.size();
 
     auto fn_to_coord = [&](const tt::tt_fabric::FabricNodeId& fn) {
-        return mesh_graph.chip_to_coordinate(fn.mesh_id, fn.chip_id);
+        return mesh_graph.chip_to_coordinate(fn.mesh_id, *fn.chip_id);
     };
 
     // Track which FabricNodeIds have been claimed as entry or exit nodes.
@@ -793,7 +793,7 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
 
             // (5d) Track Z-direction neighbors per chip
             if (src_dir == EthDir::Z) {
-                chip_z_neighbors[{*curr_mesh_id, exit_fn.chip_id}].insert(*next_mesh_id);
+                chip_z_neighbors[{*curr_mesh_id, *exit_fn.chip_id}].insert(*next_mesh_id);
             }
         }
         TT_FATAL(

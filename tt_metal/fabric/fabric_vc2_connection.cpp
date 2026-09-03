@@ -64,7 +64,7 @@ void append_fabric_vc2_connection_rt_args(
                 (std::find(
                      neighbor_mesh_chips->second.begin(),
                      neighbor_mesh_chips->second.end(),
-                     dst_fabric_node_id.chip_id) == neighbor_mesh_chips->second.end())) {
+                     *dst_fabric_node_id.chip_id) == neighbor_mesh_chips->second.end())) {
                 continue;
             }
             forwarding_direction = direction;

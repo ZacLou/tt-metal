@@ -2722,7 +2722,7 @@ void YamlTestConfigSerializer::dump(const std::vector<TestConfig>& test_configs,
 
 void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const FabricNodeId& id) {
     out << YAML::Flow;
-    out << YAML::BeginSeq << *id.mesh_id << id.chip_id << YAML::EndSeq;
+    out << YAML::BeginSeq << *id.mesh_id << *id.chip_id << YAML::EndSeq;
 }
 
 void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const CoreCoord& core) {

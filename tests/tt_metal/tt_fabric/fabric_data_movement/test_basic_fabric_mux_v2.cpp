@@ -631,7 +631,7 @@ std::vector<uint32_t> make_receiver_runtime_args(
         static_cast<uint32_t>(sender_virtual_core.y),
         get_receiver_slot_count(),
         test_runtime_config.use_mesh_api ? 0u : assignment.receiver.linear_num_hops,
-        static_cast<uint32_t>(routing_selection.src_fabric_node_id.chip_id),
+        static_cast<uint32_t>(*routing_selection.src_fabric_node_id.chip_id),
         static_cast<uint32_t>(*routing_selection.src_fabric_node_id.mesh_id),
     };
 }
@@ -655,7 +655,7 @@ std::vector<uint32_t> make_sender_runtime_args(
         static_cast<uint32_t>(receiver_virtual_core.y),
         get_receiver_slot_count(),
         test_runtime_config.use_mesh_api ? 0u : assignment.receiver.linear_num_hops,
-        static_cast<uint32_t>(assignment.receiver.fabric_node_id.chip_id),
+        static_cast<uint32_t>(*assignment.receiver.fabric_node_id.chip_id),
         static_cast<uint32_t>(*assignment.receiver.fabric_node_id.mesh_id),
         effective_stage_count,
         test_case.idle_cycles,

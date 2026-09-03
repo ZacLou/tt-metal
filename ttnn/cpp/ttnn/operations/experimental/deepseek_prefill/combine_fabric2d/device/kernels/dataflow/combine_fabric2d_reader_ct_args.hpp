@@ -86,7 +86,7 @@ struct ReaderCtArgs {
         my_quarter(plan.stream),
         num_incoming_chunks(op::relay_chunks_per_stream(op::ring_extent(args))),
         fwd_sem_addr(plan.fwd_arrived_addr),
-        nbr_chip_id(static_cast<uint32_t>(self.downstream_node.chip_id)),
+        nbr_chip_id(static_cast<uint32_t>(*self.downstream_node.chip_id)),
         num_assignments(count_own_assignments(work)),
         schedule_len(static_cast<uint32_t>(work.size())),
         dram_meta_base_addr(static_cast<uint32_t>(dram.meta->address())),

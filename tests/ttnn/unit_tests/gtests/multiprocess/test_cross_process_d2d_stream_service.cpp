@@ -857,7 +857,7 @@ MeshWorkload make_stress_fabric_workload(
         };
         for (const auto& [neighbor_node, link] : conns) {
             tt::tt_fabric::append_fabric_connection_rt_args(sender_node, neighbor_node, link, program, fabric_core, rt);
-            rt.push_back(static_cast<uint32_t>(neighbor_node.chip_id));
+            rt.push_back(static_cast<uint32_t>(*neighbor_node.chip_id));
             rt.push_back(static_cast<uint32_t>(*neighbor_node.mesh_id));
         }
         SetRuntimeArgs(program, kernel, fabric_core, rt);

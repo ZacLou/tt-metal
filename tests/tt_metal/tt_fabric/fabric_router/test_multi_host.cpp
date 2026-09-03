@@ -151,9 +151,9 @@ void expect_intermesh_resolved_pairs_consistent_across_ranks(const ControlPlane&
         int64_t chan_count = 0;
         for (const auto& pr : pairs) {
             cks = fold(cks, static_cast<uint64_t>(*pr.first.mesh_id));
-            cks = fold(cks, static_cast<uint64_t>(pr.first.chip_id));
+            cks = fold(cks, static_cast<uint64_t>(*pr.first.chip_id));
             cks = fold(cks, static_cast<uint64_t>(*pr.second.mesh_id));
-            cks = fold(cks, static_cast<uint64_t>(pr.second.chip_id));
+            cks = fold(cks, static_cast<uint64_t>(*pr.second.chip_id));
 
             // Channel-level consistency: it is not enough for the exit/peer CHIP pairs to line up -- the
             // channels backing each connection must line up too. Fold, per connection, the routing-table
@@ -171,9 +171,9 @@ void expect_intermesh_resolved_pairs_consistent_across_ranks(const ControlPlane&
             // the chip pair matched.
             const auto fwd_dir = control_plane.get_forwarding_direction(pr.first, pr.second);
             chan_cks = fold(chan_cks, static_cast<uint64_t>(*pr.first.mesh_id));
-            chan_cks = fold(chan_cks, static_cast<uint64_t>(pr.first.chip_id));
+            chan_cks = fold(chan_cks, static_cast<uint64_t>(*pr.first.chip_id));
             chan_cks = fold(chan_cks, static_cast<uint64_t>(*pr.second.mesh_id));
-            chan_cks = fold(chan_cks, static_cast<uint64_t>(pr.second.chip_id));
+            chan_cks = fold(chan_cks, static_cast<uint64_t>(*pr.second.chip_id));
             chan_cks = fold(chan_cks, fwd_dir.has_value() ? static_cast<uint64_t>(*fwd_dir) : ~0ull);
             if (fwd_dir.has_value()) {
                 auto dir_chans = control_plane.get_active_fabric_eth_channels_in_direction(pr.first, *fwd_dir);

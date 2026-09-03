@@ -1058,7 +1058,7 @@ AllToAllAsyncGenericProgram::create_at(
             (concat_num_half_tiles * device_index) / 2,  // full_block_offset
             static_cast<uint32_t>(effective_topology),   // topology
             cluster_axis,                                // replicate_axis
-            sender_device_fabric_node_id.chip_id,        // source_chip_id
+            *sender_device_fabric_node_id.chip_id,        // source_chip_id
             *sender_device_fabric_node_id.mesh_id,       // source_mesh_id
             is_fabric_2d,                                // is_fabric_2d
             sender_stream_direction_masks[stream],       // fabric_direction_mask
@@ -1154,7 +1154,7 @@ AllToAllAsyncGenericProgram::create_at(
             if (is_fabric_2d) {
                 const auto target_node_id = device->get_fabric_node_id(target_coord.value());
                 sender_writer_rt_args.push_back(*target_node_id.mesh_id);
-                sender_writer_rt_args.push_back(target_node_id.chip_id);
+                sender_writer_rt_args.push_back(*target_node_id.chip_id);
                 const auto target_drain_sync_core = get_target_drain_core(*target_coord);
                 sender_writer_rt_args.push_back(target_drain_sync_core.x);
                 sender_writer_rt_args.push_back(target_drain_sync_core.y);

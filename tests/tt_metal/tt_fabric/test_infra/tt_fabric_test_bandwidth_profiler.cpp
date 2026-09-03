@@ -291,7 +291,7 @@ void BandwidthProfiler::calculate_bandwidth(
                 uint32_t config_link_id = sender_config.link_id;
 
                 // Create cache key: device_id + direction + link_id
-                std::string cache_key = std::to_string(device_id.chip_id) + "_" +
+                std::string cache_key = std::to_string(*device_id.chip_id) + "_" +
                                         std::to_string(static_cast<int>(config_direction)) + "_" +
                                         std::to_string(config_link_id);
 
@@ -335,7 +335,7 @@ void BandwidthProfiler::calculate_bandwidth(
                 max_traffic_count = std::max(max_traffic_count, total_traffic_count);
 
                 // Use cache lookup instead of triply nested loop (O(1) vs O(n³))
-                std::string cache_key = std::to_string(device_id.chip_id) + "_" +
+                std::string cache_key = std::to_string(*device_id.chip_id) + "_" +
                                         std::to_string(static_cast<int>(direction)) + "_" + std::to_string(link_id);
 
                 TT_FATAL(
@@ -366,7 +366,7 @@ void BandwidthProfiler::calculate_bandwidth(
 
                 auto bw_result = BandwidthResult{
                     .num_devices = num_devices,
-                    .device_id = device_id.chip_id,
+                    .device_id = *device_id.chip_id,
                     .direction = direction,
                     .total_traffic_count = total_traffic_count,
                     .num_packets = num_packets,

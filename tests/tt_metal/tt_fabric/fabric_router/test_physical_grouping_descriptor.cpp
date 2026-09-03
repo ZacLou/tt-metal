@@ -52,24 +52,32 @@ static tt::tt_metal::PhysicalSystemDescriptor create_psd_from_mock_cluster() {
 
 // Helper to check that a node's neighbors match expected (order-independent)
 static void expect_neighbors(
-    const AdjacencyGraph<uint32_t>& graph, uint32_t node_id, const std::vector<uint32_t>& expected) {
+    const AdjacencyGraph<GroupingChipId>& graph, GroupingChipId node_id, const std::vector<uint32_t>& expected) {
     const auto& neighbors = graph.get_neighbors(node_id);
-    std::set<uint32_t> actual_set(neighbors.begin(), neighbors.end());
+    std::set<uint32_t> actual_set;
+    for (const auto& neighbor : neighbors) {
+        actual_set.insert(*neighbor);
+    }
     std::set<uint32_t> expected_set(expected.begin(), expected.end());
-    EXPECT_EQ(actual_set, expected_set) << "Node " << node_id << " has wrong neighbors";
+    EXPECT_EQ(actual_set, expected_set) << "Node " << *node_id << " has wrong neighbors";
 }
 
-// Helper for checking neighbors by node ID (now using uint32_t directly)
+// Helper for checking neighbors by node ID
 static void expect_neighbors_by_id(
-    const AdjacencyGraph<uint32_t>& graph, uint32_t node_id, const std::vector<uint32_t>& expected_neighbor_ids) {
+    const AdjacencyGraph<GroupingChipId>& graph,
+    GroupingChipId node_id,
+    const std::vector<uint32_t>& expected_neighbor_ids) {
     const auto& nodes = graph.get_nodes();
     ASSERT_TRUE(std::find(nodes.begin(), nodes.end(), node_id) != nodes.end())
-        << "Node with id " << node_id << " not found";
+        << "Node with id " << *node_id << " not found";
 
     const auto& neighbors = graph.get_neighbors(node_id);
-    std::set<uint32_t> actual_ids(neighbors.begin(), neighbors.end());
+    std::set<uint32_t> actual_ids;
+    for (const auto& neighbor : neighbors) {
+        actual_ids.insert(*neighbor);
+    }
     std::set<uint32_t> expected_set(expected_neighbor_ids.begin(), expected_neighbor_ids.end());
-    EXPECT_EQ(actual_ids, expected_set) << "Node " << node_id << " has wrong neighbors";
+    EXPECT_EQ(actual_ids, expected_set) << "Node " << *node_id << " has wrong neighbors";
 }
 
 // Helper to get common tray/host groupings - can be prepended to any test proto
@@ -199,9 +207,9 @@ TEST(PhysicalGroupingDescriptorTests, AdjacencyGraph_AllToAll_ThreeNodes) {
     ASSERT_EQ(nodes.size(), 3u);
 
     // All-to-all: each node connects to every other node
-    expect_neighbors(adj, 10, {20, 30});
-    expect_neighbors(adj, 20, {10, 30});
-    expect_neighbors(adj, 30, {10, 20});
+    expect_neighbors(adj, GroupingChipId{10}, {20, 30});
+    expect_neighbors(adj, GroupingChipId{20}, {10, 30});
+    expect_neighbors(adj, GroupingChipId{30}, {10, 20});
 }
 
 TEST(PhysicalGroupingDescriptorTests, AdjacencyGraph_RowMajorMesh_2x2_LineLine) {
@@ -253,10 +261,10 @@ TEST(PhysicalGroupingDescriptorTests, AdjacencyGraph_RowMajorMesh_2x2_LineLine) 
     // idx 1 (1,0): neighbors (0,0)=idx0, (1,1)=idx3
     // idx 2 (0,1): neighbors (0,0)=idx0, (1,1)=idx3
     // idx 3 (1,1): neighbors (1,0)=idx1, (0,1)=idx2
-    expect_neighbors(adj, 100, {101, 102});
-    expect_neighbors(adj, 101, {100, 103});
-    expect_neighbors(adj, 102, {100, 103});
-    expect_neighbors(adj, 103, {101, 102});
+    expect_neighbors(adj, GroupingChipId{100}, {101, 102});
+    expect_neighbors(adj, GroupingChipId{101}, {100, 103});
+    expect_neighbors(adj, GroupingChipId{102}, {100, 103});
+    expect_neighbors(adj, GroupingChipId{103}, {101, 102});
 }
 
 TEST(PhysicalGroupingDescriptorTests, AdjacencyGraph_CustomConnections) {
@@ -303,9 +311,9 @@ TEST(PhysicalGroupingDescriptorTests, AdjacencyGraph_CustomConnections) {
     // Custom connections use 0-based instance index; instance ids are 1,2,3 (from id field)
     // index 0 -> id 1, index 1 -> id 2, index 2 -> id 3
     // edges: 0-1, 0-2, 1-2  =>  id 1-2, id 1-3, id 2-3
-    expect_neighbors(adj, 1, {2, 3});
-    expect_neighbors(adj, 2, {1, 3});
-    expect_neighbors(adj, 3, {1, 2});
+    expect_neighbors(adj, GroupingChipId{1}, {2, 3});
+    expect_neighbors(adj, GroupingChipId{2}, {1, 3});
+    expect_neighbors(adj, GroupingChipId{3}, {1, 2});
 }
 
 // ============================================================================
@@ -1493,13 +1501,13 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_4x2Mesh_TwoHal
     auto nodes = flattened_mesh.get_nodes();
     EXPECT_EQ(nodes.size(), 8u) << "Flattened mesh should have 8 nodes";
 
-    for (uint32_t node_id : nodes) {
-        ASSERT_LT(node_id, flat.items.size())
-            << "items must be sized so items[node_id] exists for every graph node (node_id=" << node_id
+    for (GroupingChipId node_id : nodes) {
+        ASSERT_LT(*node_id, flat.items.size())
+            << "items must be sized so items[*node_id] exists for every graph node (node_id=" << *node_id
             << ", items.size()=" << flat.items.size() << ")";
-        const auto& item = flat.items[node_id];
+        const auto& item = flat.items[*node_id];
         EXPECT_EQ(item.type, GroupingItemInfo::ItemType::ASIC_LOCATION)
-            << "node_id " << node_id << " should have ASIC_LOCATION metadata from flattened mesh";
+            << "node_id " << *node_id << " should have ASIC_LOCATION metadata from flattened mesh";
     }
 }
 
@@ -1557,17 +1565,17 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_CornerInferenc
     ASSERT_FALSE(flat_1x1_meshes.empty());
     const auto& flat_1x1 = flat_1x1_meshes.front().adjacency_graph;
     EXPECT_EQ(flat_1x1.get_nodes().size(), 1u);  // 1 tray with 1 ASIC (from required groupings)
-    expect_neighbors_by_id(flat_1x1, 0, {});     // Single node has no neighbors
+    expect_neighbors_by_id(flat_1x1, GroupingChipId{0}, {});     // Single node has no neighbors
 
     auto flat_1x4_meshes = desc.build_flattened_adjacency_mesh(mesh_1x4);
     ASSERT_FALSE(flat_1x4_meshes.empty());
     const auto& flat_1x4 = flat_1x4_meshes.front().adjacency_graph;
     EXPECT_EQ(flat_1x4.get_nodes().size(), 4u);  // 4 trays x 1 ASIC each
     // 1x4 chain: endpoints have 1 neighbor, interior nodes have 2 (row-major IDs 0..3)
-    expect_neighbors_by_id(flat_1x4, 0, {1});
-    expect_neighbors_by_id(flat_1x4, 1, {0, 2});
-    expect_neighbors_by_id(flat_1x4, 2, {1, 3});
-    expect_neighbors_by_id(flat_1x4, 3, {2});
+    expect_neighbors_by_id(flat_1x4, GroupingChipId{0}, {1});
+    expect_neighbors_by_id(flat_1x4, GroupingChipId{1}, {0, 2});
+    expect_neighbors_by_id(flat_1x4, GroupingChipId{2}, {1, 3});
+    expect_neighbors_by_id(flat_1x4, GroupingChipId{3}, {2});
 }
 
 // SP4 GLX mock: each MPI rank builds a PSD from its rank-local cluster fragment (one BH Galaxy host, 32 ASICs).
@@ -2629,7 +2637,7 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PopulatesMeshNodeT
         std::set<LogicalChipId> seen_chip_ids;
         std::set<tt::tt_metal::ASICPosition> seen_positions;
         for (const auto& [chip_id, asic_position] : pinning) {
-            EXPECT_LT(chip_id, kMgdNodeCount) << "Logical chip id out of range for '" << grouping.name << "'";
+            EXPECT_LT(*chip_id, kMgdNodeCount) << "Logical chip id out of range for '" << grouping.name << "'";
             EXPECT_GT(*asic_position.first, 0u) << "Tray id should be set for chip " << chip_id;
             EXPECT_GT(*asic_position.second, 0u) << "ASIC location should be set for chip " << chip_id;
             EXPECT_TRUE(seen_chip_ids.insert(chip_id).second) << "Duplicate logical chip id in pinning";

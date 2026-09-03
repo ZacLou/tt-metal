@@ -33,7 +33,7 @@ std::vector<uint8_t> serialize_to_bytes(const PortDescriptorTable& port_id_table
                 auto* proto_port_desc = entry->add_port_descriptors();
                 proto_port_desc->set_connection_hash(port_desc.connection_hash);
                 proto_port_desc->set_src_chip(port_desc.src_chip);
-                proto_port_desc->set_dst_chip(port_desc.dst_node.chip_id);
+                proto_port_desc->set_dst_chip(*port_desc.dst_node.chip_id);
             }
         }
     }

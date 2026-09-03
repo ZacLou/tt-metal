@@ -789,7 +789,7 @@ void Data::rpc_get_system_mesh(rpc::Inspector::GetSystemMeshResults::Builder& re
         auto entry = mapped_builder[i];
         const auto& fabric_node_id = mapped.fabric_node_ids[i];
         entry.setFabricMeshId(*fabric_node_id.mesh_id);
-        entry.setFabricChipId(fabric_node_id.chip_id);
+        entry.setFabricChipId(*fabric_node_id.chip_id);
 
         const auto& device_id = mapped.device_ids[i];
         const bool is_local = device_id.is_local();

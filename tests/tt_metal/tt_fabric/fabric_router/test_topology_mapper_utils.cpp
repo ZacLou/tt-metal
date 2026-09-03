@@ -1404,7 +1404,7 @@ TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_MixedStrictAndRelaxed
     for (const auto& exit_node : exit_nodes0) {
         if (exit_node.fabric_node_id.has_value()) {
             has_device_level = true;
-            EXPECT_EQ(exit_node.fabric_node_id->chip_id, 1u);
+            EXPECT_EQ(*exit_node.fabric_node_id->chip_id, 1u);
         } else {
             has_mesh_level = true;
         }
@@ -5157,7 +5157,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
         auto mesh_pin_it = physical_multi_mesh_graph.mesh_pgd_pinnings_.find(mesh_id);
         if (mesh_pin_it != physical_multi_mesh_graph.mesh_pgd_pinnings_.end()) {
             for (const auto& [chip_id, asic_position] : mesh_pin_it->second) {
-                EXPECT_TRUE(chip_ids.insert(chip_id).second) << "Duplicate logical chip id in pinning";
+                EXPECT_TRUE(chip_ids.insert(*chip_id).second) << "Duplicate logical chip id in pinning";
                 EXPECT_TRUE(pinned_positions.insert(asic_position).second)
                     << "Two logical chips pinned to the same ASIC position";
             }

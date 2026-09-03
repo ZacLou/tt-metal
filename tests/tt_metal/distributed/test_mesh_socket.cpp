@@ -1740,8 +1740,8 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
         recv_config,
         send_socket,
         recv_socket,
-        current_fabric_node_id.chip_id,
-        current_fabric_node_id.chip_id,
+        *current_fabric_node_id.chip_id,
+        *current_fabric_node_id.chip_id,
         sender_virtual_coord,
         recv_virtual_coord,
         socket_fifo_size);
@@ -1818,8 +1818,8 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
             recv_config,
             send_socket,
             recv_socket,
-            current_fabric_node_id.chip_id,
-            current_fabric_node_id.chip_id,
+            *current_fabric_node_id.chip_id,
+            *current_fabric_node_id.chip_id,
             sender_virtual_coord,
             recv_virtual_coord,
             socket_fifo_size);
@@ -1935,8 +1935,8 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
             recv_config,
             send_socket_l1,
             recv_socket_l1,
-            receiver_fabric_node_id.chip_id,
-            sender_fabric_node_id.chip_id,
+            *receiver_fabric_node_id.chip_id,
+            *sender_fabric_node_id.chip_id,
             sender_virtual_coord,
             recv_virtual_coord,
             socket_fifo_size);

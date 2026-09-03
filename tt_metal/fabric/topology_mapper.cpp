@@ -56,7 +56,7 @@ std::tuple<int, MeshId, MeshHostRankId> decode_mpi_rank_mesh_id_and_rank(std::ui
 // Encodes/decodes a FabricNodeId (mesh_id, chip_id) into/from a 64-bit value.
 std::uint64_t encode_fabric_node_id(const FabricNodeId& fabric_node_id) {
     return (static_cast<std::uint64_t>(fabric_node_id.mesh_id.get()) << 32) |
-           static_cast<std::uint64_t>(fabric_node_id.chip_id);
+           static_cast<std::uint64_t>(*fabric_node_id.chip_id);
 }
 
 FabricNodeId decode_fabric_node_id(std::uint64_t encoded_value) {
@@ -297,7 +297,7 @@ TopologyMapper::TopologyMapper(
         // Update the MappedChipInfo entry with mapping information
         info->fabric_node_id = fabric_node_id;
         info->physical_chip_id = physical_chip_id;
-        info->mesh_coord = mesh_graph_.chip_to_coordinate(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+        info->mesh_coord = mesh_graph_.chip_to_coordinate(fabric_node_id.mesh_id, *fabric_node_id.chip_id);
 
         // Get hostname and MPI rank from physical system descriptor
         info->hostname = physical_system_descriptor_.get_host_name_for_asic(info->asic_id);
@@ -309,7 +309,7 @@ TopologyMapper::TopologyMapper(
         // use it for all fabric nodes on the current physical host to ensure get_local_host_rank() works correctly.
         // The coordinate ranges will be rebuilt using the mesh graph's original assignments.
         const auto& my_host = physical_system_descriptor_.my_host_name();
-        auto mesh_graph_host_rank = mesh_graph_.get_host_rank_for_chip(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+        auto mesh_graph_host_rank = mesh_graph_.get_host_rank_for_chip(fabric_node_id.mesh_id, *fabric_node_id.chip_id);
         TT_FATAL(mesh_graph_host_rank.has_value(), "Fabric node id {} not found in mesh graph", fabric_node_id);
 
         if (!info->hostname.empty() && info->hostname == my_host &&
@@ -553,7 +553,7 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
             MappedChipInfo& info = *it->second;
 
             info.fabric_node_id = fabric_node;
-            info.mesh_coord = mesh_graph_.chip_to_coordinate(fabric_node.mesh_id, fabric_node.chip_id);
+            info.mesh_coord = mesh_graph_.chip_to_coordinate(fabric_node.mesh_id, *fabric_node.chip_id);
             // Assign mesh host rank based on the fabric node's rank from the mesh graph
             // This ensures all mapped ASICs get a valid rank, even if their input rank was UNSET
             if (fabric_node_id_to_mesh_rank.contains(fabric_node.mesh_id) &&
@@ -561,7 +561,7 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
                 info.mesh_host_rank = fabric_node_id_to_mesh_rank.at(fabric_node.mesh_id).at(fabric_node);
             } else {
                 // Fallback: get host rank directly from mesh graph
-                auto host_rank = mesh_graph_.get_host_rank_for_chip(fabric_node.mesh_id, fabric_node.chip_id);
+                auto host_rank = mesh_graph_.get_host_rank_for_chip(fabric_node.mesh_id, *fabric_node.chip_id);
                 TT_FATAL(host_rank.has_value(), "Fabric node id {} not found in mesh graph", fabric_node);
                 info.mesh_host_rank = host_rank.value();
             }
@@ -1214,7 +1214,7 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping(
         const auto coord = info.mesh_coord;
         // Use the mesh graph's original host rank assignment for coordinate range calculation
         // This preserves the correct coordinate ranges even when mesh_host_rank is overridden for get_local_host_rank()
-        auto mesh_graph_host_rank = mesh_graph_.get_host_rank_for_chip(mesh_id_val, fabric_node_id.chip_id);
+        auto mesh_graph_host_rank = mesh_graph_.get_host_rank_for_chip(mesh_id_val, *fabric_node_id.chip_id);
         if (mesh_graph_host_rank.has_value()) {
             const auto host_rank = mesh_graph_host_rank.value();
             mesh_to_hosts[mesh_id_val].insert(host_rank);

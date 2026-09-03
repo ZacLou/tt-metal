@@ -145,7 +145,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const auto& mesh_view = mesh_device->get_view();
     auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;
-    uint32_t src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
+    uint32_t src_chip_id = *src_fabric_node_id.chip_id;
     uint32_t linearized_mesh_coord = ccl::common::get_linearized_index(mesh_coordinate, mesh_view);
     uint32_t mesh_rows = mesh_view.num_rows();
     uint32_t mesh_cols = mesh_view.num_cols();
@@ -521,7 +521,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     for (const auto& coord : ttnn::MeshCoordinateRange(mesh_view.shape())) {
         auto dest_fabric_node_id = mesh_device->get_fabric_node_id(coord);
         dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
-        dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);
+        dest_chip_id.push_back(*dest_fabric_node_id.chip_id);
     }
 
     // Compile-time args shared by reader and writer

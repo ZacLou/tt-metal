@@ -117,7 +117,7 @@ tt::tt_metal::ProgramDescriptor build_dispatch_program_descriptor(
 
     auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;
-    uint32_t src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
+    uint32_t src_chip_id = *src_fabric_node_id.chip_id;
     uint32_t linearized_mesh_coord = common::get_linearized_index(mesh_coordinate, mesh_view);
 
     log_debug(
@@ -306,7 +306,7 @@ tt::tt_metal::ProgramDescriptor build_dispatch_program_descriptor(
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord_fabric_node_id : mesh_view.get_fabric_node_ids()) {
         dest_mesh_id.push_back(*coord_fabric_node_id.mesh_id);
-        dest_chip_id.push_back((uint32_t)coord_fabric_node_id.chip_id);
+        dest_chip_id.push_back(*coord_fabric_node_id.chip_id);
     }
     log_debug(tt::LogOp, "dest_chip_id: {}", common::stringify(dest_chip_id));
     log_debug(tt::LogOp, "dest_mesh_id: {}", common::stringify(dest_mesh_id));

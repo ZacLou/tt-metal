@@ -51,7 +51,7 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
     const auto& mesh_view = mesh_device->get_view();
 
     const auto fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
-    const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
+    const uint32_t src_chip_id = *fabric_node_id.chip_id;
 
     const auto& mapping_shape = mapping_tensor.tensor_spec().logical_shape();
     const auto& metadata_shape = metadata_tensor.tensor_spec().logical_shape();
@@ -228,7 +228,7 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord_fabric_node_id : mesh_view.get_fabric_node_ids()) {
         dest_mesh_id.push_back(*coord_fabric_node_id.mesh_id);
-        dest_chip_id.push_back((uint32_t)coord_fabric_node_id.chip_id);
+        dest_chip_id.push_back(*coord_fabric_node_id.chip_id);
     }
     const auto [neighbors, directions] = common::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
 

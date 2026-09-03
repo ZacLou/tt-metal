@@ -115,8 +115,8 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
         tt::tt_metal::distributed::multihost::Tag{0}                 // exchange fabric node id over tag 0
     );
 
-    log_debug(tt::LogTest, "Src MeshId {} ChipId {}", *(src_fabric_node_id.mesh_id), src_fabric_node_id.chip_id);
-    log_debug(tt::LogTest, "Dst MeshId {} ChipId {}", *(dst_fabric_node_id.mesh_id), dst_fabric_node_id.chip_id);
+    log_debug(tt::LogTest, "Src MeshId {} ChipId {}", *(src_fabric_node_id.mesh_id), *src_fabric_node_id.chip_id);
+    log_debug(tt::LogTest, "Dst MeshId {} ChipId {}", *(dst_fabric_node_id.mesh_id), *dst_fabric_node_id.chip_id);
 
     tt::tt_metal::CoreCoord receiver_virtual_core = sender_device->worker_core_from_logical_core(receiver_logical_core);
     auto receiver_noc_encoding =
@@ -149,8 +149,8 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
         receiver_noc_encoding,
         time_seed,
         mesh_shape[1],
-        src_fabric_node_id.chip_id,
-        dst_fabric_node_id.chip_id,
+        *src_fabric_node_id.chip_id,
+        *dst_fabric_node_id.chip_id,
         *dst_fabric_node_id.mesh_id};
 
     tt_fabric::append_fabric_connection_rt_args(
@@ -347,7 +347,7 @@ void run_mcast_sender_step(
         num_packets,
         receiver_noc_encoding,
         time_seed,
-        mcast_start_node.chip_id,
+        *mcast_start_node.chip_id,
         *mcast_start_node.mesh_id};
 
     std::vector<uint32_t> mcast_header_rtas(4, 0);

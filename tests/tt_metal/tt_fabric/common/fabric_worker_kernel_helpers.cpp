@@ -94,7 +94,7 @@ std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
 
     // Runtime args: start with basic args, then append fabric connection
     std::vector<uint32_t> runtime_args = {
-        dest_fabric_node.chip_id,        // 0: dest_chip_id
+        *dest_fabric_node.chip_id,        // 0: dest_chip_id
         dest_fabric_node.mesh_id.get(),  // 1: dest_mesh_id
     };
 

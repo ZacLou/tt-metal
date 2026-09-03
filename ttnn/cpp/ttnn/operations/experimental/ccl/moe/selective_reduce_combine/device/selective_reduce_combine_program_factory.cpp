@@ -333,7 +333,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto axis = operation_attributes.axis;
 
     const auto fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
-    const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
+    const uint32_t src_chip_id = *fabric_node_id.chip_id;
 
     const uint32_t num_devices_total = mesh_view.num_devices();
     const bool double_buffer_source = compute_cores_by_ring_id.has_value();
@@ -635,7 +635,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     for (const auto& coord : all_mesh_coordinates) {
         const auto dest_fabric_node_id = mesh_device->get_fabric_node_id(coord);
         dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
-        dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);
+        dest_chip_id.push_back(*dest_fabric_node_id.chip_id);
     }
     const auto [neighbors, directions] =
         operations::ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, axis);

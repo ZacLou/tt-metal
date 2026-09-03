@@ -95,7 +95,7 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
         const auto& src_device = devices[src_idx];
         auto src_fabric_node_id =
             control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_device_ids()[0]);
-        uint32_t src_fabric_chip_id = src_fabric_node_id.chip_id;
+        uint32_t src_fabric_chip_id = *src_fabric_node_id.chip_id;
 
         uint32_t result_size = NUM_DEVICES * sizeof(uint32_t);
         std::vector<uint32_t> result_buffer_data(NUM_DEVICES, 0);
@@ -116,7 +116,7 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
             auto dst_fabric_node_id =
                 control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_device_ids()[0]);
             runtime_args.push_back(*dst_fabric_node_id.mesh_id);  // dst_mesh_id
-            runtime_args.push_back(dst_fabric_node_id.chip_id);   // dst_chip_id
+            runtime_args.push_back(*dst_fabric_node_id.chip_id);   // dst_chip_id
         }
 
         auto kernel = tt_metal::CreateKernel(
@@ -225,7 +225,7 @@ void RunSetUnicastRouteTest(
         const auto& src_device = devices[src_idx];
         auto src_fabric_node_id =
             control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_device_ids()[0]);
-        uint32_t src_fabric_chip_id = src_fabric_node_id.chip_id;
+        uint32_t src_fabric_chip_id = *src_fabric_node_id.chip_id;
 
         uint32_t result_size = NUM_DEVICES * RESULT_SIZE_PER_DEVICE * sizeof(uint32_t);
         uint32_t result_addr = FABRIC_TEST_BUFFER_BASE_ADDR + (src_idx * result_size);
@@ -248,7 +248,7 @@ void RunSetUnicastRouteTest(
             auto dst_fabric_node_id =
                 control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_device_ids()[0]);
             runtime_args.push_back(*dst_fabric_node_id.mesh_id);  // dst_mesh_id
-            runtime_args.push_back(dst_fabric_node_id.chip_id);   // dst_chip_id
+            runtime_args.push_back(*dst_fabric_node_id.chip_id);   // dst_chip_id
         }
 
         std::map<std::string, std::string> defines = {};
@@ -301,8 +301,8 @@ void RunSetUnicastRouteTest(
             auto dst_fabric_node_id =
                 control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_device_ids()[0]);
             if (!is_2d_fabric && std::abs(
-                                     static_cast<long>(src_fabric_node_id.chip_id) -
-                                     static_cast<long>(dst_fabric_node_id.chip_id)) >= MAX_CHIPS_LOWLAT_1D) {
+                                     static_cast<long>(*src_fabric_node_id.chip_id) -
+                                     static_cast<long>(*dst_fabric_node_id.chip_id)) >= MAX_CHIPS_LOWLAT_1D) {
                 // Skip 1D route buffer comparison if src and dst are more than 16 chips apart
                 continue;
             }

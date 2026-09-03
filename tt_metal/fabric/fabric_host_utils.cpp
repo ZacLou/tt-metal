@@ -176,7 +176,7 @@ void serialize_mesh_coordinates_to_file(
 
     // Emit each chip with flow style for the coordinate array
     for (const auto& [fabric_node_id, physical_chip_id] : mapping) {
-        MeshCoordinate mesh_coord = mesh_graph.chip_to_coordinate(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+        MeshCoordinate mesh_coord = mesh_graph.chip_to_coordinate(fabric_node_id.mesh_id, *fabric_node_id.chip_id);
         emitter << YAML::Key << physical_chip_id;
         emitter << YAML::Value;
         emitter << YAML::Flow << YAML::BeginSeq;
@@ -304,7 +304,7 @@ void serialize_asic_to_fabric_node_mapping_to_file(
                 emitter << YAML::Key << "mesh_id";
                 emitter << YAML::Value << *mapping.fabric_node_id.mesh_id;
                 emitter << YAML::Key << "chip_id";
-                emitter << YAML::Value << mapping.fabric_node_id.chip_id;
+                emitter << YAML::Value << *mapping.fabric_node_id.chip_id;
                 emitter << YAML::EndMap;
 
                 // Emit asic_id as the last field

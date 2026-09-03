@@ -311,10 +311,10 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
         receiver_virtual_core.x,
         receiver_virtual_core.y,
         mesh_shape[1],
-        src_fabric_node_id.chip_id,
+        *src_fabric_node_id.chip_id,
         num_hops,
         1 /* fwd_range */,
-        dst_fabric_node_id.chip_id,
+        *dst_fabric_node_id.chip_id,
         *dst_fabric_node_id.mesh_id};
 
     // Use connection API to append EDM connection args (to first-hop neighbor)
@@ -410,7 +410,7 @@ MeshPathResult find_1d_path_with_hops(uint32_t num_hops) {
         bool found_target = false;
         for (int i = num_chips - 1; i >= 0; i--) {
             bool visited = std::any_of(path.begin(), path.end(), [&](const FabricNodeId& n) {
-                return n.chip_id == static_cast<uint32_t>(i);
+                return *n.chip_id == static_cast<uint32_t>(i);
             });
             if (!visited) {
                 target = FabricNodeId(MeshId{0}, static_cast<uint32_t>(i));

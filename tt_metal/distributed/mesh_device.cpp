@@ -138,7 +138,7 @@ MeshCoordinate compute_system_mesh_offset(const MeshDeviceView& view) {
     const auto origin_fabric_node_id = view.get_fabric_node_id(MeshCoordinate::zero_coordinate(view.shape().dims()));
     const auto system_mesh_shape = MetalContext::instance().get_system_mesh().shape();
     for (const auto& coord : MeshCoordinateRange(system_mesh_shape)) {
-        if (coord.to_linear_index(system_mesh_shape) == origin_fabric_node_id.chip_id) {
+        if (coord.to_linear_index(system_mesh_shape) == *origin_fabric_node_id.chip_id) {
             return coord;
         }
     }

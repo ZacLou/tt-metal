@@ -595,7 +595,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                     (uint32_t)mirror_core.x,          // data_valid_sem target (neighbor mirror core x)
                     (uint32_t)mirror_core.y,          // data_valid_sem target (neighbor mirror core y)
                     num_granular,                     // leading sends the downstream relays
-                    (uint32_t)route_node.chip_id,     // neighbor chip id (packet header 2D route)
+                    (uint32_t)*route_node.chip_id,     // neighbor chip id (packet header 2D route)
                     (uint32_t)(*route_node.mesh_id),  // neighbor mesh id (packet header 2D route)
                 };
                 TT_FATAL(num_iters == 0 || neighbor.has_value(), "an active direction must have a neighbor");

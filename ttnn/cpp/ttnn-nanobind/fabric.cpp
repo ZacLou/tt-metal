@@ -45,13 +45,16 @@ void bind_fabric_api(nb::module_& mod) {
             nb::arg("chip_id"),
             "Create a FabricNodeId from mesh_id and chip_id.")
         .def_ro("mesh_id", &tt::tt_fabric::FabricNodeId::mesh_id, "The mesh identifier.")
-        .def_ro("chip_id", &tt::tt_fabric::FabricNodeId::chip_id, "The chip identifier within the mesh.")
+        .def_prop_ro(
+            "chip_id",
+            [](const tt::tt_fabric::FabricNodeId& id) { return *id.chip_id; },
+            "The logical chip identifier within the mesh.")
         .def(
             "__eq__",
             [](const tt::tt_fabric::FabricNodeId& lhs, const tt::tt_fabric::FabricNodeId& rhs) { return lhs == rhs; },
             nb::arg("other"))
         .def("__repr__", [](const tt::tt_fabric::FabricNodeId& id) {
-            return fmt::format("FabricNodeId(M{}, D{})", *id.mesh_id, id.chip_id);
+            return fmt::format("FabricNodeId(M{}, D{})", *id.mesh_id, *id.chip_id);
         });
 
     // custom mapping here for interface stability

@@ -369,7 +369,7 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
             // TODO: move this out of here
             const uint32_t EW_DIM = 1;
             const auto unicast_fields = ChipUnicastFields2D(
-                this->src_node_id.chip_id, dst_node_id.chip_id, *dst_node_id.mesh_id, mesh_shape[EW_DIM]);
+                *this->src_node_id.chip_id, *dst_node_id.chip_id, *dst_node_id.mesh_id, mesh_shape[EW_DIM]);
             const auto unicast_args = unicast_fields.get_args();
             args.insert(args.end(), unicast_args.begin(), unicast_args.end());
         } else if (this->parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
@@ -380,7 +380,7 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
             auto adjusted_hops = *(this->hops);
 
             // chip_id and mesh_id is unused for low latency 2d mesh mcast
-            const auto mcast_fields = ChipMulticastFields2D(dst_node_id.chip_id, *dst_node_id.mesh_id, adjusted_hops);
+            const auto mcast_fields = ChipMulticastFields2D(*dst_node_id.chip_id, *dst_node_id.mesh_id, adjusted_hops);
             const auto mcast_args = mcast_fields.get_args();
             args.insert(args.end(), mcast_args.begin(), mcast_args.end());
         } else {
@@ -562,8 +562,8 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
             const uint32_t EW_DIM = 1;
 
             const auto unicast_fields = ChipUnicastFields2D(
-                receiver_node.chip_id,  // src = receiver's chip (credit packet source)
-                sender_node.chip_id,    // dst = sender's chip (credit packet destination)
+                *receiver_node.chip_id,  // src = receiver's chip (credit packet source)
+                *sender_node.chip_id,    // dst = sender's chip (credit packet destination)
                 *sender_node.mesh_id,
                 mesh_shape[EW_DIM]);
             const auto unicast_args = unicast_fields.get_args();

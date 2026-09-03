@@ -43,7 +43,7 @@ using TelemetryMap = std::unordered_map<uint64_t, uint64_t>;
 
 uint64_t make_channel_key(const FabricNodeId& node_id, uint8_t channel_id) {
     return (static_cast<uint64_t>(node_id.mesh_id.get()) << 32) |
-           (static_cast<uint64_t>(node_id.chip_id) << 8) |
+           (static_cast<uint64_t>(*node_id.chip_id) << 8) |
            static_cast<uint64_t>(channel_id);
 }
 

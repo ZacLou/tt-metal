@@ -150,7 +150,7 @@ std::optional<uint64_t> resolve_direct_neighbor_route_hash(
                 const auto neighbors = tt::tt_fabric::pipeline_get_chip_neighbors(source, *direction);
                 const auto mesh_it = neighbors.find(*destination.mesh_id);
                 if (mesh_it == neighbors.end() ||
-                    std::find(mesh_it->second.begin(), mesh_it->second.end(), destination.chip_id) ==
+                    std::find(mesh_it->second.begin(), mesh_it->second.end(), *destination.chip_id) ==
                         mesh_it->second.end()) {
                     if (log_rejection) {
                         log_warning(

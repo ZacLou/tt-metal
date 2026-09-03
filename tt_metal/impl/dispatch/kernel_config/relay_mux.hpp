@@ -154,10 +154,10 @@ void assemble_2d_fabric_packet_header_args(
     const auto& mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
     const auto router_direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value());
 
-    config.my_dev_id = src_fabric_node_id.chip_id;
+    config.my_dev_id = *src_fabric_node_id.chip_id;
     config.ew_dim = mesh_shape[1];
     config.to_mesh_id = dst_fabric_node_id.mesh_id.get();
-    config.to_dev_id = dst_fabric_node_id.chip_id;
+    config.to_dev_id = *dst_fabric_node_id.chip_id;
     config.router_direction = router_direction;
 }
 

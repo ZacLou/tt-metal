@@ -49,7 +49,7 @@ void intra_mesh_routing_path_t<1, true>::calculate_chip_to_all_routing_fields(
 template <>
 void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
     const FabricNodeId& src_fabric_node_id, uint16_t num_chips) {
-    const auto& src_chip_id = src_fabric_node_id.chip_id;
+    const auto src_chip_id = *src_fabric_node_id.chip_id;
     const auto& mesh_id = src_fabric_node_id.mesh_id;
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -85,7 +85,7 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
                 if (node == last_added) {
                     continue;  // skip intra-chip channel change
                 }
-                seq.push_back(static_cast<uint16_t>(node.chip_id));
+                seq.push_back(static_cast<uint16_t>(*node.chip_id));
                 last_added = node;
             }
             // pick up shortest path
