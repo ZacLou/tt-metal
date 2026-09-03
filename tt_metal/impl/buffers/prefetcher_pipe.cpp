@@ -207,20 +207,22 @@ void PrefetcherPipe::setup_buffers(BufferType buffer_type) {
 PrefetcherPipe::~PrefetcherPipe() { release_allocations(); }
 
 void PrefetcherPipe::release_allocations() noexcept {
-    if (device_ == nullptr) {
+    if (device_ == nullptr || !device_->is_initialized()) {
+        config_allocation_id_ = 0;
+        data_allocation_id_ = 0;
         return;
     }
-    auto& arena = device_->allocator_impl()->persistent_l1();
     try {
+        auto& arena = device_->allocator_impl()->persistent_l1();
         arena.deallocate(config_allocation_id_);
-        config_allocation_id_ = 0;
         arena.deallocate(data_allocation_id_);
-        data_allocation_id_ = 0;
     } catch (...) {
         // Destructors must not throw. A missing allocation indicates an internal
         // lifetime error and will be caught by focused arena tests.
         log_warning(LogMetal, "PrefetcherPipe destructor: persistent L1 release failed with unknown exception");
     }
+    config_allocation_id_ = 0;
+    data_allocation_id_ = 0;
 }
 
 uint32_t PrefetcherPipe::buffer_address() const { return data_address_; }

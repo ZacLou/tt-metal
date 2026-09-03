@@ -8,17 +8,19 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <utility>
 #include <vector>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal {
 
 PersistentL1Arena::PersistentL1Arena(DeviceAddr base, DeviceAddr limit, const CoreRangeSet& worker_grid) :
-    base_(base), limit_(limit) {
+    liveness_(std::make_shared<PersistentL1Arena*>(this)), base_(base), limit_(limit) {
     TT_FATAL(base_ <= limit_, "Persistent L1 arena has invalid bounds [{}, {})", base_, limit_);
     if (!worker_grid.empty()) {
         const CoreRange bbox = worker_grid.bounding_box();
@@ -26,6 +28,15 @@ PersistentL1Arena::PersistentL1Arena(DeviceAddr base, DeviceAddr limit, const Co
         grid_height_ = bbox.end_coord.y + 1;
         TT_FATAL(grid_width_ > 0 && grid_height_ > 0, "Persistent L1 seal grid has invalid size");
         seal_refcounts_.assign(static_cast<size_t>(grid_width_) * grid_height_, 0);
+    }
+}
+
+PersistentL1Arena::~PersistentL1Arena() {
+    // Outstanding Seals may still be alive (cached Programs are destroyed after the
+    // owning device tears the allocator down). Null the token first so their destructors
+    // observe a dead arena even while this one is still unwinding.
+    if (liveness_) {
+        *liveness_ = nullptr;
     }
 }
 
@@ -155,7 +166,7 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> PersistentL1Arena::occupied_range
 
 PersistentL1Arena::Seal PersistentL1Arena::seal(const CoreRangeSet& cores) {
     increment_seals(cores);
-    return Seal(this, cores);
+    return Seal(liveness_, cores);
 }
 
 void PersistentL1Arena::increment_seals(const CoreRangeSet& cores) {
@@ -177,10 +188,12 @@ void PersistentL1Arena::decrement_seals(const CoreRangeSet& cores) {
     }
 }
 
-PersistentL1Arena::Seal::Seal(PersistentL1Arena* arena, CoreRangeSet cores) : arena_(arena), cores_(std::move(cores)) {}
+PersistentL1Arena::Seal::Seal(const std::shared_ptr<PersistentL1Arena*>& arena, CoreRangeSet cores) :
+    arena_(arena), cores_(std::move(cores)) {}
 
-PersistentL1Arena::Seal::Seal(Seal&& other) noexcept :
-    arena_(std::exchange(other.arena_, nullptr)), cores_(std::move(other.cores_)) {}
+PersistentL1Arena::Seal::Seal(Seal&& other) noexcept : arena_(std::move(other.arena_)), cores_(std::move(other.cores_)) {
+    other.arena_.reset();
+}
 
 PersistentL1Arena::Seal& PersistentL1Arena::Seal::operator=(Seal&& other) noexcept {
     if (this != &other) {
@@ -191,8 +204,15 @@ PersistentL1Arena::Seal& PersistentL1Arena::Seal::operator=(Seal&& other) noexce
 }
 
 PersistentL1Arena::Seal::~Seal() {
-    if (arena_ != nullptr) {
-        arena_->decrement_seals(cores_);
+    auto arena = arena_.lock();
+    arena_.reset();
+    if (!arena || *arena == nullptr) {
+        return;
+    }
+    try {
+        (*arena)->decrement_seals(cores_);
+    } catch (...) {
+        log_warning(tt::LogMetal, "Persistent L1 seal release failed on cores {}", cores_.str());
     }
 }
 

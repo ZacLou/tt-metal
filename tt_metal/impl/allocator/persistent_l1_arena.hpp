@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <utility>
@@ -64,13 +65,17 @@ public:
 
     private:
         friend class PersistentL1Arena;
-        Seal(PersistentL1Arena* arena, CoreRangeSet cores);
+        Seal(const std::shared_ptr<PersistentL1Arena*>& arena, CoreRangeSet cores);
 
-        PersistentL1Arena* arena_ = nullptr;
+        std::weak_ptr<PersistentL1Arena*> arena_;
         CoreRangeSet cores_;
     };
 
     PersistentL1Arena(DeviceAddr base, DeviceAddr limit, const CoreRangeSet& worker_grid);
+    ~PersistentL1Arena();
+
+    PersistentL1Arena(const PersistentL1Arena&) = delete;
+    PersistentL1Arena& operator=(const PersistentL1Arena&) = delete;
 
     Allocation allocate(const CoreRangeSet& cores, DeviceAddr size, DeviceAddr alignment);
     void deallocate(uint64_t allocation_id);
@@ -98,6 +103,10 @@ private:
     size_t seal_index(const CoreCoord& core) const;
     void increment_seals(const CoreRangeSet& cores);
     void decrement_seals(const CoreRangeSet& cores);
+
+    // Liveness token handed to every Seal. Nulled and released in the destructor so a
+    // Seal destroyed after the arena unseals into nothing instead of freed memory.
+    std::shared_ptr<PersistentL1Arena*> liveness_;
 
     DeviceAddr base_;
     DeviceAddr limit_;
